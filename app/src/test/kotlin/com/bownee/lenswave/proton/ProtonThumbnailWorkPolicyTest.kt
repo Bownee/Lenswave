@@ -6,31 +6,48 @@ import org.junit.Test
 class ProtonThumbnailWorkPolicyTest {
     @Test
     fun `complete download succeeds immediately`() {
-        assertEquals(
-            ProtonThumbnailWorkDecision.SUCCESS,
-            ProtonThumbnailWorkPolicy.decide(runAttemptCount = 0, complete = true),
-        )
+        val resolution = ProtonThumbnailWorkPolicy.resolve(runAttemptCount = 0, issue = null)
+
+        assertEquals(ProtonThumbnailWorkDecision.SUCCESS, resolution.decision)
+        assertEquals(null, resolution.status)
+        assertEquals("complete", resolution.diagnosticState)
     }
 
     @Test
     fun `incomplete download retries before the attempt limit`() {
-        assertEquals(
-            ProtonThumbnailWorkDecision.RETRY,
-            ProtonThumbnailWorkPolicy.decide(
-                runAttemptCount = ProtonThumbnailWorkPolicy.MAX_ATTEMPTS - 2,
-                complete = false,
-            ),
+        val resolution = ProtonThumbnailWorkPolicy.resolve(
+            runAttemptCount = ProtonThumbnailWorkPolicy.MAX_ATTEMPTS - 2,
+            issue = ProtonThumbnailWorkIssue.INCOMPLETE,
         )
+
+        assertEquals(ProtonThumbnailWorkDecision.RETRY, resolution.decision)
+        assertEquals(
+            ProtonThumbnailWorkStatus.RetryScheduled(
+                ProtonThumbnailWorkPolicy.MAX_ATTEMPTS,
+                ProtonThumbnailWorkPolicy.MAX_ATTEMPTS,
+                ProtonThumbnailWorkIssue.INCOMPLETE,
+            ),
+            resolution.status,
+        )
+        assertEquals("retry-incomplete", resolution.diagnosticState)
     }
 
     @Test
     fun `incomplete download fails at the attempt limit`() {
-        assertEquals(
-            ProtonThumbnailWorkDecision.FAILURE,
-            ProtonThumbnailWorkPolicy.decide(
-                runAttemptCount = ProtonThumbnailWorkPolicy.MAX_ATTEMPTS - 1,
-                complete = false,
-            ),
+        val resolution = ProtonThumbnailWorkPolicy.resolve(
+            runAttemptCount = ProtonThumbnailWorkPolicy.MAX_ATTEMPTS - 1,
+            issue = ProtonThumbnailWorkIssue.TIMEOUT,
         )
+
+        assertEquals(ProtonThumbnailWorkDecision.FAILURE, resolution.decision)
+        assertEquals(
+            ProtonThumbnailWorkStatus.Stopped(
+                ProtonThumbnailWorkPolicy.MAX_ATTEMPTS,
+                ProtonThumbnailWorkPolicy.MAX_ATTEMPTS,
+                ProtonThumbnailWorkIssue.TIMEOUT,
+            ),
+            resolution.status,
+        )
+        assertEquals("stopped-timeout", resolution.diagnosticState)
     }
 }

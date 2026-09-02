@@ -85,12 +85,19 @@ internal class ProtonTimelineRepository @Inject constructor(
         mutableState.value = ProtonGalleryState()
     }
 
+    internal fun updateThumbnailWorkStatus(status: ProtonThumbnailWorkStatus?) {
+        mutableState.value = mutableState.value.copy(thumbnailWorkStatus = status)
+    }
+
     private fun emit(userId: UserId, photos: List<ProtonGalleryPhoto>, syncing: Boolean) {
+        val workerStatus = mutableState.value.thumbnailWorkStatus
+            .takeIf { status -> status is ProtonThumbnailWorkStatus.Running }
         mutableState.value = ProtonGalleryState(
             userId = userId.id,
             photos = photos.toList(),
             syncing = syncing,
             downloadedThumbnailCount = photos.count(ProtonGalleryPhoto::hasThumbnail),
+            thumbnailWorkStatus = workerStatus,
         )
     }
 

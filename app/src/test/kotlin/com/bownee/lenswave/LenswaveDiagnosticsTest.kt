@@ -8,6 +8,19 @@ import org.junit.Test
 
 class LenswaveDiagnosticsTest {
     @Test
+    fun workerStateContainsOnlyBoundedStructuredFields() {
+        assertEquals(
+            "operation=thumbnail-worker state=retry-timeout attempt=2 maximumAttempts=25",
+            LenswaveDiagnostics.stateSummary(
+                operation = "thumbnail-worker",
+                state = "retry-timeout",
+                attempt = 2,
+                maximumAttempts = 25,
+            ),
+        )
+    }
+
+    @Test
     fun protonFailureIncludesOnlyStructuredNonSensitiveFields() {
         val innerError = ProtonSdkError(
             message = "inner secret",

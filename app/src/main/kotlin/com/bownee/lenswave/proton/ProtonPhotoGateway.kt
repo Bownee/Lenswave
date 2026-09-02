@@ -155,6 +155,10 @@ class ProtonPhotoGateway @Inject internal constructor(
 
     fun isActive(userId: UserId): Boolean = sessionGuard.isActive(userId)
 
+    internal fun updateThumbnailWorkStatus(status: ProtonThumbnailWorkStatus?) {
+        timeline.updateThumbnailWorkStatus(status)
+    }
+
     private companion object {
         const val TRASH_SYNC_KEY = "trash"
     }

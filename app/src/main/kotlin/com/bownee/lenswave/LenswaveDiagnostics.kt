@@ -10,6 +10,22 @@ internal object LenswaveDiagnostics {
         Log.w(TAG, failureSummary(operation, error))
     }
 
+    fun reportState(operation: String, state: String, attempt: Int, maximumAttempts: Int) {
+        Log.i(TAG, stateSummary(operation, state, attempt, maximumAttempts))
+    }
+
+    internal fun stateSummary(
+        operation: String,
+        state: String,
+        attempt: Int,
+        maximumAttempts: Int,
+    ): String {
+        require(SAFE_DIAGNOSTIC_VALUE.matches(operation))
+        require(SAFE_DIAGNOSTIC_VALUE.matches(state))
+        require(attempt in 1..maximumAttempts)
+        return "operation=$operation state=$state attempt=$attempt maximumAttempts=$maximumAttempts"
+    }
+
     internal fun failureSummary(operation: String, error: Throwable): String = buildString {
         append("operation=")
         append(operation)
