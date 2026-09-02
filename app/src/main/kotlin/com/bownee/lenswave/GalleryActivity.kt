@@ -87,7 +87,6 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
     private val pageTitle get() = screen.pageTitle
     private val list get() = screen.list
     private val galleryFooter get() = screen.galleryFooter
-    private val refreshIndicator get() = screen.refreshIndicator
     private val adapter get() = screen.adapter
     private val sourceBar get() = screen.sourceBar
     private val selectionBar get() = screen.selectionBar
@@ -323,7 +322,6 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
                 },
             )
         } ?: screen.showContent()
-        list.setRefreshing(state.isRefreshing)
         screen.renderHeader(
             statusText = state.statusText,
             showDeleteAll = state.showDeleteAll && adapter.selectedPhotos().isEmpty(),
@@ -768,10 +766,6 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
                     safeArea.left
                 },
             )
-            (refreshIndicator.layoutParams as FrameLayout.LayoutParams).apply {
-                topMargin = dp(8) + safeArea.top
-                refreshIndicator.layoutParams = this
-            }
             updateBottomOverlayInsets(sourceBar, safeArea)
             updateBottomOverlayInsets(selectionBar, safeArea)
             devicePicker.post(::updateDevicePickerLayout)

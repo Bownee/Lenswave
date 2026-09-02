@@ -304,7 +304,7 @@ class GalleryUiStateFactoryTest {
     }
 
     @Test
-    fun `manual refresh alone displays the refresh indicator`() {
+    fun `manual refresh displays the refresh state and metadata status`() {
         val state = factory.create(
             GalleryUiInputs(
                 destination = GalleryDestination.ProtonTimeline,
@@ -316,7 +316,7 @@ class GalleryUiStateFactoryTest {
         )
 
         assertTrue(state.isRefreshing)
-        assertFalse(state.statusText.contains(R.string.loading_metadata.toString()))
+        assertTrue(state.statusText.contains(R.string.loading_metadata.toString()))
     }
 
     @Test

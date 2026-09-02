@@ -13,7 +13,7 @@ import com.bownee.lenswave.dp
 import kotlin.math.roundToInt
 
 internal class GalleryFastScroller(
-    private val listView: PullToRefreshListView,
+    private val listView: GalleryListView,
     context: Context,
 ) {
     private val handleSize = context.resources.getDimensionPixelSize(R.dimen.gallery_fast_scroll_handle_size)

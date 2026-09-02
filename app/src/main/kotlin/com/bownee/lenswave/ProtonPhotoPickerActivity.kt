@@ -198,7 +198,7 @@ class ProtonPhotoPickerActivity : FragmentActivity() {
         )
         status.text = when {
             openingPhoto -> getString(R.string.downloading_full_resolution)
-            metadataState.isLoading && !metadataState.hasLoaded -> getString(R.string.loading_metadata)
+            metadataState.isLoading -> getString(R.string.loading_metadata)
             state.errorMessage != null -> getString(R.string.could_not_refresh_detail, state.errorMessage)
             state.thumbnailWorkStatus is ProtonThumbnailWorkStatus.Running &&
                 thumbnailProgress.downloaded < thumbnailProgress.total -> getString(

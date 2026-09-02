@@ -7,14 +7,11 @@ import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.view.animation.DecelerateInterpolator
 import android.widget.AbsListView
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.ImageButton
-import android.widget.ImageView
 import android.widget.LinearLayout
-import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.core.graphics.drawable.toDrawable
 import androidx.core.widget.TextViewCompat
@@ -23,10 +20,8 @@ import com.bownee.lenswave.gallery.DeviceCollectionPicker
 import com.bownee.lenswave.gallery.GalleryAsset
 import com.bownee.lenswave.gallery.GalleryDestination
 import com.bownee.lenswave.gallery.GalleryListAdapter
+import com.bownee.lenswave.gallery.GalleryListView
 import com.bownee.lenswave.gallery.GalleryThumbnailLoader
-import com.bownee.lenswave.gallery.PullRefreshIndicatorState
-import com.bownee.lenswave.gallery.PullRefreshPhase
-import com.bownee.lenswave.gallery.PullToRefreshListView
 import com.bownee.lenswave.proton.ProtonAlbum
 import com.bownee.lenswave.proton.ProtonPhotoGateway
 import kotlinx.coroutines.CoroutineScope
@@ -44,10 +39,9 @@ internal class GalleryScreen(
     val root = FrameLayout(activity).apply { setBackgroundColor(UiStyle.background) }
     val pageTitle: TextView
     private val status: TextView
-    val list: PullToRefreshListView
+    val list: GalleryListView
     val galleryHeader: LinearLayout
     val galleryFooter: View
-    val refreshIndicator: LinearLayout
     private val emptyPanel: LinearLayout
     private val emptyTitle: TextView
     private val emptyMessage: TextView
@@ -69,10 +63,6 @@ internal class GalleryScreen(
     val devicePicker: LinearLayout
     val devicePickerButtons = mutableMapOf<DeviceCollection, Button>()
 
-    private val refreshIcon: ImageView
-    private val refreshProgress: ProgressBar
-    private val refreshLabel: TextView
-    private var pullRefreshPhase = PullRefreshPhase.IDLE
     private var pendingStickyMonthPosition: Int? = null
     private var stickyMonthUpdatePosted = false
     private val stickyMonthUpdate = Runnable {
@@ -112,7 +102,7 @@ internal class GalleryScreen(
         galleryFooter = View(activity).apply {
             layoutParams = AbsListView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0)
         }
-        list = PullToRefreshListView(activity).apply {
+        list = GalleryListView(activity).apply {
             applyDraggableFastScroll()
             divider = null
             dividerHeight = 0
@@ -123,14 +113,6 @@ internal class GalleryScreen(
             addHeaderView(galleryHeader, null, false)
             addFooterView(galleryFooter, null, false)
             adapter = this@GalleryScreen.adapter
-            setOnPullRefreshListener {
-                if (this@GalleryScreen.adapter.selectedPhotos().isEmpty()) {
-                    actions.onRefresh()
-                } else {
-                    setRefreshing(false)
-                }
-            }
-            setOnPullRefreshIndicatorListener(::showPullRefreshIndicator)
         }
         root.addView(
             list,
@@ -138,20 +120,6 @@ internal class GalleryScreen(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT,
             ),
-        )
-
-        val refresh = buildRefreshIndicator()
-        refreshIndicator = refresh.container
-        refreshIcon = refresh.icon
-        refreshProgress = refresh.progress
-        refreshLabel = refresh.label
-        root.addView(
-            refreshIndicator,
-            FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                activity.dp(48),
-                Gravity.TOP or Gravity.CENTER_HORIZONTAL,
-            ).apply { topMargin = activity.dp(8) },
         )
 
         stickyMonth = text("", 15f, UiStyle.text).apply {
@@ -210,6 +178,8 @@ internal class GalleryScreen(
 
     fun renderHeader(statusText: String, showDeleteAll: Boolean, refreshing: Boolean) {
         status.text = statusText
+        refreshButton.isEnabled = !refreshing
+        refreshButton.alpha = if (refreshing) 0.5f else 1f
         trashDeleteAllButton.visibility = if (showDeleteAll) View.VISIBLE else View.GONE
         trashDeleteAllButton.isEnabled = !refreshing
         trashDeleteAllButton.alpha = if (refreshing) 0.5f else 1f
@@ -408,45 +378,6 @@ internal class GalleryScreen(
         return EmptyPanel(container, title, message, action)
     }
 
-    private fun buildRefreshIndicator(): RefreshIndicator {
-        val icon = ImageView(activity).apply {
-            setImageResource(R.drawable.ic_refresh)
-            imageTintList = ColorStateList.valueOf(UiStyle.accent)
-            contentDescription = null
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-        }
-        val progress = ProgressBar(activity).apply {
-            isIndeterminate = true
-            indeterminateTintList = ColorStateList.valueOf(UiStyle.accent)
-            visibility = View.GONE
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-        }
-        val label = text(activity.getString(R.string.pull_to_refresh), 13f, UiStyle.text).apply {
-            setTypeface(typeface, Typeface.BOLD)
-        }
-        val container = LinearLayout(activity).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(activity.dp(14), 0, activity.dp(16), 0)
-            background = UiStyle.rounded(activity, UiStyle.surfaceRaised, 24, UiStyle.border)
-            elevation = activity.dp(8).toFloat()
-            alpha = 0f
-            visibility = View.INVISIBLE
-            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
-            addView(icon, LinearLayout.LayoutParams(activity.dp(22), activity.dp(22)).apply {
-                marginEnd = activity.dp(9)
-            })
-            addView(progress, LinearLayout.LayoutParams(activity.dp(22), activity.dp(22)).apply {
-                marginEnd = activity.dp(9)
-            })
-            addView(label, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            ))
-        }
-        return RefreshIndicator(container, icon, progress, label)
-    }
-
     private fun buildSourceBar(): SourceBar {
         val proton = sectionButton(activity.getString(R.string.photos)).apply { setOnClickListener { actions.onProtonSource() } }
         val albums = sectionButton(activity.getString(R.string.albums)).apply { setOnClickListener { actions.onAlbumsSource() } }
@@ -514,48 +445,6 @@ internal class GalleryScreen(
             addView(delete, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, activity.dp(48)))
         }
         return SelectionBar(container, count, delete)
-    }
-
-    private fun showPullRefreshIndicator(state: PullRefreshIndicatorState) {
-        pullRefreshPhase = state.phase
-        refreshIndicator.animate().cancel()
-        list.animate().cancel()
-        when (state.phase) {
-            PullRefreshPhase.IDLE -> {
-                list.animate().translationY(0f).setDuration(180L)
-                    .setInterpolator(DecelerateInterpolator()).start()
-                refreshIndicator.animate().alpha(0f).setDuration(140L).withEndAction {
-                    if (pullRefreshPhase == PullRefreshPhase.IDLE) {
-                        refreshIndicator.visibility = View.INVISIBLE
-                    }
-                }.start()
-            }
-            PullRefreshPhase.PULLING,
-            PullRefreshPhase.READY -> {
-                refreshIndicator.visibility = View.VISIBLE
-                refreshIndicator.alpha = (0.3f + state.progress * 0.7f).coerceAtMost(1f)
-                refreshIcon.visibility = View.VISIBLE
-                refreshProgress.visibility = View.GONE
-                refreshIcon.rotation = state.progress * 180f
-                refreshLabel.text = if (state.phase == PullRefreshPhase.READY) {
-                    activity.getString(R.string.release_to_refresh)
-                } else {
-                    activity.getString(R.string.pull_to_refresh)
-                }
-                refreshIndicator.contentDescription = refreshLabel.text
-                list.translationY = activity.dp(REFRESH_REVEAL_DP) * state.progress
-            }
-            PullRefreshPhase.REFRESHING -> {
-                refreshIndicator.visibility = View.VISIBLE
-                refreshIndicator.animate().alpha(1f).setDuration(120L).start()
-                refreshIcon.visibility = View.GONE
-                refreshProgress.visibility = View.VISIBLE
-                refreshLabel.setText(R.string.refreshing)
-                refreshIndicator.contentDescription = refreshLabel.text
-                list.animate().translationY(activity.dp(REFRESH_REVEAL_DP).toFloat())
-                    .setDuration(160L).setInterpolator(DecelerateInterpolator()).start()
-            }
-        }
     }
 
     private fun sectionButton(label: String) = Button(activity).apply {
@@ -664,13 +553,6 @@ internal class GalleryScreen(
         val emptyAction get() = empty.action
     }
 
-    private data class RefreshIndicator(
-        val container: LinearLayout,
-        val icon: ImageView,
-        val progress: ProgressBar,
-        val label: TextView,
-    )
-
     private data class SourceBar(
         val container: LinearLayout,
         val proton: Button,
@@ -685,7 +567,4 @@ internal class GalleryScreen(
         val delete: Button,
     )
 
-    private companion object {
-        const val REFRESH_REVEAL_DP = 96
-    }
 }
