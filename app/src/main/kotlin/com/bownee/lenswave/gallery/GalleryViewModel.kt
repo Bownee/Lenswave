@@ -58,6 +58,7 @@ class GalleryViewModel @Inject internal constructor(
     private var destination = restoredNavigation?.destination ?: GalleryDestination.Device()
     private var account: Account? = null
     private var currentUserId: UserId? = null
+    private var accountSessionInitialized = false
     private var sessionTransitioning = false
     private var hasChosenStartupDestination = restoredNavigation != null
     private var deviceAccessLevel = DeviceAccessLevel.NONE
@@ -235,6 +236,7 @@ class GalleryViewModel @Inject internal constructor(
 
     private suspend fun handleAccountSession(state: ProtonAccountSessionState) {
         account = state.account
+        accountSessionInitialized = state.initialized
         sessionTransitioning = state.transitioning
         if (!state.initialized) {
             publishUiState()
@@ -546,12 +548,12 @@ class GalleryViewModel @Inject internal constructor(
                 combinedMatches = combinedMatches,
                 combinedMatchProgress = combinedMatchProgress,
                 currentUserId = currentUserId,
-                protonAccountStatus = when {
-                    sessionTransitioning -> ProtonAccountStatus.CONNECTING
-                    account == null -> ProtonAccountStatus.DISCONNECTED
-                    account?.isReady() == true -> ProtonAccountStatus.CONNECTED
-                    else -> ProtonAccountStatus.CONNECTING
-                },
+                protonAccountStatus = ProtonAccountStatus.resolve(
+                    initialized = accountSessionInitialized,
+                    transitioning = sessionTransitioning,
+                    hasAccount = account != null,
+                    accountIsReady = account?.isReady() == true,
+                ),
                 isRefreshing = isRefreshing,
             ),
         )

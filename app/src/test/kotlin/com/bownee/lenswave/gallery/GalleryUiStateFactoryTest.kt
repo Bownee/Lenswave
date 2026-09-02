@@ -28,6 +28,43 @@ class GalleryUiStateFactoryTest {
     })
 
     @Test
+    fun `uninitialized account session is connecting rather than disconnected`() {
+        assertEquals(
+            ProtonAccountStatus.CONNECTING,
+            ProtonAccountStatus.resolve(
+                initialized = false,
+                transitioning = false,
+                hasAccount = false,
+                accountIsReady = false,
+            ),
+        )
+        assertEquals(
+            ProtonAccountStatus.DISCONNECTED,
+            ProtonAccountStatus.resolve(
+                initialized = true,
+                transitioning = false,
+                hasAccount = false,
+                accountIsReady = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `restoring Proton session shows metadata loading without connect action`() {
+        val state = factory.create(
+            GalleryUiInputs(
+                destination = GalleryDestination.ProtonTimeline,
+                protonAccountStatus = ProtonAccountStatus.CONNECTING,
+            ),
+        )
+
+        assertNotNull(state.emptyState)
+        assertNull(state.emptyState?.action)
+        assertTrue(state.emptyState?.title?.contains(R.string.loading_metadata.toString()) == true)
+        assertTrue(state.statusText.contains(R.string.loading_metadata.toString()))
+    }
+
+    @Test
     fun `Proton trash does not claim to be empty before metadata loads`() {
         val state = factory.create(
             GalleryUiInputs(

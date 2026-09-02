@@ -32,9 +32,13 @@ internal class ProtonPhotoCache @Inject constructor(
         mkdirs()
     }
 
-    fun thumbnailExists(userId: String, nodeUid: String): Boolean {
-        return validateThumbnailFile(userId, thumbnailFile(userId, nodeUid))
-    }
+    /** Metadata hydration only needs availability; authenticated contents are validated when read. */
+    fun thumbnailExists(userId: String, nodeUid: String): Boolean =
+        thumbnailFile(userId, nodeUid).let { file ->
+            (file.isFile && file.length() > 0L).also { exists ->
+                if (!exists) file.delete()
+            }
+        }
 
     override fun thumbnailIsDecodable(userId: String, nodeUid: String): Boolean =
         validateThumbnailFile(userId, thumbnailFile(userId, nodeUid))
@@ -314,7 +318,7 @@ internal class ProtonPhotoCache @Inject constructor(
         trimDirectory(decryptedDirectory(userId), DECRYPTED_CACHE_LIMIT_BYTES, DECRYPTED_TTL_MILLIS)
     }
 
-    private fun trimThumbnails(
+    internal fun trimThumbnails(
         userId: String,
         limitBytes: Long = THUMBNAIL_CACHE_LIMIT_BYTES,
         ttlMillis: Long = THUMBNAIL_TTL_MILLIS,

@@ -12,7 +12,21 @@ import me.proton.core.domain.entity.UserId
 internal enum class ProtonAccountStatus {
     DISCONNECTED,
     CONNECTING,
-    CONNECTED,
+    CONNECTED;
+
+    companion object {
+        fun resolve(
+            initialized: Boolean,
+            transitioning: Boolean,
+            hasAccount: Boolean,
+            accountIsReady: Boolean,
+        ): ProtonAccountStatus = when {
+            !initialized || transitioning -> CONNECTING
+            !hasAccount -> DISCONNECTED
+            accountIsReady -> CONNECTED
+            else -> CONNECTING
+        }
+    }
 }
 
 internal data class GalleryUiInputs(
@@ -60,6 +74,9 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
             if (inputs.devicePhotos.isLoading) {
                 append(text.string(R.string.status_separator))
                 append(text.string(R.string.loading_metadata))
+            } else if (inputs.protonAccountStatus == ProtonAccountStatus.CONNECTING) {
+                append(text.string(R.string.status_separator))
+                append(text.string(R.string.loading_metadata))
             } else if (inputs.protonAccountStatus == ProtonAccountStatus.CONNECTED) {
                 protonLoadingDetail(
                     inputs,
@@ -80,6 +97,7 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
         }
         val emptyState = when {
             assets.isNotEmpty() || inputs.devicePhotos.isLoading || inputs.isInitialMetadataLoading() -> null
+            inputs.protonAccountStatus == ProtonAccountStatus.CONNECTING -> loadingMetadataEmptyState()
             inputs.protonAccountStatus == ProtonAccountStatus.DISCONNECTED -> GalleryEmptyState(
                 title = text.string(R.string.no_device_photos),
                 message = text.string(R.string.connect_proton_add_timeline),
@@ -315,7 +333,11 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
                 action = GalleryEmptyAction.CONNECT_PROTON,
             ),
         )
-        ProtonAccountStatus.CONNECTING -> base(inputs)
+        ProtonAccountStatus.CONNECTING -> base(
+            inputs = inputs,
+            statusText = status(text.string(area), text.string(R.string.loading_metadata)),
+            emptyState = loadingMetadataEmptyState(),
+        )
         ProtonAccountStatus.CONNECTED -> null
     }
 
@@ -359,6 +381,11 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
         message = text.string(R.string.allow_photo_access_message),
         actionLabel = text.string(R.string.allow_access),
         action = GalleryEmptyAction.REQUEST_DEVICE_ACCESS,
+    )
+
+    private fun loadingMetadataEmptyState() = GalleryEmptyState(
+        title = text.string(R.string.loading_metadata),
+        message = "",
     )
 
     private fun photoCountStatus(count: Int): String =
