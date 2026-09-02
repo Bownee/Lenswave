@@ -78,6 +78,14 @@ jobs:
           grep -Fq \
             'com.bownee.lenswave.LenswaveApplication$Companion: void disableAccountSessionStartupForTests$app()' \
             "$seeds"
+          for callback in \
+            onResponse onCallback onRead onWrite onSeek onYield onProgress \
+            onSendHttpRequest onHttpResponseRead onAccountRequest onRecordMetric \
+            onFeatureEnabled onSha1 onDispose; do
+            grep -Eq \
+              "me.proton.drive.sdk.internal.ProtonDriveSdkNativeClient: .* ${callback}\\(" \
+              "$seeds"
+          done
 
       - name: Prepare APK and verification artifacts
         shell: bash
