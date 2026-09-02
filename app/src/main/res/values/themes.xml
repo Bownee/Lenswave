@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Lenswave" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowBackground">@color/lenswave_background</item>
+        <item name="android:colorBackground">@color/lenswave_background</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:enforceStatusBarContrast">false</item>
+        <item name="android:enforceNavigationBarContrast">false</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:forceDarkAllowed">false</item>
+        <item name="android:colorAccent">@color/lenswave_accent</item>
+        <item name="colorPrimary">@color/lenswave_accent</item>
+        <item name="colorPrimaryVariant">@color/lenswave_accent_container</item>
+        <item name="colorPrimaryDark">@color/lenswave_accent_container</item>
+        <item name="colorOnPrimary">@color/lenswave_on_accent</item>
+        <item name="colorPrimaryContainer">@color/lenswave_accent_container</item>
+        <item name="colorOnPrimaryContainer">@color/lenswave_on_accent_container</item>
+        <item name="colorSecondary">@color/lenswave_secondary</item>
+        <item name="colorSecondaryVariant">@color/lenswave_accent_container</item>
+        <item name="colorOnSecondary">@color/lenswave_on_secondary</item>
+        <item name="colorSurface">@color/lenswave_surface</item>
+        <item name="colorOnSurface">@color/lenswave_text</item>
+        <item name="colorSurfaceVariant">@color/lenswave_surface_raised</item>
+        <item name="colorOnSurfaceVariant">@color/lenswave_muted</item>
+        <item name="colorOutline">@color/lenswave_border</item>
+        <item name="colorError">@color/lenswave_error</item>
+        <item name="colorOnError">@color/lenswave_on_error</item>
+
+        <!-- Compatibility attributes used by Proton Core's legacy authentication views. -->
+        <item name="brand_norm">@color/lenswave_accent</item>
+        <item name="brand_darken_20">@color/lenswave_accent_pressed</item>
+        <item name="brand_darken_40">@color/lenswave_accent_container</item>
+        <item name="brand_lighten_20">@color/lenswave_secondary</item>
+        <item name="brand_lighten_40">@color/lenswave_accent_disabled</item>
+        <item name="proton_text_norm">@color/lenswave_text</item>
+        <item name="proton_text_weak">@color/lenswave_muted</item>
+        <item name="proton_text_hint">@color/lenswave_muted</item>
+        <item name="proton_text_disabled">@color/lenswave_border</item>
+        <item name="proton_text_inverted">@color/lenswave_background</item>
+        <item name="proton_text_accent">@color/lenswave_accent</item>
+        <item name="proton_icon_norm">@color/lenswave_text</item>
+        <item name="proton_icon_weak">@color/lenswave_muted</item>
+        <item name="proton_icon_hint">@color/lenswave_muted</item>
+        <item name="proton_icon_disabled">@color/lenswave_border</item>
+        <item name="proton_icon_inverted">@color/lenswave_background</item>
+        <item name="proton_icon_accent">@color/lenswave_accent</item>
+        <item name="proton_interaction_weak">@color/lenswave_surface_raised</item>
+        <item name="proton_interaction_weak_pressed">@color/lenswave_border</item>
+        <item name="proton_interaction_weak_disabled">@color/lenswave_surface</item>
+        <item name="proton_interaction_strong">@color/lenswave_text</item>
+        <item name="proton_interaction_strong_pressed">@color/lenswave_muted</item>
+        <item name="proton_interaction_norm">@color/lenswave_accent</item>
+        <item name="proton_interaction_norm_pressed">@color/lenswave_accent_pressed</item>
+        <item name="proton_interaction_norm_disabled">@color/lenswave_accent_disabled</item>
+        <item name="proton_background_norm">@color/lenswave_background</item>
+        <item name="proton_background_secondary">@color/lenswave_surface</item>
+        <item name="proton_background_deep">@color/lenswave_background</item>
+        <item name="proton_separator_norm">@color/lenswave_border</item>
+        <item name="proton_notification_norm">@color/lenswave_secondary</item>
+        <item name="proton_notification_error">@color/lenswave_error</item>
+        <item name="proton_notification_success">@color/lenswave_success</item>
+        <item name="proton_notification_warning">@color/lenswave_warning</item>
+        <item name="proton_blender_norm">@color/lenswave_surface_raised</item>
+        <item name="proton_sidebar_background">@color/lenswave_surface</item>
+        <item name="proton_sidebar_interaction_weak_norm">@color/lenswave_surface_raised</item>
+        <item name="proton_sidebar_interaction_weak_pressed">@color/lenswave_border</item>
+        <item name="proton_sidebar_separator">@color/lenswave_border</item>
+        <item name="proton_sidebar_text_norm">@color/lenswave_text</item>
+        <item name="proton_sidebar_text_weak">@color/lenswave_muted</item>
+        <item name="proton_sidebar_icon_norm">@color/lenswave_text</item>
+        <item name="proton_sidebar_icon_weak">@color/lenswave_muted</item>
+        <item name="proton_sidebar_interaction_pressed">@color/lenswave_surface_raised</item>
+        <item name="proton_floaty_background">@color/lenswave_surface_raised</item>
+        <item name="proton_floaty_pressed">@color/lenswave_border</item>
+        <item name="proton_floaty_text">@color/lenswave_text</item>
+        <item name="android:fastScrollThumbDrawable">@drawable/gallery_fast_scroll_thumb</item>
+        <item name="android:fastScrollTrackDrawable">@null</item>
+    </style>
+
+    <style name="Theme.Lenswave.AddAccount" parent="Theme.Lenswave">
+        <item name="add_account_illustration">@drawable/ic_photo</item>
+        <item name="add_account_title">@string/lenswave_auth_title</item>
+        <item name="add_account_subtitle">@string/lenswave_auth_subtitle</item>
+        <item name="add_account_logo_height">@dimen/add_account_product_logo_height_default</item>
+        <item name="add_account_icon">@mipmap/ic_launcher</item>
+    </style>
+
+    <style name="Theme.Lenswave.Transparent" parent="Theme.Lenswave">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowIsTranslucent">true</item>
+    </style>
+
+    <style name="Theme.Lenswave.DialogWhenLarge" parent="Theme.Lenswave" />
+
+    <style name="Theme.Lenswave.PhotoViewer" parent="Theme.Lenswave">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:windowDisablePreview">true</item>
+    </style>
+</resources>

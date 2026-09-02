@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@bool/core_feature_auth_signin_two_step_enabled">
+    <!-- Proton's reference app keeps the legacy sign-in flow enabled for SDK consumers. -->
+    <bool name="core_feature_auth_signin_two_step_enabled">false</bool>
+</resources>

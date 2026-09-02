@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="launcher_background">#000000</color>
+    <color name="lenswave_background">#0C0E13</color>
+    <color name="lenswave_surface">#181B23</color>
+    <color name="lenswave_surface_raised">#222631</color>
+    <color name="lenswave_border">#353B49</color>
+    <color name="lenswave_text">#F4F6FC</color>
+    <color name="lenswave_muted">#A6ADBE</color>
+    <color name="lenswave_accent">#AA98FF</color>
+    <color name="lenswave_accent_pressed">#8F7CE0</color>
+    <color name="lenswave_accent_disabled">#70699A</color>
+    <color name="lenswave_on_accent">#1C1538</color>
+    <color name="lenswave_accent_container">#4C3D97</color>
+    <color name="lenswave_on_accent_container">#EFEAFF</color>
+    <color name="lenswave_secondary">#8AB4F8</color>
+    <color name="lenswave_on_secondary">#0B2F53</color>
+    <color name="lenswave_secondary_container">#173B62</color>
+    <color name="lenswave_on_secondary_container">#D5E8FF</color>
+    <color name="lenswave_error">#FFB4AB</color>
+    <color name="lenswave_on_error">#690005</color>
+    <color name="lenswave_success">#83D6A4</color>
+    <color name="lenswave_warning">#F3C969</color>
+</resources>

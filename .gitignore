@@ -1,0 +1,32 @@
+# Android Studio and local machine configuration
+.idea/
+*.iml
+local.properties
+captures/
+
+# Gradle and Kotlin build state
+.gradle/
+.kotlin/
+build/
+**/build/
+
+# Native build output
+.cxx/
+.externalNativeBuild/
+
+# Signing material must never be committed
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+*.key
+.signing/
+keystore.properties
+
+# Generated deliverables
+dist/
+
+# Operating-system files
+.DS_Store
+Thumbs.db

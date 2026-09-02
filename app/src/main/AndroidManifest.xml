@@ -1,0 +1,282 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
+    <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" />
+    <uses-permission
+        android:name="android.permission.FOREGROUND_SERVICE"
+        tools:node="remove" />
+    <uses-permission
+        android:name="android.permission.USE_BIOMETRIC"
+        tools:node="remove" />
+    <uses-permission
+        android:name="android.permission.USE_FINGERPRINT"
+        tools:node="remove" />
+    <uses-permission
+        android:name="android.permission.CAMERA"
+        tools:ignore="PermissionImpliesUnsupportedChromeOsHardware"
+        tools:node="remove" />
+
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="false"
+        tools:node="remove" />
+    <uses-feature
+        android:name="android.hardware.camera.front"
+        android:required="false"
+        tools:node="remove" />
+    <uses-feature
+        android:name="android.hardware.camera.autofocus"
+        android:required="false"
+        tools:node="remove" />
+    <uses-feature
+        android:name="android.hardware.camera.flash"
+        android:required="false"
+        tools:node="remove" />
+    <uses-feature
+        android:name="android.hardware.screen.landscape"
+        android:required="false"
+        tools:node="remove" />
+    <uses-feature
+        android:name="android.hardware.wifi"
+        android:required="false"
+        tools:node="remove" />
+
+    <queries>
+        <intent tools:node="remove">
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.DEFAULT" />
+            <data
+                android:host="account.proton.me"
+                android:pathPrefix="/plan/upgrade"
+                android:scheme="*" />
+        </intent>
+    </queries>
+
+    <application
+        android:name=".LenswaveApplication"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Lenswave"
+        tools:replace="android:theme">
+        <activity
+            android:name=".GalleryActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".PhotoEditorActivity"
+            android:exported="false" />
+
+        <activity
+            android:name=".PhotoViewerActivity"
+            android:exported="false"
+            android:theme="@style/Theme.Lenswave.PhotoViewer" />
+
+        <activity
+            android:name=".ProtonPhotoPickerActivity"
+            android:exported="false" />
+
+        <activity
+            android:name="me.proton.core.auth.presentation.ui.AddAccountActivity"
+            android:theme="@style/Theme.Lenswave.AddAccount"
+            tools:replace="android:theme" />
+
+        <!-- External-account sign-in does not use Proton's globally claimable proton: SSO callback. -->
+        <activity
+            android:name="me.proton.core.auth.presentation.ui.LoginTwoStepActivity"
+            tools:node="remove" />
+
+        <activity
+            android:name="me.proton.core.auth.presentation.ui.LoginSsoActivity"
+            tools:node="remove" />
+
+        <activity
+            android:name="me.proton.core.accountmanager.presentation.compose.SignOutDialogActivity"
+            tools:node="remove" />
+
+        <activity
+            android:name="me.proton.core.usersettings.presentation.ui.TwoFaInputActivity"
+            tools:node="remove" />
+
+        <activity
+            android:name="me.proton.core.accountrecovery.presentation.compose.ui.AccountRecoveryDialogActivity"
+            tools:node="remove" />
+
+        <activity
+            android:name="me.proton.core.accountrecovery.presentation.compose.ui.PasswordResetDialogActivity"
+            tools:node="remove" />
+
+        <activity
+            android:name="me.proton.core.auth.presentation.ui.ConfirmPasswordActivity"
+            android:theme="@style/Theme.Lenswave.Transparent"
+            tools:replace="android:theme" />
+
+        <activity
+            android:name="me.proton.core.humanverification.presentation.ui.HumanVerificationActivity"
+            android:theme="@style/Theme.Lenswave.DialogWhenLarge"
+            tools:replace="android:theme" />
+
+        <activity
+            android:name="me.proton.core.userrecovery.presentation.compose.DeviceRecoveryDialogActivity"
+            tools:node="remove" />
+
+        <!-- Proton Auth references device-migration types; keep every migration entry point disabled. -->
+        <activity
+            android:name="me.proton.core.devicemigration.presentation.DeviceMigrationActivity"
+            tools:node="remove" />
+
+        <activity
+            android:name="me.proton.core.devicemigration.presentation.TargetDeviceMigrationActivity"
+            tools:node="remove" />
+
+        <activity
+            android:name="me.proton.core.devicemigration.presentation.qr.EdmQrCaptureActivity"
+            tools:node="remove" />
+
+        <activity
+            android:name="me.proton.core.plan.presentation.ui.UnredeemedPurchaseActivity"
+            tools:node="remove" />
+
+        <activity
+            android:name="me.proton.core.notification.presentation.ui.NotificationPermissionActivity"
+            tools:node="remove" />
+
+        <activity
+            android:name="me.proton.core.presentation.ui.alert.ForceUpdateActivity"
+            tools:node="remove" />
+
+        <activity
+            android:name="me.proton.core.usersettings.presentation.ui.UpdateRecoveryEmailActivity"
+            tools:node="remove" />
+
+        <activity
+            android:name="me.proton.core.usersettings.presentation.ui.PasswordManagementActivity"
+            tools:node="remove" />
+
+        <activity
+            android:name="me.proton.core.usersettings.presentation.ui.SecurityKeysActivity"
+            tools:node="remove" />
+
+        <activity
+            android:name="me.proton.core.plan.presentation.ui.DynamicSelectPlanActivity"
+            tools:node="remove" />
+
+        <activity
+            android:name="me.proton.core.plan.presentation.ui.DynamicUpgradePlanActivity"
+            tools:node="remove" />
+
+        <activity
+            android:name="me.proton.core.payment.presentation.ui.BillingActivity"
+            tools:node="remove" />
+
+        <activity
+            android:name="me.proton.core.payment.presentation.ui.PaymentOptionsActivity"
+            tools:node="remove" />
+
+        <activity
+            android:name="me.proton.core.payment.presentation.ui.PaymentTokenApprovalActivity"
+            tools:node="remove" />
+
+        <activity
+            android:name="com.journeyapps.barcodescanner.CaptureActivity"
+            tools:node="remove" />
+
+        <receiver
+            android:name="me.proton.core.notification.presentation.deeplink.DeeplinkBroadcastReceiver"
+            tools:node="remove" />
+
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="me.proton.core.auth.presentation.MissingScopeInitializer"
+                tools:node="remove" />
+            <meta-data
+                android:name="me.proton.core.humanverification.presentation.HumanVerificationInitializer"
+                tools:node="remove" />
+            <meta-data
+                android:name="me.proton.core.network.presentation.init.UnAuthSessionFetcherInitializer"
+                tools:node="remove" />
+            <meta-data
+                android:name="me.proton.core.plan.presentation.UnredeemedPurchaseInitializer"
+                tools:node="remove" />
+            <meta-data
+                android:name="me.proton.core.plan.presentation.PurchaseHandlerInitializer"
+                tools:node="remove" />
+            <meta-data
+                android:name="me.proton.core.userrecovery.presentation.compose.DeviceRecoveryInitializer"
+                tools:node="remove" />
+        </provider>
+
+        <service
+            android:name="com.google.android.gms.metadata.ModuleDependencies"
+            android:enabled="false"
+            android:exported="false"
+            tools:ignore="MissingClass">
+            <intent-filter>
+                <action android:name="com.google.android.gms.metadata.MODULE_DEPENDENCIES" />
+            </intent-filter>
+            <meta-data
+                android:name="photopicker_activity:0:required"
+                android:value="" />
+        </service>
+
+        <!-- Lenswave never promotes its bounded thumbnail worker to a foreground service. -->
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            tools:node="remove" />
+
+        <!-- WorkManager uses JobScheduler on Lenswave's API 29+ devices. -->
+        <service
+            android:name="androidx.work.impl.background.systemalarm.SystemAlarmService"
+            tools:node="remove" />
+
+        <receiver
+            android:name="androidx.work.impl.background.systemalarm.ConstraintProxy$BatteryChargingProxy"
+            tools:node="remove" />
+
+        <receiver
+            android:name="androidx.work.impl.background.systemalarm.ConstraintProxy$BatteryNotLowProxy"
+            tools:node="remove" />
+
+        <receiver
+            android:name="androidx.work.impl.background.systemalarm.ConstraintProxy$StorageNotLowProxy"
+            tools:node="remove" />
+
+        <receiver
+            android:name="androidx.work.impl.background.systemalarm.ConstraintProxy$NetworkStateProxy"
+            tools:node="remove" />
+
+        <receiver
+            android:name="androidx.work.impl.background.systemalarm.ConstraintProxyUpdateReceiver"
+            tools:node="remove" />
+
+        <receiver
+            android:name="androidx.work.impl.diagnostics.DiagnosticsReceiver"
+            tools:node="remove" />
+
+        <!-- The Proton session database is never opened from another app process. -->
+        <service
+            android:name="androidx.room.MultiInstanceInvalidationService"
+            tools:node="remove" />
+    </application>
+
+</manifest>
