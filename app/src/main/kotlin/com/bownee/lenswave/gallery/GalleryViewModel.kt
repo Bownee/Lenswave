@@ -184,6 +184,12 @@ class GalleryViewModel @Inject internal constructor(
         }
     }
 
+    fun resumeThumbnailDownloads() {
+        val userId = currentUserId ?: return
+        if (!destination.usesProton()) return
+        protonThumbnailScheduler.enqueue(userId)
+    }
+
     fun disconnectProton() {
         val userId = currentUserId ?: return
         viewModelScope.launch {

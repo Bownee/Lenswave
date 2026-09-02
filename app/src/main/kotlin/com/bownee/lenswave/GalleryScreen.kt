@@ -189,6 +189,11 @@ internal class GalleryScreen(
         list.postOnAnimation(visibleThumbnailUpdate)
     }
 
+    fun retryVisibleThumbnailDownloads() {
+        lastVisibleThumbnailNodeUids = emptySet()
+        scheduleVisibleThumbnailUpdate()
+    }
+
     fun resetScroll() {
         list.post {
             list.setSelectionFromTop(0, 0)

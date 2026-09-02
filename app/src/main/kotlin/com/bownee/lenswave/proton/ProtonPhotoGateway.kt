@@ -214,16 +214,9 @@ class ProtonPhotoGateway @Inject internal constructor(
         }
         val nodeUids = entries.map(ProtonThumbnailQueueEntry::nodeUid)
         return try {
-            val result = downloads.downloadThumbnails(userId, nodeUids)
-            val completed = thumbnailQueue.settle(
-                userId.id,
-                result.successfulNodeUids,
-                result.failures.keys,
-            )
-            val completedNodeUids = completed.mapTo(mutableSetOf(), ProtonThumbnailQueueEntry::nodeUid)
-            result.successfulNodeUids.filterNot { nodeUid -> nodeUid in completedNodeUids }
-                .forEach { nodeUid -> downloads.removeThumbnail(userId, nodeUid) }
-            publishThumbnailAvailability(userId, completed)
+            val result = downloads.downloadThumbnails(userId, nodeUids) { progress ->
+                settleThumbnailProgress(userId, progress)
+            }
             if (result.failures.isEmpty()) {
                 ProtonThumbnailQueueStep.Downloaded
             } else {
@@ -236,6 +229,21 @@ class ProtonPhotoGateway @Inject internal constructor(
             thumbnailQueue.settle(userId.id, emptySet(), nodeUids.toSet())
             ProtonThumbnailQueueStep.Failed
         }
+    }
+
+    private suspend fun settleThumbnailProgress(
+        userId: UserId,
+        result: ThumbnailBatchResult,
+    ) {
+        val completed = thumbnailQueue.settle(
+            userId.id,
+            result.successfulNodeUids,
+            result.failures.keys,
+        )
+        val completedNodeUids = completed.mapTo(mutableSetOf(), ProtonThumbnailQueueEntry::nodeUid)
+        result.successfulNodeUids.filterNot(completedNodeUids::contains)
+            .forEach { nodeUid -> downloads.removeThumbnail(userId, nodeUid) }
+        publishThumbnailAvailability(userId, completed)
     }
 
     private fun publishThumbnailAvailability(

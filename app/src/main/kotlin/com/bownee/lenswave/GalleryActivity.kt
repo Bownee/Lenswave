@@ -156,6 +156,8 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
     override fun onResume() {
         super.onResume()
         updateDeviceAccess()
+        screen.retryVisibleThumbnailDownloads()
+        viewModel.resumeThumbnailDownloads()
         showPendingUpdate()
     }
 

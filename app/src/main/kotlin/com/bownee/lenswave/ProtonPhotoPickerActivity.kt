@@ -82,6 +82,15 @@ class ProtonPhotoPickerActivity : FragmentActivity() {
         super.onDestroy()
     }
 
+    override fun onResume() {
+        super.onResume()
+        lastVisibleThumbnailNodeUids = emptySet()
+        grid.post {
+            prioritizeVisibleThumbnails(grid.firstVisiblePosition, grid.childCount)
+        }
+        currentUserId?.let(thumbnailScheduler::enqueue)
+    }
+
     private fun configureWindow() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         WindowCompat.getInsetsController(window, window.decorView).apply {

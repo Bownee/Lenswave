@@ -19,4 +19,13 @@ class ProtonThumbnailDownloadPolicyTest {
             batch.size <= ProtonThumbnailDownloadPolicy.SDK_BATCH_SIZE
         })
     }
+
+    @Test
+    fun progressIsPublishedBeforeAnSdkBatchCanComplete() {
+        assertTrue(
+            ProtonThumbnailDownloadPolicy.PROGRESS_BATCH_SIZE <
+                ProtonThumbnailDownloadPolicy.SDK_BATCH_SIZE
+        )
+        assertTrue(ProtonThumbnailDownloadPolicy.SDK_PASS_TIMEOUT_MILLIS > 0L)
+    }
 }
