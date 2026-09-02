@@ -1,9 +1,14 @@
 package com.bownee.lenswave
 
+import android.app.AlertDialog
+import android.widget.TextView
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.bownee.lenswave.update.UpdateAvailableDialogFragment
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -17,6 +22,31 @@ internal class GalleryActivityStartupTest {
             InstrumentationRegistry.getInstrumentation().waitForIdleSync()
             scenario.onActivity { activity ->
                 assertFalse(activity.isFinishing)
+            }
+        }
+    }
+
+    @Test
+    fun updateDialogSurvivesActivityRecreation() {
+        ActivityScenario.launch(GalleryActivity::class.java).use { scenario ->
+            scenario.onActivity { activity ->
+                UpdateAvailableDialogFragment.create("0.20.0", "0.19.4").showNow(
+                    activity.supportFragmentManager,
+                    UpdateAvailableDialogFragment.TAG,
+                )
+            }
+            scenario.recreate()
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+            scenario.onActivity { activity ->
+                val fragments = activity.supportFragmentManager.fragments
+                    .filterIsInstance<UpdateAvailableDialogFragment>()
+                assertEquals(1, fragments.size)
+                val dialog = fragments.single().dialog as AlertDialog
+                assertTrue(dialog.isShowing)
+                assertEquals(
+                    activity.getString(R.string.update_available_message, "0.20.0", "0.19.4"),
+                    dialog.findViewById<TextView>(android.R.id.message)?.text,
+                )
             }
         }
     }

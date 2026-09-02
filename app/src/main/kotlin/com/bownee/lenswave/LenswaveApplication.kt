@@ -17,9 +17,16 @@ class LenswaveApplication : Application() {
 
     companion object {
         @Volatile private var accountSessionStartupEnabled = true
+        @Volatile private var appUpdateStartupEnabled = true
+
+        internal fun isAppUpdateStartupEnabled(): Boolean = appUpdateStartupEnabled
 
         internal fun disableAccountSessionStartupForTests() {
             accountSessionStartupEnabled = false
+        }
+
+        internal fun disableAppUpdateStartupForTests() {
+            appUpdateStartupEnabled = false
         }
     }
 }

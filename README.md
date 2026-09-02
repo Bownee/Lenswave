@@ -7,6 +7,7 @@ Lenswave is an independent project and is not affiliated with Proton. The Proton
 ## Install
 
 Download the latest signed `arm64-v8a` APK from [GitHub Releases](https://github.com/Bownee/Lenswave/releases/latest).
+Lenswave periodically checks GitHub Releases at startup and opens the release page only when you choose to view an available update.
 
 Lenswave supports Android 10 (API 29) and later.
 
