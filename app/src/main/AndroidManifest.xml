@@ -97,14 +97,22 @@
             android:theme="@style/Theme.Lenswave.AddAccount"
             tools:replace="android:theme" />
 
-        <!-- External-account sign-in does not use Proton's globally claimable proton: SSO callback. -->
+        <!--
+            AuthOrchestrator toggles both SSO components before starting every login flow, including
+            the legacy flow used by Lenswave. Keep private, disabled declarations so that package
+            manager lookup succeeds without exposing Proton's globally claimable SSO callback.
+        -->
         <activity
             android:name="me.proton.core.auth.presentation.ui.LoginTwoStepActivity"
-            tools:node="remove" />
+            android:enabled="false"
+            android:exported="false"
+            tools:node="replace" />
 
         <activity
             android:name="me.proton.core.auth.presentation.ui.LoginSsoActivity"
-            tools:node="remove" />
+            android:enabled="false"
+            android:exported="false"
+            tools:node="replace" />
 
         <activity
             android:name="me.proton.core.accountmanager.presentation.compose.SignOutDialogActivity"
