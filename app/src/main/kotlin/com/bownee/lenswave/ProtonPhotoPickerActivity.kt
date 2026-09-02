@@ -33,7 +33,6 @@ import com.bownee.lenswave.gallery.ProtonThumbnailProgressCalculator
 import com.bownee.lenswave.gallery.toGalleryAsset
 import com.bownee.lenswave.proton.ProtonGalleryPhoto
 import com.bownee.lenswave.proton.ProtonGalleryState
-import com.bownee.lenswave.proton.ProtonMetadataState
 import com.bownee.lenswave.proton.ProtonThumbnailScheduler
 import com.bownee.lenswave.proton.ProtonThumbnailWorkStatus
 import com.bownee.lenswave.proton.ProtonAccountSessionManager
@@ -62,7 +61,6 @@ class ProtonPhotoPickerActivity : FragmentActivity() {
     private lateinit var adapter: ProtonPhotoPickerAdapter
     private lateinit var thumbnailLoader: GalleryThumbnailLoader
     private var currentUserId: UserId? = null
-    private var metadataState = ProtonMetadataState()
     private var openingPhoto = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -145,18 +143,6 @@ class ProtonPhotoPickerActivity : FragmentActivity() {
         lifecycleScope.launch {
             repository.state.collectLatest(::showGalleryState)
         }
-        lifecycleScope.launch {
-            repository.metadataState.collectLatest { state ->
-                metadataState = state
-                showGalleryState(repository.state.value)
-            }
-        }
-        lifecycleScope.launch {
-            repository.albumsState.collectLatest { showGalleryState(repository.state.value) }
-        }
-        lifecycleScope.launch {
-            repository.trashState.collectLatest { showGalleryState(repository.state.value) }
-        }
     }
 
     private fun showAccount(session: ProtonAccountSessionState) {
@@ -194,7 +180,7 @@ class ProtonPhotoPickerActivity : FragmentActivity() {
         val thumbnailProgress = ProtonThumbnailProgressCalculator.timeline(state.photos)
         status.text = when {
             openingPhoto -> getString(R.string.downloading_full_resolution)
-            metadataState.isLoading -> getString(R.string.loading_metadata)
+            state.syncing -> getString(R.string.loading_metadata)
             state.errorMessage != null -> getString(R.string.could_not_refresh_detail, state.errorMessage)
             state.thumbnailWorkStatus is ProtonThumbnailWorkStatus.Running &&
                 thumbnailProgress.downloaded < thumbnailProgress.total -> getString(
@@ -202,7 +188,7 @@ class ProtonPhotoPickerActivity : FragmentActivity() {
                 thumbnailProgress.downloaded,
                 thumbnailProgress.total,
             )
-            state.photos.isEmpty() && metadataState.hasLoaded -> getString(R.string.no_photos_found)
+            state.photos.isEmpty() && state.hasLoaded -> getString(R.string.no_photos_found)
             state.photos.isNotEmpty() -> resources.getQuantityString(
                 R.plurals.photos_tap_to_edit,
                 state.photos.size,
@@ -210,9 +196,11 @@ class ProtonPhotoPickerActivity : FragmentActivity() {
             )
             else -> getString(R.string.loading_metadata)
         }
-        retryButton.visibility = if (
-            (state.errorMessage != null || metadataState.errorMessage != null) && currentUserId != null
-        ) View.VISIBLE else View.GONE
+        retryButton.visibility = if (state.errorMessage != null && currentUserId != null) {
+            View.VISIBLE
+        } else {
+            View.GONE
+        }
     }
 
     private fun retrySync() {
@@ -222,10 +210,8 @@ class ProtonPhotoPickerActivity : FragmentActivity() {
     }
 
     private suspend fun refreshMetadata(userId: UserId, forceRemote: Boolean) {
-        repository.syncMetadata(userId, forceRemote)
-        if (repository.metadataState.value.userId == userId.id &&
-            repository.metadataState.value.hasLoaded
-        ) {
+        repository.syncTimelineMetadata(userId, forceRemote)
+        if (repository.state.value.userId == userId.id && repository.state.value.hasLoaded) {
             repository.prioritizeThumbnailSection(
                 userId,
                 repository.state.value.photos.map(ProtonGalleryPhoto::nodeUid),

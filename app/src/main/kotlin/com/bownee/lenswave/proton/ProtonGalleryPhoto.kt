@@ -44,10 +44,3 @@ data class ProtonGalleryState(
     val errorMessage: String? = null,
     val thumbnailWorkStatus: ProtonThumbnailWorkStatus? = null,
 )
-
-data class ProtonMetadataState(
-    val userId: String? = null,
-    val isLoading: Boolean = false,
-    val hasLoaded: Boolean = false,
-    val errorMessage: String? = null,
-)

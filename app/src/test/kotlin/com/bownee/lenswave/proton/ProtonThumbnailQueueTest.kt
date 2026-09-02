@@ -94,6 +94,26 @@ class ProtonThumbnailQueueTest {
         assertEquals(listOf("kept-photo"), store.entries.getValue(USER_ID).map { it.nodeUid })
     }
 
+    @Test
+    fun replacingAlbumCoversPreservesTimelineAndTrashWork() = runBlocking {
+        val store = FakeStore()
+        val queue = ProtonThumbnailQueue(store, FakeClock())
+        queue.replaceSource(USER_ID, "timeline", listOf("timeline-photo"))
+        queue.replaceSource(USER_ID, "trash", listOf("trash-photo"))
+        queue.replaceSource(USER_ID, "album-covers", listOf("old-cover"))
+
+        queue.replaceSources(
+            USER_ID,
+            mapOf("album-covers" to listOf("new-cover")),
+            retainedAlbumNodeUids = emptyList(),
+        )
+
+        assertEquals(
+            setOf("timeline-photo", "trash-photo", "new-cover"),
+            store.entries.getValue(USER_ID).map { it.nodeUid }.toSet(),
+        )
+    }
+
     private fun entry(store: FakeStore, nodeUid: String) =
         store.entries.getValue(USER_ID).single { it.nodeUid == nodeUid }
 

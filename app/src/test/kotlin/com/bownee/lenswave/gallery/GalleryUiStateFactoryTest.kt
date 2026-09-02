@@ -7,7 +7,6 @@ import com.bownee.lenswave.proton.ProtonAlbumReference
 import com.bownee.lenswave.proton.ProtonAlbumsState
 import com.bownee.lenswave.proton.ProtonGalleryPhoto
 import com.bownee.lenswave.proton.ProtonGalleryState
-import com.bownee.lenswave.proton.ProtonMetadataState
 import com.bownee.lenswave.proton.ProtonThumbnailWorkIssue
 import com.bownee.lenswave.proton.ProtonThumbnailWorkStatus
 import com.bownee.lenswave.proton.ProtonTrashState
@@ -70,7 +69,7 @@ class GalleryUiStateFactoryTest {
             GalleryUiInputs(
                 destination = GalleryDestination.Trash(PhotoSource.PROTON),
                 protonAccountStatus = ProtonAccountStatus.CONNECTED,
-                protonMetadata = loadingMetadata(),
+                protonTrash = ProtonTrashState(syncing = true),
             ),
         )
 
@@ -99,8 +98,7 @@ class GalleryUiStateFactoryTest {
             GalleryUiInputs(
                 destination = GalleryDestination.ProtonAlbums,
                 protonAccountStatus = ProtonAccountStatus.CONNECTED,
-                protonAlbums = ProtonAlbumsState(hasLoaded = false),
-                protonMetadata = loadingMetadata(),
+                protonAlbums = ProtonAlbumsState(syncing = true),
             ),
         )
 
@@ -119,6 +117,51 @@ class GalleryUiStateFactoryTest {
             ),
         )
 
+        assertNotNull(state.emptyState)
+    }
+
+    @Test
+    fun `albums do not show timeline metadata activity`() {
+        val state = factory.create(
+            GalleryUiInputs(
+                destination = GalleryDestination.ProtonAlbums,
+                protonAccountStatus = ProtonAccountStatus.CONNECTED,
+                protonGallery = ProtonGalleryState(syncing = true),
+                protonAlbums = ProtonAlbumsState(hasLoaded = true),
+            ),
+        )
+
+        assertFalse(state.statusText.contains(R.string.loading_metadata.toString()))
+        assertNotNull(state.emptyState)
+    }
+
+    @Test
+    fun `trash does not show albums metadata activity`() {
+        val state = factory.create(
+            GalleryUiInputs(
+                destination = GalleryDestination.Trash(PhotoSource.PROTON),
+                protonAccountStatus = ProtonAccountStatus.CONNECTED,
+                protonAlbums = ProtonAlbumsState(syncing = true),
+                protonTrash = ProtonTrashState(hasLoaded = true),
+            ),
+        )
+
+        assertFalse(state.statusText.contains(R.string.loading_metadata.toString()))
+        assertNotNull(state.emptyState)
+    }
+
+    @Test
+    fun `timeline does not show trash metadata activity`() {
+        val state = factory.create(
+            GalleryUiInputs(
+                destination = GalleryDestination.ProtonTimeline,
+                protonAccountStatus = ProtonAccountStatus.CONNECTED,
+                protonGallery = ProtonGalleryState(hasLoaded = true),
+                protonTrash = ProtonTrashState(syncing = true),
+            ),
+        )
+
+        assertFalse(state.statusText.contains(R.string.loading_metadata.toString()))
         assertNotNull(state.emptyState)
     }
 
@@ -277,7 +320,6 @@ class GalleryUiStateFactoryTest {
                     photos = listOf(ProtonGalleryPhoto("node", 42, hasThumbnail = true)),
                     hasLoaded = true,
                 ),
-                protonMetadata = loadedMetadata(),
             ),
         )
 
@@ -295,7 +337,6 @@ class GalleryUiStateFactoryTest {
                     hasLoaded = true,
                     thumbnailWorkStatus = ProtonThumbnailWorkStatus.Running(1, 25),
                 ),
-                protonMetadata = loadedMetadata(),
             ),
         )
 
@@ -319,7 +360,6 @@ class GalleryUiStateFactoryTest {
                     downloadedThumbnailCount = 1,
                     thumbnailWorkStatus = ProtonThumbnailWorkStatus.Running(1, 25),
                 ),
-                protonMetadata = loadedMetadata(),
             ),
         )
 
@@ -345,7 +385,6 @@ class GalleryUiStateFactoryTest {
                     ),
                     hasLoaded = true,
                 ),
-                protonMetadata = loadedMetadata(),
             ),
         )
 
@@ -370,7 +409,6 @@ class GalleryUiStateFactoryTest {
                     ),
                     hasLoaded = true,
                 ),
-                protonMetadata = loadedMetadata(),
             ),
         )
 
@@ -384,7 +422,6 @@ class GalleryUiStateFactoryTest {
                 destination = GalleryDestination.ProtonTimeline,
                 protonAccountStatus = ProtonAccountStatus.CONNECTED,
                 protonGallery = ProtonGalleryState(syncing = true),
-                protonMetadata = loadingMetadata(),
             ),
         )
 
@@ -398,8 +435,7 @@ class GalleryUiStateFactoryTest {
             GalleryUiInputs(
                 destination = GalleryDestination.ProtonTimeline,
                 protonAccountStatus = ProtonAccountStatus.CONNECTED,
-                protonGallery = ProtonGalleryState(hasLoaded = true),
-                protonMetadata = loadedMetadata().copy(isLoading = true),
+                protonGallery = ProtonGalleryState(hasLoaded = true, syncing = true),
                 isRefreshing = true,
             ),
         )
@@ -423,7 +459,6 @@ class GalleryUiStateFactoryTest {
                         issue = ProtonThumbnailWorkIssue.TIMEOUT,
                     ),
                 ),
-                protonMetadata = loadedMetadata(),
             ),
         )
 
@@ -445,24 +480,12 @@ class GalleryUiStateFactoryTest {
                         issue = ProtonThumbnailWorkIssue.ERROR,
                     ),
                 ),
-                protonMetadata = loadedMetadata(),
             ),
         )
 
         assertFalse(state.isRefreshing)
         assertNotNull(state.emptyState)
     }
-
-    private fun loadingMetadata() = ProtonMetadataState(
-        userId = "user",
-        isLoading = true,
-        hasLoaded = false,
-    )
-
-    private fun loadedMetadata() = ProtonMetadataState(
-        userId = "user",
-        hasLoaded = true,
-    )
 
     private fun deviceAsset(
         id: String,

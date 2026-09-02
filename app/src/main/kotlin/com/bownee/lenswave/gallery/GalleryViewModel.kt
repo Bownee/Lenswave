@@ -12,7 +12,6 @@ import com.bownee.lenswave.proton.ProtonAccountSessionManager
 import com.bownee.lenswave.proton.ProtonAccountSessionState
 import com.bownee.lenswave.proton.ProtonGalleryState
 import com.bownee.lenswave.proton.ProtonGalleryPhoto
-import com.bownee.lenswave.proton.ProtonMetadataState
 import com.bownee.lenswave.proton.ProtonThumbnailScheduler
 import com.bownee.lenswave.proton.ProtonTrashState
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -68,7 +67,6 @@ class GalleryViewModel @Inject internal constructor(
     private var devicePhotos = GallerySourceSnapshot<GalleryAsset>()
     private var deviceTrash = GallerySourceSnapshot<GalleryAsset>()
     private var protonGalleryState = ProtonGalleryState()
-    private var protonMetadataState = ProtonMetadataState()
     private var protonAlbumsState = ProtonAlbumsState()
     private var protonAlbumPhotosState = ProtonAlbumPhotosState()
     private var protonTrashState = ProtonTrashState()
@@ -81,7 +79,6 @@ class GalleryViewModel @Inject internal constructor(
     private var combinedMatchGeneration = 0L
     private var deviceAccessGeneration = 0L
     private var manualRefreshGeneration = 0
-    private var metadataCheckedUserId: String? = null
 
     val uiState: StateFlow<GalleryUiState> = mutableUiState.asStateFlow()
 
@@ -165,7 +162,6 @@ class GalleryViewModel @Inject internal constructor(
     }
 
     fun refreshAfterMutation() {
-        metadataCheckedUserId = null
         requestRefresh(manual = false)
     }
 
@@ -201,12 +197,6 @@ class GalleryViewModel @Inject internal constructor(
     }
 
     private fun observeProtonSources() {
-        viewModelScope.launch {
-            protonRepository.metadataState.collectLatest { state ->
-                protonMetadataState = state
-                publishUiState()
-            }
-        }
         viewModelScope.launch {
             protonRepository.state.collectLatest { state ->
                 protonGalleryState = state
@@ -245,14 +235,14 @@ class GalleryViewModel @Inject internal constructor(
         val readyAccount = state.account?.takeIf(Account::isReady)
         val previousUserId = currentUserId
         val nextUserId = state.activeUserId
-        if (previousUserId != nextUserId) {
+        val userChanged = previousUserId != nextUserId
+        if (userChanged) {
             resetCombinedMatchingAndJoin()
             sectionPriorityJob?.cancelAndJoin()
             visiblePriorityJob?.cancelAndJoin()
             sectionPriorityJob = null
             visiblePriorityJob = null
             currentUserId = nextUserId
-            metadataCheckedUserId = null
         }
         if (state.transitioning) {
             publishUiState()
@@ -271,7 +261,37 @@ class GalleryViewModel @Inject internal constructor(
             saveDestination()
         }
         publishUiState()
+        if (userChanged && nextUserId != null && requestMissingProtonMetadata(nextUserId)) return
         requestRefresh(manual = false)
+    }
+
+    private fun requestMissingProtonMetadata(userId: UserId): Boolean {
+        val timeline = protonRepository.state.value
+        val albums = protonRepository.albumsState.value
+        val trash = protonRepository.trashState.value
+        val loadTimeline = timeline.userId != userId.id || !timeline.hasLoaded
+        val loadAlbums = albums.userId != userId.id || !albums.hasLoaded
+        val loadTrash = trash.userId != userId.id || !trash.hasLoaded
+        if (!loadTimeline && !loadAlbums && !loadTrash) return false
+
+        viewModelScope.launch {
+            coroutineScope {
+                if (loadTimeline) launch(Dispatchers.IO) {
+                    protonRepository.syncTimelineMetadata(userId)
+                }
+                if (loadAlbums) launch(Dispatchers.IO) {
+                    protonRepository.syncAlbumsMetadata(userId)
+                }
+                if (loadTrash) launch(Dispatchers.IO) {
+                    protonRepository.syncTrashMetadata(userId)
+                }
+            }
+            if (currentUserId == userId) {
+                prioritizeThumbnailSection(userId, destination)
+                protonThumbnailScheduler.enqueue(userId)
+            }
+        }
+        return true
     }
 
     private suspend fun refresh(selectedDestination: GalleryDestination, forceRemote: Boolean) {
@@ -279,7 +299,11 @@ class GalleryViewModel @Inject internal constructor(
             GalleryDestination.Combined -> coroutineScope {
                 val deviceRefresh = if (hasDeviceAccess) async { loadDevicePhotos() } else null
                 val protonRefresh = currentUserId?.let { userId ->
-                    async(Dispatchers.IO) { refreshProtonMetadata(userId, forceRemote) }
+                    async(Dispatchers.IO) {
+                        refreshProtonSection(userId) {
+                            protonRepository.syncTimelineMetadata(userId, forceRemote)
+                        }
+                    }
                 }
                 deviceRefresh?.await()
                 protonRefresh?.await()
@@ -288,12 +312,16 @@ class GalleryViewModel @Inject internal constructor(
             is GalleryDestination.Device -> if (hasDeviceAccess) loadDevicePhotos()
             GalleryDestination.ProtonTimeline -> currentUserId?.let { userId ->
                 withContext(Dispatchers.IO) {
-                    refreshProtonMetadata(userId, forceRemote)
+                    refreshProtonSection(userId) {
+                        protonRepository.syncTimelineMetadata(userId, forceRemote)
+                    }
                 }
             }
             GalleryDestination.ProtonAlbums -> currentUserId?.let { userId ->
                 withContext(Dispatchers.IO) {
-                    refreshProtonMetadata(userId, forceRemote)
+                    refreshProtonSection(userId) {
+                        protonRepository.syncAlbumsMetadata(userId, forceRemote)
+                    }
                 }
             }
             is GalleryDestination.ProtonAlbumPhotos -> currentUserId?.let { userId ->
@@ -311,23 +339,19 @@ class GalleryViewModel @Inject internal constructor(
                 PhotoSource.DEVICE -> if (hasDeviceAccess) loadDeviceTrash()
                 PhotoSource.PROTON -> currentUserId?.let { userId ->
                     withContext(Dispatchers.IO) {
-                        refreshProtonMetadata(userId, forceRemote)
+                        refreshProtonSection(userId) {
+                            protonRepository.syncTrashMetadata(userId, forceRemote)
+                        }
                     }
                 }
             }
         }
     }
 
-    private suspend fun refreshProtonMetadata(userId: UserId, forceRemote: Boolean) {
-        if (forceRemote || metadataCheckedUserId != userId.id || !protonMetadataState.hasLoaded) {
-            protonRepository.syncMetadata(userId, forceRemote)
-        }
-        val metadata = protonRepository.metadataState.value
-        if (metadata.userId == userId.id && metadata.hasLoaded) {
-            metadataCheckedUserId = userId.id
-            prioritizeThumbnailSection(userId, destination)
-            protonThumbnailScheduler.enqueue(userId)
-        }
+    private suspend fun refreshProtonSection(userId: UserId, sync: suspend () -> Unit) {
+        sync()
+        prioritizeThumbnailSection(userId, destination)
+        protonThumbnailScheduler.enqueue(userId)
     }
 
     private fun prioritizeCurrentThumbnailSection() {
@@ -541,7 +565,6 @@ class GalleryViewModel @Inject internal constructor(
                 devicePhotos = devicePhotos,
                 deviceTrash = deviceTrash,
                 protonGallery = protonGalleryState,
-                protonMetadata = protonMetadataState,
                 protonAlbums = protonAlbumsState,
                 protonAlbumPhotos = protonAlbumPhotosState,
                 protonTrash = protonTrashState,
