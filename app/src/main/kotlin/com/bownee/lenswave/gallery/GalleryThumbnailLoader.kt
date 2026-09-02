@@ -9,7 +9,9 @@ import androidx.core.net.toUri
 import com.bownee.lenswave.proton.ProtonAlbum
 import com.bownee.lenswave.proton.ProtonPhotoGateway
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import me.proton.core.domain.entity.UserId
@@ -25,28 +27,55 @@ class GalleryThumbnailLoader(
     }
     private val loadingKeys = mutableSetOf<String>()
     private val callbacks = mutableMapOf<String, MutableList<(Bitmap?) -> Unit>>()
+    private val loadingJobs = mutableMapOf<String, Job>()
 
-    fun load(asset: GalleryAsset, onLoaded: (Bitmap?) -> Unit) {
+    fun load(
+        asset: GalleryAsset,
+        allowSourceRead: Boolean = true,
+        onLoaded: (Bitmap?) -> Unit,
+    ) {
         val revision = when (val replica = asset.primaryReplica) {
             is PhotoReplica.Device -> "${replica.modifiedAtEpochMillis}:${replica.sizeBytes}"
             is PhotoReplica.Proton -> "${protonUserId()?.id}:${replica.hasThumbnail}"
         }
-        load("asset:${asset.stableId}:$revision", asset.hasThumbnail, { loadAsset(asset) }, onLoaded)
+        load(
+            key = "asset:${asset.stableId}:$revision",
+            isAvailable = asset.hasThumbnail,
+            allowSourceRead = allowSourceRead,
+            read = { loadAsset(asset) },
+            onLoaded = onLoaded,
+        )
     }
 
-    fun load(album: ProtonAlbum, onLoaded: (Bitmap?) -> Unit) {
+    fun load(
+        album: ProtonAlbum,
+        allowSourceRead: Boolean = true,
+        onLoaded: (Bitmap?) -> Unit,
+    ) {
         val coverNodeUid = album.coverPhotoNodeUid
         val key = coverNodeUid?.let {
             "album-cover:${protonUserId()?.id}:$it:${album.hasCoverThumbnail}"
         } ?: "album-empty:${protonUserId()?.id}:${album.nodeUid}"
-        load(key, coverNodeUid != null && album.hasCoverThumbnail, {
-            val userId = protonUserId() ?: return@load null
-            protonRepository.readThumbnail(userId, requireNotNull(coverNodeUid))?.decodeThumbnail()
-        }, onLoaded)
+        load(
+            key = key,
+            isAvailable = coverNodeUid != null && album.hasCoverThumbnail,
+            allowSourceRead = allowSourceRead,
+            read = {
+                val userId = protonUserId() ?: return@load null
+                protonRepository.readThumbnail(userId, requireNotNull(coverNodeUid))?.decodeThumbnail()
+            },
+            onLoaded = onLoaded,
+        )
     }
 
     fun clear() {
         bitmaps.evictAll()
+        cancelPendingLoads()
+    }
+
+    fun cancelPendingLoads() {
+        loadingJobs.values.forEach(Job::cancel)
+        loadingJobs.clear()
         loadingKeys.clear()
         callbacks.clear()
     }
@@ -54,6 +83,7 @@ class GalleryThumbnailLoader(
     private fun load(
         key: String,
         isAvailable: Boolean,
+        allowSourceRead: Boolean,
         read: () -> Bitmap?,
         onLoaded: (Bitmap?) -> Unit,
     ) {
@@ -62,15 +92,18 @@ class GalleryThumbnailLoader(
             return
         }
         onLoaded(null)
-        if (!isAvailable) return
+        if (!isAvailable || !allowSourceRead) return
         callbacks.getOrPut(key, ::mutableListOf) += onLoaded
         if (!loadingKeys.add(key)) return
-        scope.launch {
+        val job = scope.launch(start = CoroutineStart.LAZY) {
             val bitmap = withContext(Dispatchers.IO) { runCatching(read).getOrNull() }
+            loadingJobs.remove(key)
             loadingKeys.remove(key)
             if (bitmap != null) bitmaps.put(key, bitmap)
             callbacks.remove(key).orEmpty().forEach { callback -> callback(bitmap) }
         }
+        loadingJobs[key] = job
+        job.start()
     }
 
     private fun loadAsset(asset: GalleryAsset): Bitmap? = when (val replica = asset.primaryReplica) {

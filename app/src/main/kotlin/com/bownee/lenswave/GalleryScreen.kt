@@ -258,6 +258,7 @@ internal class GalleryScreen(
 
     private fun attachScrollListeners() {
         list.setOnFastScrollInteractionListener { active ->
+            adapter.setFastScrolling(active)
             if (!active) scheduleStickyMonthUpdate(list.firstVisiblePosition)
         }
         list.setOnScrollListener(object : AbsListView.OnScrollListener {

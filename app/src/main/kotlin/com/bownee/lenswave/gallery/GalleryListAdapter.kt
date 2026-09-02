@@ -30,6 +30,7 @@ class GalleryListAdapter(
 ) : BaseAdapter() {
     private val selected = linkedMapOf<String, GalleryAsset>()
     private var rows: List<GalleryRow> = emptyList()
+    private var isFastScrolling = false
 
     fun submitPhotos(photos: List<GalleryAsset>) {
         rows = GalleryGrouping.createRows(
@@ -58,6 +59,16 @@ class GalleryListAdapter(
     fun clearThumbnails() {
         thumbnailLoader.clear()
         notifyDataSetChanged()
+    }
+
+    fun setFastScrolling(active: Boolean) {
+        if (isFastScrolling == active) return
+        val wasFastScrolling = isFastScrolling
+        isFastScrolling = active
+        if (active) thumbnailLoader.cancelPendingLoads()
+        if (GalleryFastScrollThumbnailPolicy.shouldRebind(wasFastScrolling, active)) {
+            notifyDataSetChanged()
+        }
     }
 
     fun selectedPhotos(): List<GalleryAsset> = selected.values.toList()
@@ -235,7 +246,10 @@ class GalleryListAdapter(
     }
 
     private fun bindThumbnail(image: ImageView, photo: GalleryAsset) {
-        thumbnailLoader.load(photo) { bitmap ->
+        thumbnailLoader.load(
+            asset = photo,
+            allowSourceRead = GalleryFastScrollThumbnailPolicy.shouldReadSource(isFastScrolling),
+        ) { bitmap ->
             if (image.tag != photo.stableId) return@load
             image.setImageBitmap(bitmap)
             if (photo.stableId !in selected) image.alpha = if (bitmap == null) 0.45f else 1f
@@ -246,7 +260,10 @@ class GalleryListAdapter(
         val coverNodeUid = album.coverPhotoNodeUid
         val key = coverNodeUid?.let { "album-cover:$it" } ?: "album-empty:${album.nodeUid}"
         image.tag = key
-        thumbnailLoader.load(album) { bitmap ->
+        thumbnailLoader.load(
+            album = album,
+            allowSourceRead = GalleryFastScrollThumbnailPolicy.shouldReadSource(isFastScrolling),
+        ) { bitmap ->
             if (image.tag != key) return@load
             image.setImageBitmap(bitmap)
             image.alpha = if (bitmap == null) 0.48f else 1f
