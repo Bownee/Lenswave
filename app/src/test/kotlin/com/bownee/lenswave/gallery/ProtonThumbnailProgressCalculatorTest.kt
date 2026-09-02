@@ -8,20 +8,39 @@ import org.junit.Test
 
 class ProtonThumbnailProgressCalculatorTest {
     @Test
-    fun `progress combines sources and counts shared nodes once`() {
-        val progress = ProtonThumbnailProgressCalculator.calculate(
-            timeline = listOf(
-                ProtonGalleryPhoto("timeline", 1, hasThumbnail = true),
-                ProtonGalleryPhoto("shared", 2, hasThumbnail = false),
-            ),
-            albums = listOf(
-                ProtonAlbum("album", "Trip", 1, "cover", 1, 2, false, false),
-            ),
-            trash = listOf(
-                ProtonTrashPhoto("shared", 3, hasThumbnail = true),
+    fun `timeline progress only counts timeline photos`() {
+        val progress = ProtonThumbnailProgressCalculator.timeline(
+            listOf(
+                ProtonGalleryPhoto("ready", 2, hasThumbnail = true),
+                ProtonGalleryPhoto("pending", 1, hasThumbnail = false),
             ),
         )
 
-        assertEquals(ProtonThumbnailProgress(downloaded = 2, total = 3), progress)
+        assertEquals(ProtonThumbnailProgress(downloaded = 1, total = 2), progress)
+    }
+
+    @Test
+    fun `album progress counts only albums that have covers`() {
+        val progress = ProtonThumbnailProgressCalculator.albumCovers(
+            listOf(
+                ProtonAlbum("ready", "Ready", 1, "cover-1", 1, 2, true, false),
+                ProtonAlbum("pending", "Pending", 1, "cover-2", 1, 2, false, false),
+                ProtonAlbum("empty", "Empty", 0, null, 1, 2, false, false),
+            ),
+        )
+
+        assertEquals(ProtonThumbnailProgress(downloaded = 1, total = 2), progress)
+    }
+
+    @Test
+    fun `trash progress only counts trash photos`() {
+        val progress = ProtonThumbnailProgressCalculator.trash(
+            listOf(
+                ProtonTrashPhoto("ready", 2, hasThumbnail = true),
+                ProtonTrashPhoto("pending", 1, hasThumbnail = false),
+            ),
+        )
+
+        assertEquals(ProtonThumbnailProgress(downloaded = 1, total = 2), progress)
     }
 }

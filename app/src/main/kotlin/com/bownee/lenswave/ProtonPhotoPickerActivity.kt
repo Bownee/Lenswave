@@ -191,11 +191,7 @@ class ProtonPhotoPickerActivity : FragmentActivity() {
         if (state.userId != currentUserId?.id) return
         adapter.photos = state.photos
         progress.visibility = if (openingPhoto) View.VISIBLE else View.GONE
-        val thumbnailProgress = ProtonThumbnailProgressCalculator.calculate(
-            timeline = state.photos,
-            albums = repository.albumsState.value.albums,
-            trash = repository.trashState.value.photos,
-        )
+        val thumbnailProgress = ProtonThumbnailProgressCalculator.timeline(state.photos)
         status.text = when {
             openingPhoto -> getString(R.string.downloading_full_resolution)
             metadataState.isLoading -> getString(R.string.loading_metadata)

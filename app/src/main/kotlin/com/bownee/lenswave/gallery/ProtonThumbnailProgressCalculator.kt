@@ -10,22 +10,20 @@ internal data class ProtonThumbnailProgress(
 )
 
 internal object ProtonThumbnailProgressCalculator {
-    fun calculate(
-        timeline: List<ProtonGalleryPhoto>,
-        albums: List<ProtonAlbum>,
-        trash: List<ProtonTrashPhoto>,
-    ): ProtonThumbnailProgress {
-        val availability = linkedMapOf<String, Boolean>()
-        timeline.forEach { photo -> availability.merge(photo.nodeUid, photo.hasThumbnail, Boolean::or) }
-        albums.forEach { album ->
-            album.coverPhotoNodeUid?.let { nodeUid ->
-                availability.merge(nodeUid, album.hasCoverThumbnail, Boolean::or)
-            }
-        }
-        trash.forEach { photo -> availability.merge(photo.nodeUid, photo.hasThumbnail, Boolean::or) }
-        return ProtonThumbnailProgress(
-            downloaded = availability.values.count { it },
-            total = availability.size,
-        )
-    }
+    fun timeline(photos: List<ProtonGalleryPhoto>) = ProtonThumbnailProgress(
+        downloaded = photos.count(ProtonGalleryPhoto::hasThumbnail),
+        total = photos.size,
+    )
+
+    fun albumCovers(albums: List<ProtonAlbum>) = ProtonThumbnailProgress(
+        downloaded = albums.count { album ->
+            album.coverPhotoNodeUid != null && album.hasCoverThumbnail
+        },
+        total = albums.count { album -> album.coverPhotoNodeUid != null },
+    )
+
+    fun trash(photos: List<ProtonTrashPhoto>) = ProtonThumbnailProgress(
+        downloaded = photos.count(ProtonTrashPhoto::hasThumbnail),
+        total = photos.size,
+    )
 }

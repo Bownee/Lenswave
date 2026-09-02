@@ -289,6 +289,56 @@ class GalleryUiStateFactoryTest {
     }
 
     @Test
+    fun `albums report album cover progress rather than timeline progress`() {
+        val state = factory.create(
+            GalleryUiInputs(
+                destination = GalleryDestination.ProtonAlbums,
+                protonAccountStatus = ProtonAccountStatus.CONNECTED,
+                protonGallery = ProtonGalleryState(
+                    photos = listOf(ProtonGalleryPhoto("timeline", 1, hasThumbnail = false)),
+                    hasLoaded = true,
+                    thumbnailWorkStatus = ProtonThumbnailWorkStatus.Running(1, 25),
+                ),
+                protonAlbums = ProtonAlbumsState(
+                    albums = listOf(
+                        ProtonAlbum("ready", "Ready", 1, "cover-1", 1, 2, true, false),
+                        ProtonAlbum("pending", "Pending", 1, "cover-2", 1, 2, false, false),
+                    ),
+                    hasLoaded = true,
+                ),
+                protonMetadata = loadedMetadata(),
+            ),
+        )
+
+        assertTrue(state.statusText.contains("${R.string.downloading_thumbnails_progress}(1, 2)"))
+    }
+
+    @Test
+    fun `trash reports trash thumbnail progress rather than timeline progress`() {
+        val state = factory.create(
+            GalleryUiInputs(
+                destination = GalleryDestination.Trash(PhotoSource.PROTON),
+                protonAccountStatus = ProtonAccountStatus.CONNECTED,
+                protonGallery = ProtonGalleryState(
+                    photos = listOf(ProtonGalleryPhoto("timeline", 1, hasThumbnail = false)),
+                    hasLoaded = true,
+                    thumbnailWorkStatus = ProtonThumbnailWorkStatus.Running(1, 25),
+                ),
+                protonTrash = ProtonTrashState(
+                    photos = listOf(
+                        ProtonTrashPhoto("ready", 2, hasThumbnail = true),
+                        ProtonTrashPhoto("pending", 1, hasThumbnail = false),
+                    ),
+                    hasLoaded = true,
+                ),
+                protonMetadata = loadedMetadata(),
+            ),
+        )
+
+        assertTrue(state.statusText.contains("${R.string.downloading_thumbnails_progress}(1, 2)"))
+    }
+
+    @Test
     fun `initial Proton metadata sync does not display refresh indicator`() {
         val state = factory.create(
             GalleryUiInputs(
