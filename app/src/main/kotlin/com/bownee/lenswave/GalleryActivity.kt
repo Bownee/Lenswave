@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.annotation.SuppressLint
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
@@ -54,6 +55,8 @@ import com.bownee.lenswave.proton.ProtonAlbum
 import com.bownee.lenswave.proton.ProtonPhotoGateway
 import com.bownee.lenswave.gallery.PhotoDeletionExecutor
 import com.bownee.lenswave.proton.ProtonPresentationInitializer
+import com.bownee.lenswave.update.AppUpdateChecker
+import com.bownee.lenswave.update.UpdateAvailableDialogFragment
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
@@ -65,13 +68,14 @@ import me.proton.core.usersettings.domain.usecase.PerformUpdateTelemetry
 import javax.inject.Inject
 
 @AndroidEntryPoint
-class GalleryActivity : FragmentActivity() {
+class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listener {
     @Inject lateinit var accountManager: AccountManager
     @Inject lateinit var authOrchestrator: AuthOrchestrator
     @Inject lateinit var protonRepository: ProtonPhotoGateway
     @Inject lateinit var photoDeletionExecutor: PhotoDeletionExecutor
     @Inject lateinit var observeUserSettings: ObserveUserSettings
     @Inject lateinit var updateTelemetry: PerformUpdateTelemetry
+    @Inject lateinit var appUpdateChecker: AppUpdateChecker
 
     private val viewModel: GalleryViewModel by lazy {
         ViewModelProvider(this)[GalleryViewModel::class.java]
@@ -104,6 +108,7 @@ class GalleryActivity : FragmentActivity() {
     private var safeBottom = 0
     private var visibleAssets: List<GalleryAsset> = emptyList()
     private var fastScrollEdgePadding = 0
+    private var pendingUpdateVersionName: String? = null
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -122,6 +127,7 @@ class GalleryActivity : FragmentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        pendingUpdateVersionName = savedInstanceState?.getString(STATE_PENDING_UPDATE_VERSION)
         configureWindow()
         deletionCoordinator = GalleryDeletionCoordinator(
             activity = this,
@@ -138,11 +144,15 @@ class GalleryActivity : FragmentActivity() {
         initializeAuthentication()
         observeGalleryState()
         updateDeviceAccess()
+        if (savedInstanceState == null && LenswaveApplication.isAppUpdateStartupEnabled()) {
+            checkForAppUpdate()
+        }
     }
 
     override fun onResume() {
         super.onResume()
         updateDeviceAccess()
+        showPendingUpdate()
     }
 
     override fun onDestroy() {
@@ -161,7 +171,20 @@ class GalleryActivity : FragmentActivity() {
 
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putBundle(STATE_DELETION, deletionCoordinator.saveState())
+        pendingUpdateVersionName?.let { outState.putString(STATE_PENDING_UPDATE_VERSION, it) }
         super.onSaveInstanceState(outState)
+    }
+
+    override fun onUpdateRequested() {
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(LATEST_RELEASE_PAGE_URL)))
+        } catch (_: ActivityNotFoundException) {
+            Toast.makeText(this, R.string.no_browser_for_update, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    override fun onUpdateSnoozed(versionName: String) {
+        appUpdateChecker.snooze(versionName)
     }
 
     private fun configureWindow() {
@@ -239,6 +262,29 @@ class GalleryActivity : FragmentActivity() {
 
     private fun initializeProtonCore() {
         ProtonPresentationInitializer.initializeCore(applicationContext)
+    }
+
+    private fun checkForAppUpdate() {
+        lifecycleScope.launch {
+            val update = appUpdateChecker.findAvailableUpdate(BuildConfig.VERSION_NAME) ?: return@launch
+            pendingUpdateVersionName = update.versionName
+            showPendingUpdate()
+        }
+    }
+
+    private fun showPendingUpdate() {
+        val versionName = pendingUpdateVersionName ?: return
+        if (!lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return
+        if (supportFragmentManager.isStateSaved) return
+        if (supportFragmentManager.findFragmentByTag(UpdateAvailableDialogFragment.TAG) != null) {
+            pendingUpdateVersionName = null
+            return
+        }
+        UpdateAvailableDialogFragment.create(versionName, BuildConfig.VERSION_NAME).show(
+            supportFragmentManager,
+            UpdateAvailableDialogFragment.TAG,
+        )
+        pendingUpdateVersionName = null
     }
 
 
@@ -731,7 +777,9 @@ class GalleryActivity : FragmentActivity() {
     }
 
     private companion object {
+        const val LATEST_RELEASE_PAGE_URL = "https://github.com/Bownee/Lenswave/releases/latest"
         const val STATE_DELETION = "gallery.deletion"
+        const val STATE_PENDING_UPDATE_VERSION = "gallery.pending-update-version"
         const val SETTINGS_CONNECT_PROTON = 1
         const val SETTINGS_DISCONNECT_PROTON = 2
         const val SETTINGS_PHOTO_ACCESS = 3

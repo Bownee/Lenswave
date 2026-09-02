@@ -11,6 +11,7 @@ class LenswaveTestRunner : AndroidJUnitRunner() {
         context: Context?,
     ): Application {
         LenswaveApplication.disableAccountSessionStartupForTests()
+        LenswaveApplication.disableAppUpdateStartupForTests()
         return super.newApplication(classLoader, className, context)
     }
 }
