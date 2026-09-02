@@ -36,13 +36,14 @@ import me.proton.core.accountmanager.domain.AccountManager
 import me.proton.core.domain.entity.UserId
 
 @HiltViewModel
-class GalleryViewModel @Inject constructor(
+class GalleryViewModel @Inject internal constructor(
     @param:ApplicationContext private val context: Context,
     private val accountManager: AccountManager,
     private val deviceRepository: DevicePhotoSource,
     private val protonRepository: ProtonGalleryReader,
     private val combinedRepository: CombinedPhotoMatcher,
     private val accountSessionManager: ProtonAccountSessionManager,
+    private val navigationStore: GalleryNavigationStore,
     private val savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
     private val uiStateFactory = GalleryUiStateFactory(AndroidGalleryText(context.resources))
@@ -50,14 +51,15 @@ class GalleryViewModel @Inject constructor(
     private val deviceLoadMutex = Mutex()
     private val deviceTrashLoadMutex = Mutex()
 
-    private var destination: GalleryDestination = restoreDestination(savedStateHandle)
+    private val restoredNavigation = restoreNavigation(savedStateHandle) ?: navigationStore.read()
+    private var destination = restoredNavigation?.destination ?: GalleryDestination.Device()
     private var account: Account? = null
     private var currentUserId: UserId? = null
     private var sessionTransitioning = false
-    private var hasChosenStartupDestination = savedStateHandle.contains(STATE_DESTINATION)
+    private var hasChosenStartupDestination = restoredNavigation != null
     private var deviceAccessLevel = DeviceAccessLevel.NONE
     private val hasDeviceAccess get() = deviceAccessLevel != DeviceAccessLevel.NONE
-    private var selectedDeviceCollection = (destination as? GalleryDestination.Device)?.collection
+    private var selectedDeviceCollection = restoredNavigation?.selectedDeviceCollection
         ?: DeviceCollection.CAMERA
     private var devicePhotos = GallerySourceSnapshot<GalleryAsset>()
     private var deviceTrash = GallerySourceSnapshot<GalleryAsset>()
@@ -103,10 +105,10 @@ class GalleryViewModel @Inject constructor(
         if (previousDestination == GalleryDestination.Combined && newDestination != GalleryDestination.Combined) {
             resetCombinedMatching()
         }
-        saveDestination()
         if (newDestination is GalleryDestination.Device) {
             selectedDeviceCollection = newDestination.collection
         }
+        saveDestination()
         publishUiState()
         if (previousDestination is GalleryDestination.Device &&
             newDestination is GalleryDestination.Device &&
@@ -164,6 +166,7 @@ class GalleryViewModel @Inject constructor(
             resetCombinedMatchingAndJoin()
             accountManager.removeAccount(userId)
             destination = GalleryDestination.Device()
+            selectedDeviceCollection = DeviceCollection.CAMERA
             saveDestination()
             publishUiState()
             requestRefresh(manual = false)
@@ -468,20 +471,14 @@ class GalleryViewModel @Inject constructor(
     }
 
     private fun saveDestination() {
-        savedStateHandle[STATE_DESTINATION] = when (destination) {
-            GalleryDestination.Combined -> "combined"
-            is GalleryDestination.Device -> "device"
-            GalleryDestination.ProtonTimeline -> "proton-timeline"
-            GalleryDestination.ProtonAlbums -> "proton-albums"
-            is GalleryDestination.ProtonAlbumPhotos -> "proton-album"
-            is GalleryDestination.Trash -> "trash"
-        }
-        savedStateHandle[STATE_DEVICE_COLLECTION] = selectedDeviceCollection.name
-        (destination as? GalleryDestination.Trash)?.let { savedStateHandle[STATE_TRASH_SOURCE] = it.source.name }
-        (destination as? GalleryDestination.ProtonAlbumPhotos)?.album?.let { album ->
-            savedStateHandle[STATE_ALBUM_UID] = album.nodeUid
-            savedStateHandle[STATE_ALBUM_NAME] = album.name
-        }
+        val navigation = GalleryNavigationState(destination, selectedDeviceCollection)
+        val stored = GalleryNavigationCodec.encode(navigation)
+        savedStateHandle[STATE_DESTINATION] = stored.destination
+        savedStateHandle[STATE_DEVICE_COLLECTION] = stored.deviceCollection
+        savedStateHandle[STATE_TRASH_SOURCE] = stored.trashSource
+        savedStateHandle[STATE_ALBUM_UID] = stored.albumUid
+        savedStateHandle[STATE_ALBUM_NAME] = stored.albumName
+        navigationStore.write(navigation)
     }
 
     private companion object {
@@ -492,28 +489,15 @@ class GalleryViewModel @Inject constructor(
         const val STATE_ALBUM_UID = "gallery.album-uid"
         const val STATE_ALBUM_NAME = "gallery.album-name"
 
-        fun restoreDestination(state: SavedStateHandle): GalleryDestination {
-            val collection = state.get<String>(STATE_DEVICE_COLLECTION)
-                ?.let { runCatching { DeviceCollection.valueOf(it) }.getOrNull() }
-                ?: DeviceCollection.CAMERA
-            return when (state.get<String>(STATE_DESTINATION)) {
-                "combined" -> GalleryDestination.Combined
-                "proton-timeline" -> GalleryDestination.ProtonTimeline
-                "proton-albums" -> GalleryDestination.ProtonAlbums
-                "proton-album" -> state.get<String>(STATE_ALBUM_UID)?.let { uid ->
-                    GalleryDestination.ProtonAlbumPhotos(
-                        com.bownee.lenswave.proton.ProtonAlbumReference(
-                            nodeUid = uid,
-                            name = state.get<String>(STATE_ALBUM_NAME).orEmpty(),
-                        )
-                    )
-                } ?: GalleryDestination.ProtonAlbums
-                "trash" -> state.get<String>(STATE_TRASH_SOURCE)
-                    ?.let { runCatching { PhotoSource.valueOf(it) }.getOrNull() }
-                    ?.let(GalleryDestination::Trash)
-                    ?: GalleryDestination.Device(collection)
-                else -> GalleryDestination.Device(collection)
-            }
-        }
+        fun restoreNavigation(state: SavedStateHandle): GalleryNavigationState? =
+            GalleryNavigationCodec.decode(
+                StoredGalleryNavigation(
+                    destination = state[STATE_DESTINATION],
+                    deviceCollection = state[STATE_DEVICE_COLLECTION],
+                    trashSource = state[STATE_TRASH_SOURCE],
+                    albumUid = state[STATE_ALBUM_UID],
+                    albumName = state[STATE_ALBUM_NAME],
+                ),
+            )
     }
 }

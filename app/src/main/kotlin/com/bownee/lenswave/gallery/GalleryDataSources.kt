@@ -76,6 +76,9 @@ internal abstract class GalleryDataModule {
     @Binds abstract fun bindDevicePhotoSource(implementation: DevicePhotoRepository): DevicePhotoSource
     @Binds abstract fun bindCombinedPhotoMatcher(implementation: CombinedPhotoRepository): CombinedPhotoMatcher
     @Binds abstract fun bindCombinedMatchStore(implementation: CombinedPhotoCache): CombinedMatchStore
+    @Binds abstract fun bindGalleryNavigationStore(
+        implementation: SharedPreferencesGalleryNavigationStore,
+    ): GalleryNavigationStore
     @Binds abstract fun bindProtonGalleryReader(implementation: ProtonPhotoGateway): ProtonGalleryReader
     @Binds abstract fun bindProtonSessionLifecycle(implementation: ProtonPhotoGateway): ProtonSessionLifecycle
     @Binds abstract fun bindProtonDuplicateSource(implementation: ProtonPhotoGateway): ProtonDuplicateSource
