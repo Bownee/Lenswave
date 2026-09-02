@@ -28,5 +28,5 @@ internal object DevicePermissionPolicy {
     }
 
     fun shouldOpenSettingsToManage(accessLevel: DeviceAccessLevel): Boolean =
-        accessLevel != DeviceAccessLevel.NONE
+        accessLevel == DeviceAccessLevel.FULL
 }

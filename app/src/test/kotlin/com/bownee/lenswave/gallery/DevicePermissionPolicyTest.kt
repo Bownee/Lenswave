@@ -34,9 +34,9 @@ class DevicePermissionPolicyTest {
         assertEquals(DeviceAccessLevel.FULL, DevicePermissionPolicy.accessLevel(34, true, true, false))
     }
 
-    @Test fun grantedAccessIsManagedInSettings() {
+    @Test fun partialAccessUsesReselectionAndFullAccessUsesSettings() {
         assertFalse(DevicePermissionPolicy.shouldOpenSettingsToManage(DeviceAccessLevel.NONE))
-        assertTrue(DevicePermissionPolicy.shouldOpenSettingsToManage(DeviceAccessLevel.PARTIAL))
+        assertFalse(DevicePermissionPolicy.shouldOpenSettingsToManage(DeviceAccessLevel.PARTIAL))
         assertTrue(DevicePermissionPolicy.shouldOpenSettingsToManage(DeviceAccessLevel.FULL))
     }
 }
