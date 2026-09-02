@@ -48,30 +48,12 @@ class ProtonThumbnailWorker(
             )
             statusPublished = true
             val finished = withTimeoutOrNull(MAX_RUN_MILLIS) {
-                repository.syncThumbnails(
-                    requestedUserId,
-                    maxThumbnailDownloads = MAX_TIMELINE_DOWNLOADS_PER_RUN,
-                )
-                repository.syncAlbums(
-                    requestedUserId,
-                    maxThumbnailDownloads = MAX_ALBUM_DOWNLOADS_PER_RUN,
-                )
+                refreshMetadata(repository, requestedUserId)
+                hydrateThumbnails(repository, requestedUserId)
                 true
             } == true
             if (!finished) return resolve(repository, ProtonThumbnailWorkIssue.TIMEOUT)
-            val issue = when {
-                repository.state.value.errorMessage != null ||
-                    repository.albumsState.value.errorMessage != null -> ProtonThumbnailWorkIssue.ERROR
-                repository.state.value.userId != userId ||
-                    repository.albumsState.value.userId != userId -> ProtonThumbnailWorkIssue.INCOMPLETE
-                repository.state.value.photos.any { photo -> !photo.hasThumbnail } ->
-                    ProtonThumbnailWorkIssue.INCOMPLETE
-                repository.albumsState.value.albums.any { album ->
-                    album.coverPhotoNodeUid != null && !album.hasCoverThumbnail
-                } -> ProtonThumbnailWorkIssue.INCOMPLETE
-                else -> null
-            }
-            resolve(repository, issue)
+            resolve(repository, workIssue(repository, userId))
         } catch (error: CancellationException) {
             if (statusPublished) {
                 repository.updateThumbnailWorkStatus(
@@ -87,6 +69,36 @@ class ProtonThumbnailWorker(
             LenswaveDiagnostics.reportFailure("thumbnail-worker", error)
             resolve(repository, ProtonThumbnailWorkIssue.ERROR, publishStatus = statusPublished)
         }
+    }
+
+    private suspend fun refreshMetadata(repository: ProtonPhotoGateway, userId: UserId) {
+        repository.syncAlbums(userId, maxThumbnailDownloads = METADATA_ONLY_THUMBNAIL_LIMIT)
+        repository.syncTrash(userId, maxThumbnailDownloads = METADATA_ONLY_THUMBNAIL_LIMIT)
+        repository.syncThumbnails(userId, maxThumbnailDownloads = METADATA_ONLY_THUMBNAIL_LIMIT)
+    }
+
+    private suspend fun hydrateThumbnails(repository: ProtonPhotoGateway, userId: UserId) {
+        repository.syncThumbnails(userId, maxThumbnailDownloads = MAX_TIMELINE_DOWNLOADS_PER_RUN)
+        repository.syncAlbums(userId, maxThumbnailDownloads = MAX_ALBUM_DOWNLOADS_PER_RUN)
+        repository.syncTrash(userId, maxThumbnailDownloads = MAX_TRASH_DOWNLOADS_PER_RUN)
+    }
+
+    private fun workIssue(repository: ProtonPhotoGateway, userId: String): ProtonThumbnailWorkIssue? = when {
+        repository.state.value.errorMessage != null ||
+            repository.albumsState.value.errorMessage != null ||
+            repository.trashState.value.errorMessage != null -> ProtonThumbnailWorkIssue.ERROR
+        repository.state.value.userId != userId ||
+            repository.albumsState.value.userId != userId ||
+            repository.trashState.value.userId != userId ||
+            !repository.albumsState.value.hasLoaded ||
+            !repository.trashState.value.hasLoaded -> ProtonThumbnailWorkIssue.INCOMPLETE
+        repository.state.value.photos.any { photo -> !photo.hasThumbnail } -> ProtonThumbnailWorkIssue.INCOMPLETE
+        repository.albumsState.value.albums.any { album ->
+            album.coverPhotoNodeUid != null && !album.hasCoverThumbnail
+        } -> ProtonThumbnailWorkIssue.INCOMPLETE
+        repository.trashState.value.photos.any { photo -> !photo.hasThumbnail } ->
+            ProtonThumbnailWorkIssue.INCOMPLETE
+        else -> null
     }
 
     private fun resolve(
@@ -124,8 +136,10 @@ class ProtonThumbnailWorker(
         const val KEY_USER_ID = "user-id"
         private const val SESSION_READY_TIMEOUT_MILLIS = 30_000L
         private const val MAX_RUN_MILLIS = 3L * 60L * 1_000L + 30_000L
+        private const val METADATA_ONLY_THUMBNAIL_LIMIT = 0
         private const val MAX_TIMELINE_DOWNLOADS_PER_RUN = 60
         private const val MAX_ALBUM_DOWNLOADS_PER_RUN = 20
+        private const val MAX_TRASH_DOWNLOADS_PER_RUN = 40
 
         fun request(userId: UserId): OneTimeWorkRequest =
             OneTimeWorkRequestBuilder<ProtonThumbnailWorker>()

@@ -28,12 +28,26 @@ internal class ProtonTrashRepository @Inject constructor(
     val state: StateFlow<ProtonTrashState> = mutableState.asStateFlow()
 
     fun loadCached(userId: UserId) {
-        emit(userId, cache.readTrash(userId.id), syncing = false)
+        emit(
+            userId,
+            cache.readTrash(userId.id),
+            syncing = false,
+            hasLoaded = cache.hasTrashSnapshot(userId.id),
+        )
     }
 
-    suspend fun sync(userId: UserId, forceRemote: Boolean) = syncMutex.withLock {
+    suspend fun sync(
+        userId: UserId,
+        forceRemote: Boolean,
+        maxThumbnailDownloads: Int? = null,
+    ) = syncMutex.withLock {
         val existing = cache.readTrash(userId.id)
-        emit(userId, existing, syncing = true)
+        emit(
+            userId,
+            existing,
+            syncing = true,
+            hasLoaded = cache.hasTrashSnapshot(userId.id),
+        )
         try {
             val photosClient = clientProvider.get(userId)
             val shouldEnumerate = snapshots.shouldEnumerate(
@@ -60,6 +74,7 @@ internal class ProtonTrashRepository @Inject constructor(
                 photosClient = photosClient,
                 userId = userId,
                 nodeUids = photos.filterNot(ProtonTrashPhoto::hasThumbnail).map(ProtonTrashPhoto::nodeUid),
+                maxDownloads = maxThumbnailDownloads,
                 onStored = { nodeUid ->
                     positions[nodeUid]?.let { position ->
                         photos[position] = photos[position].copy(hasThumbnail = true)
@@ -105,10 +120,16 @@ internal class ProtonTrashRepository @Inject constructor(
         mutableState.value = ProtonTrashState()
     }
 
-    private fun emit(userId: UserId, photos: List<ProtonTrashPhoto>, syncing: Boolean) {
+    private fun emit(
+        userId: UserId,
+        photos: List<ProtonTrashPhoto>,
+        syncing: Boolean,
+        hasLoaded: Boolean = true,
+    ) {
         mutableState.value = ProtonTrashState(
             userId = userId.id,
             photos = photos.toList(),
+            hasLoaded = hasLoaded,
             syncing = syncing,
             downloadedThumbnailCount = photos.count(ProtonTrashPhoto::hasThumbnail),
         )

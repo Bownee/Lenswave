@@ -22,6 +22,7 @@ data class ProtonAlbumReference(
 data class ProtonAlbumsState(
     val userId: String? = null,
     val albums: List<ProtonAlbum> = emptyList(),
+    val hasLoaded: Boolean = false,
     val syncing: Boolean = false,
     val downloadedCoverCount: Int = 0,
     val errorMessage: String? = null,

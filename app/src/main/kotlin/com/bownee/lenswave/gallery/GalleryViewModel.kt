@@ -247,24 +247,22 @@ class GalleryViewModel @Inject internal constructor(
         when (selectedDestination) {
             GalleryDestination.Combined -> coroutineScope {
                 val deviceRefresh = if (hasDeviceAccess) async { loadDevicePhotos() } else null
-                val protonRefresh = if (forceRemote) {
-                    currentUserId?.let { userId ->
-                        async(Dispatchers.IO) { refreshTimelineMetadata(userId) }
-                    }
-                } else null
+                val protonRefresh = currentUserId?.let { userId ->
+                    async(Dispatchers.IO) { refreshTimelineMetadata(userId, forceRemote) }
+                }
                 deviceRefresh?.await()
                 protonRefresh?.await()
                 startCombinedMatchingIfNeeded(forceRecheck = forceRemote)?.join()
             }
             is GalleryDestination.Device -> if (hasDeviceAccess) loadDevicePhotos()
-            GalleryDestination.ProtonTimeline -> if (forceRemote) {
-                currentUserId?.let { userId ->
-                    withContext(Dispatchers.IO) { refreshTimelineMetadata(userId) }
+            GalleryDestination.ProtonTimeline -> currentUserId?.let { userId ->
+                withContext(Dispatchers.IO) {
+                    refreshTimelineMetadata(userId, forceRemote)
                 }
             }
-            GalleryDestination.ProtonAlbums -> if (forceRemote) {
-                currentUserId?.let { userId ->
-                    withContext(Dispatchers.IO) { refreshAlbumMetadata(userId) }
+            GalleryDestination.ProtonAlbums -> currentUserId?.let { userId ->
+                withContext(Dispatchers.IO) {
+                    refreshAlbumMetadata(userId, forceRemote)
                 }
             }
             is GalleryDestination.ProtonAlbumPhotos -> currentUserId?.let { userId ->
@@ -280,28 +278,38 @@ class GalleryViewModel @Inject internal constructor(
                 PhotoSource.DEVICE -> if (hasDeviceAccess) loadDeviceTrash()
                 PhotoSource.PROTON -> currentUserId?.let { userId ->
                     withContext(Dispatchers.IO) {
-                        protonRepository.syncTrash(userId, forceRemote)
+                        refreshTrashMetadata(userId, forceRemote)
                     }
                 }
             }
         }
     }
 
-    private suspend fun refreshTimelineMetadata(userId: UserId) {
+    private suspend fun refreshTimelineMetadata(userId: UserId, forceRemote: Boolean) {
         refreshProtonMetadata(userId) {
             protonRepository.syncThumbnails(
                 userId = userId,
-                forceRemote = true,
+                forceRemote = forceRemote,
                 maxThumbnailDownloads = METADATA_ONLY_THUMBNAIL_LIMIT,
             )
         }
     }
 
-    private suspend fun refreshAlbumMetadata(userId: UserId) {
+    private suspend fun refreshAlbumMetadata(userId: UserId, forceRemote: Boolean) {
         refreshProtonMetadata(userId) {
             protonRepository.syncAlbums(
                 userId = userId,
-                forceRemote = true,
+                forceRemote = forceRemote,
+                maxThumbnailDownloads = METADATA_ONLY_THUMBNAIL_LIMIT,
+            )
+        }
+    }
+
+    private suspend fun refreshTrashMetadata(userId: UserId, forceRemote: Boolean) {
+        refreshProtonMetadata(userId) {
+            protonRepository.syncTrash(
+                userId = userId,
+                forceRemote = forceRemote,
                 maxThumbnailDownloads = METADATA_ONLY_THUMBNAIL_LIMIT,
             )
         }

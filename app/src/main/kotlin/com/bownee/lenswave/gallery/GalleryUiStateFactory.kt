@@ -158,18 +158,30 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
 
     private fun protonAlbums(inputs: GalleryUiInputs): GalleryUiState {
         protonUnavailable(inputs)?.let { return it }
-        val albums = inputs.protonAlbums.albums
-        val status = if (inputs.protonAlbums.errorMessage != null) {
-            status(text.string(R.string.albums), text.string(R.string.could_not_refresh))
-        } else {
-            status(text.string(R.string.albums), albumCountStatus(albums.size))
+        val state = inputs.protonAlbums
+        val albums = state.albums
+        val workerPending = inputs.protonGallery.workIsPending()
+        val coverCount = albums.count { album -> album.coverPhotoNodeUid != null }
+        val statusDetail = when {
+            state.errorMessage != null -> text.string(R.string.could_not_refresh)
+            !state.hasLoaded || (albums.isEmpty() && workerPending) ->
+                text.string(R.string.loading_proton_albums)
+            state.syncing && inputs.protonGallery.thumbnailWorkerIsRunning() &&
+                state.downloadedCoverCount < coverCount -> text.string(
+                R.string.downloading_album_covers_progress,
+                state.downloadedCoverCount,
+                coverCount,
+            )
+            else -> albumCountStatus(albums.size)
         }
+        val status = status(text.string(R.string.albums), statusDetail)
         val emptyState = when {
-            albums.isNotEmpty() || inputs.protonAlbums.syncing -> null
-            inputs.protonAlbums.errorMessage != null -> GalleryEmptyState(
+            albums.isNotEmpty() -> null
+            state.errorMessage != null -> GalleryEmptyState(
                 text.string(R.string.could_not_load_proton_albums),
                 text.string(R.string.check_connection_refresh),
             )
+            state.syncing || workerPending || !state.hasLoaded -> null
             else -> GalleryEmptyState(
                 text.string(R.string.no_proton_albums),
                 text.string(R.string.proton_albums_appear_here),
@@ -251,18 +263,29 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
 
     private fun protonTrash(inputs: GalleryUiInputs): GalleryUiState {
         protonUnavailable(inputs, area = R.string.trash)?.let { return it }
-        val assets = ProtonTrashGallery.createPhotos(inputs.protonTrash.photos)
-        val status = if (inputs.protonTrash.errorMessage != null) {
-            status(text.string(R.string.trash), text.string(R.string.could_not_refresh))
-        } else {
-            status(text.string(R.string.trash), photoCountStatus(assets.size))
+        val state = inputs.protonTrash
+        val assets = ProtonTrashGallery.createPhotos(state.photos)
+        val workerPending = inputs.protonGallery.workIsPending()
+        val statusDetail = when {
+            state.errorMessage != null -> text.string(R.string.could_not_refresh)
+            !state.hasLoaded || (assets.isEmpty() && workerPending) ->
+                text.string(R.string.loading_proton_trash)
+            state.syncing && inputs.protonGallery.thumbnailWorkerIsRunning() &&
+                state.downloadedThumbnailCount < assets.size -> text.string(
+                R.string.downloading_thumbnails_progress,
+                state.downloadedThumbnailCount,
+                assets.size,
+            )
+            else -> photoCountStatus(assets.size)
         }
+        val status = status(text.string(R.string.trash), statusDetail)
         val emptyState = when {
-            assets.isNotEmpty() || inputs.protonTrash.syncing -> null
-            inputs.protonTrash.errorMessage != null -> GalleryEmptyState(
+            assets.isNotEmpty() -> null
+            state.errorMessage != null -> GalleryEmptyState(
                 text.string(R.string.could_not_load_proton_trash),
                 text.string(R.string.check_connection_refresh),
             )
+            state.syncing || workerPending || !state.hasLoaded -> null
             else -> GalleryEmptyState(
                 text.string(R.string.trash_empty),
                 text.string(R.string.proton_trash_empty_message),
@@ -273,7 +296,7 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
             content = GalleryContent.Photos(assets),
             statusText = status,
             emptyState = emptyState,
-            showDeleteAll = assets.isNotEmpty() && !inputs.protonTrash.syncing,
+            showDeleteAll = assets.isNotEmpty() && !state.syncing,
         )
     }
 
@@ -320,7 +343,8 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
         GalleryDestination.ProtonAlbums -> protonAlbums.syncing && !protonGallery.thumbnailWorkerIsRunning()
         is GalleryDestination.ProtonAlbumPhotos ->
             protonAlbumPhotos.albumUid == current.album.nodeUid && protonAlbumPhotos.syncing
-        is GalleryDestination.Trash -> current.source == PhotoSource.PROTON && protonTrash.syncing
+        is GalleryDestination.Trash -> current.source == PhotoSource.PROTON &&
+            protonTrash.syncing && !protonGallery.thumbnailWorkerIsRunning()
         is GalleryDestination.Device -> false
     }
 

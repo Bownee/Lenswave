@@ -192,7 +192,10 @@
     <string name="downloading_full_resolution">Downloading full-resolution photo…</string>
     <string name="could_not_refresh_detail">Could not refresh: %1$s</string>
     <string name="loading_proton_timeline">Loading Proton Photos timeline…</string>
+    <string name="loading_proton_albums">Loading Proton albums…</string>
+    <string name="loading_proton_trash">Loading Proton Trash…</string>
     <string name="downloading_thumbnails_progress">Downloading thumbnails %1$d/%2$d</string>
+    <string name="downloading_album_covers_progress">Downloading album covers %1$d/%2$d</string>
     <string name="proton_sync_timeout_retry_scheduled">Sync timed out. Scheduled retry: %1$d/%2$d</string>
     <string name="proton_sync_retry_scheduled">Sync paused. Scheduled retry: %1$d/%2$d</string>
     <string name="proton_sync_stopped">Sync stopped. Pull to refresh to try again.</string>

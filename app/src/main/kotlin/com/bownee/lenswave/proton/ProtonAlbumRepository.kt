@@ -32,7 +32,12 @@ internal class ProtonAlbumRepository @Inject constructor(
     val albumPhotosState: StateFlow<ProtonAlbumPhotosState> = mutableAlbumPhotosState.asStateFlow()
 
     fun loadCached(userId: UserId) {
-        emitAlbums(userId, cache.readAlbums(userId.id), syncing = false)
+        emitAlbums(
+            userId,
+            cache.readAlbums(userId.id),
+            syncing = false,
+            hasLoaded = cache.hasAlbumsSnapshot(userId.id),
+        )
     }
 
     fun loadCachedAlbum(userId: UserId, album: ProtonAlbumReference) {
@@ -52,7 +57,12 @@ internal class ProtonAlbumRepository @Inject constructor(
         maxThumbnailDownloads: Int? = null,
     ) = albumsSyncMutex.withLock {
         val existing = cache.readAlbums(userId.id)
-        emitAlbums(userId, existing, syncing = true)
+        emitAlbums(
+            userId,
+            existing,
+            syncing = true,
+            hasLoaded = cache.hasAlbumsSnapshot(userId.id),
+        )
         try {
             val photosClient = clientProvider.get(userId)
             val shouldEnumerate = snapshots.shouldEnumerate(
@@ -212,10 +222,16 @@ internal class ProtonAlbumRepository @Inject constructor(
         )
     }
 
-    private fun emitAlbums(userId: UserId, albums: List<ProtonAlbum>, syncing: Boolean) {
+    private fun emitAlbums(
+        userId: UserId,
+        albums: List<ProtonAlbum>,
+        syncing: Boolean,
+        hasLoaded: Boolean = true,
+    ) {
         mutableAlbumsState.value = ProtonAlbumsState(
             userId = userId.id,
             albums = albums.toList(),
+            hasLoaded = hasLoaded,
             syncing = syncing,
             downloadedCoverCount = albums.count { it.coverPhotoNodeUid != null && it.hasCoverThumbnail },
         )

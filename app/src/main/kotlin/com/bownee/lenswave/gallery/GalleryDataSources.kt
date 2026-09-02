@@ -62,7 +62,11 @@ interface ProtonGalleryReader {
     suspend fun syncAlbums(userId: UserId, forceRemote: Boolean = false, maxThumbnailDownloads: Int? = null)
     suspend fun loadCachedAlbum(userId: UserId, album: ProtonAlbumReference)
     suspend fun syncAlbumPhotos(userId: UserId, album: ProtonAlbumReference, forceRemote: Boolean = false)
-    suspend fun syncTrash(userId: UserId, forceRemote: Boolean = false)
+    suspend fun syncTrash(
+        userId: UserId,
+        forceRemote: Boolean = false,
+        maxThumbnailDownloads: Int? = null,
+    )
 }
 
 interface ProtonSessionLifecycle {

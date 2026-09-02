@@ -1,10 +1,14 @@
 package com.bownee.lenswave.gallery
 
 import com.bownee.lenswave.R
+import com.bownee.lenswave.proton.ProtonAlbum
+import com.bownee.lenswave.proton.ProtonAlbumsState
 import com.bownee.lenswave.proton.ProtonGalleryPhoto
 import com.bownee.lenswave.proton.ProtonGalleryState
 import com.bownee.lenswave.proton.ProtonThumbnailWorkIssue
 import com.bownee.lenswave.proton.ProtonThumbnailWorkStatus
+import com.bownee.lenswave.proton.ProtonTrashState
+import com.bownee.lenswave.proton.ProtonTrashPhoto
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -21,7 +25,7 @@ class GalleryUiStateFactoryTest {
     })
 
     @Test
-    fun `Proton trash assumes empty while its first response is pending`() {
+    fun `Proton trash does not claim to be empty before metadata loads`() {
         val state = factory.create(
             GalleryUiInputs(
                 destination = GalleryDestination.Trash(PhotoSource.PROTON),
@@ -29,8 +33,90 @@ class GalleryUiStateFactoryTest {
             ),
         )
 
-        assertNotNull(state.emptyState)
+        assertNull(state.emptyState)
+        assertTrue(state.statusText.contains(R.string.loading_proton_trash.toString()))
         assertFalse(state.showDeleteAll)
+    }
+
+    @Test
+    fun `loaded empty Proton trash shows its empty state`() {
+        val state = factory.create(
+            GalleryUiInputs(
+                destination = GalleryDestination.Trash(PhotoSource.PROTON),
+                protonAccountStatus = ProtonAccountStatus.CONNECTED,
+                protonTrash = ProtonTrashState(hasLoaded = true),
+            ),
+        )
+
+        assertNotNull(state.emptyState)
+    }
+
+    @Test
+    fun `Proton albums do not claim to be empty before metadata loads`() {
+        val state = factory.create(
+            GalleryUiInputs(
+                destination = GalleryDestination.ProtonAlbums,
+                protonAccountStatus = ProtonAccountStatus.CONNECTED,
+                protonAlbums = ProtonAlbumsState(hasLoaded = false),
+            ),
+        )
+
+        assertNull(state.emptyState)
+        assertTrue(state.statusText.contains(R.string.loading_proton_albums.toString()))
+    }
+
+    @Test
+    fun `loaded empty Proton albums show their empty state`() {
+        val state = factory.create(
+            GalleryUiInputs(
+                destination = GalleryDestination.ProtonAlbums,
+                protonAccountStatus = ProtonAccountStatus.CONNECTED,
+                protonAlbums = ProtonAlbumsState(hasLoaded = true),
+            ),
+        )
+
+        assertNotNull(state.emptyState)
+    }
+
+    @Test
+    fun `album metadata is visible before its cover thumbnail loads`() {
+        val album = ProtonAlbum(
+            nodeUid = "album",
+            name = "Trip",
+            photoCount = 4,
+            coverPhotoNodeUid = "cover",
+            createdAtEpochSeconds = 1,
+            lastActivityEpochSeconds = 2,
+            hasCoverThumbnail = false,
+            isShared = false,
+        )
+        val state = factory.create(
+            GalleryUiInputs(
+                destination = GalleryDestination.ProtonAlbums,
+                protonAccountStatus = ProtonAccountStatus.CONNECTED,
+                protonAlbums = ProtonAlbumsState(albums = listOf(album), hasLoaded = true),
+            ),
+        )
+
+        assertEquals(listOf(album), (state.content as GalleryContent.Albums).albums)
+        assertNull(state.emptyState)
+    }
+
+    @Test
+    fun `trash metadata is visible before its thumbnail loads`() {
+        val state = factory.create(
+            GalleryUiInputs(
+                destination = GalleryDestination.Trash(PhotoSource.PROTON),
+                protonAccountStatus = ProtonAccountStatus.CONNECTED,
+                protonTrash = ProtonTrashState(
+                    photos = listOf(ProtonTrashPhoto("photo", 2, hasThumbnail = false)),
+                    hasLoaded = true,
+                ),
+            ),
+        )
+
+        assertEquals("proton-trash:photo", state.visibleAssets.single().stableId)
+        assertNull(state.emptyState)
     }
 
     @Test

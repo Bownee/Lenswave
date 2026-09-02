@@ -85,9 +85,15 @@ class ProtonPhotoGateway @Inject internal constructor(
         } }
     }
 
-    override suspend fun syncTrash(userId: UserId, forceRemote: Boolean) {
+    override suspend fun syncTrash(
+        userId: UserId,
+        forceRemote: Boolean,
+        maxThumbnailDownloads: Int?,
+    ) {
         withContext(Dispatchers.IO) {
-            sessionGuard.withActiveSession(userId) { trash.sync(userId, forceRemote) }
+            sessionGuard.withActiveSession(userId) {
+                trash.sync(userId, forceRemote, maxThumbnailDownloads)
+            }
         }
     }
 
