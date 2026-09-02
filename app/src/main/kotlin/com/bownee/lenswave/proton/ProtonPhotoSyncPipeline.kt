@@ -5,33 +5,37 @@ import javax.inject.Singleton
 import me.proton.core.domain.entity.UserId
 import me.proton.drive.sdk.ProtonPhotosClient
 
-/** Shared transaction for snapshot enumeration, durable commit, and thumbnail hydration. */
+/** Shared transactions for metadata snapshots and the separate thumbnail phase. */
 @Singleton
 internal class ProtonPhotoSyncPipeline @Inject constructor(
     private val downloads: ProtonDownloadRepository,
 ) {
-    suspend fun synchronize(
-        photosClient: ProtonPhotosClient,
-        userId: UserId,
+    suspend fun synchronizeMetadata(
         existing: List<ProtonGalleryPhoto>,
         shouldEnumerate: Boolean,
-        maxThumbnailDownloads: Int? = null,
         enumerate: suspend () -> List<ProtonGalleryPhoto>,
         prepareSnapshot: (List<ProtonGalleryPhoto>) -> Unit = {},
         commitSnapshot: (List<ProtonGalleryPhoto>) -> Unit,
         commitEnumeration: () -> Unit,
+    ): List<ProtonGalleryPhoto> = if (shouldEnumerate) {
+        enumerate().toMutableList().also { remotePhotos ->
+            prepareSnapshot(remotePhotos)
+            commitSnapshot(remotePhotos)
+            commitEnumeration()
+        }
+    } else {
+        existing.toMutableList()
+    }
+
+    suspend fun hydrateThumbnails(
+        photosClient: ProtonPhotosClient,
+        userId: UserId,
+        existing: List<ProtonGalleryPhoto>,
+        maxThumbnailDownloads: Int? = null,
+        commitSnapshot: (List<ProtonGalleryPhoto>) -> Unit,
         onProgress: (List<ProtonGalleryPhoto>) -> Unit,
     ): List<ProtonGalleryPhoto> {
-        val photos = if (shouldEnumerate) {
-            enumerate().toMutableList().also { remotePhotos ->
-                prepareSnapshot(remotePhotos)
-                commitSnapshot(remotePhotos)
-                commitEnumeration()
-            }
-        } else {
-            existing.toMutableList()
-        }
-
+        val photos = existing.toMutableList()
         onProgress(photos)
         val positions = photos.indices.associateBy { photos[it].nodeUid }
         downloads.downloadMissingThumbnails(

@@ -47,15 +47,12 @@ internal class ProtonAlbumRepository @Inject constructor(
             albumUid = album.nodeUid,
             albumName = album.name,
             photos = photos,
+            hasLoaded = cache.hasAlbumPhotosSnapshot(userId.id, album.nodeUid),
             downloadedThumbnailCount = photos.count(ProtonGalleryPhoto::hasThumbnail),
         )
     }
 
-    suspend fun syncAlbums(
-        userId: UserId,
-        forceRemote: Boolean,
-        maxThumbnailDownloads: Int? = null,
-    ) = albumsSyncMutex.withLock {
+    suspend fun syncMetadata(userId: UserId, forceRemote: Boolean) = albumsSyncMutex.withLock {
         val existing = cache.readAlbums(userId.id)
         emitAlbums(
             userId,
@@ -84,25 +81,6 @@ internal class ProtonAlbumRepository @Inject constructor(
                 existing.toMutableList()
             }
 
-            emitAlbums(userId, albums, syncing = true)
-            val albumPositionsByCover = albums.indices
-                .filter { albums[it].coverPhotoNodeUid != null }
-                .groupBy { requireNotNull(albums[it].coverPhotoNodeUid) }
-            downloads.downloadMissingThumbnails(
-                photosClient = photosClient,
-                userId = userId,
-                nodeUids = albumPositionsByCover.keys.filterNot {
-                    cache.thumbnailIsDecodable(userId.id, it)
-                },
-                maxDownloads = maxThumbnailDownloads,
-                onStored = { nodeUid ->
-                    albumPositionsByCover[nodeUid].orEmpty().forEach { position ->
-                        albums[position] = albums[position].copy(hasCoverThumbnail = true)
-                    }
-                },
-                onProgress = { emitAlbums(userId, albums, syncing = true) },
-            )
-            cache.writeAlbums(userId.id, albums)
             emitAlbums(userId, albums, syncing = false)
         } catch (error: CancellationException) {
             mutableAlbumsState.value = mutableAlbumsState.value.copy(syncing = false)
@@ -116,13 +94,44 @@ internal class ProtonAlbumRepository @Inject constructor(
         }
     }
 
-    suspend fun syncAlbumPhotos(
+    suspend fun hydrateCoverThumbnails(userId: UserId, maxDownloads: Int) = albumsSyncMutex.withLock {
+        if (!cache.hasAlbumsSnapshot(userId.id)) return@withLock
+        val photosClient = clientProvider.get(userId)
+        val albums = cache.readAlbums(userId.id).toMutableList()
+        val albumPositionsByCover = albums.indices
+            .filter { albums[it].coverPhotoNodeUid != null }
+            .groupBy { requireNotNull(albums[it].coverPhotoNodeUid) }
+        downloads.downloadMissingThumbnails(
+            photosClient = photosClient,
+            userId = userId,
+            nodeUids = albumPositionsByCover.keys.filterNot {
+                cache.thumbnailIsDecodable(userId.id, it)
+            },
+            maxDownloads = maxDownloads,
+            onStored = { nodeUid ->
+                albumPositionsByCover[nodeUid].orEmpty().forEach { position ->
+                    albums[position] = albums[position].copy(hasCoverThumbnail = true)
+                }
+            },
+            onProgress = { emitAlbums(userId, albums, syncing = false) },
+        )
+        cache.writeAlbums(userId.id, albums)
+        emitAlbums(userId, albums, syncing = false)
+    }
+
+    suspend fun syncAlbumPhotoMetadata(
         userId: UserId,
         album: ProtonAlbumReference,
         forceRemote: Boolean,
     ) = albumPhotosSyncMutex.withLock {
         val existing = cache.readAlbumPhotos(userId.id, album.nodeUid)
-        emitAlbumPhotos(userId, album, existing, syncing = true)
+        emitAlbumPhotos(
+            userId,
+            album,
+            existing,
+            hasLoaded = cache.hasAlbumPhotosSnapshot(userId.id, album.nodeUid),
+            syncing = true,
+        )
         try {
             val photosClient = clientProvider.get(userId)
             val syncKey = "$ALBUM_PHOTOS_SYNC_KEY:${album.nodeUid}"
@@ -133,9 +142,7 @@ internal class ProtonAlbumRepository @Inject constructor(
                 forceRemote,
                 cache.hasAlbumPhotosSnapshot(userId.id, album.nodeUid),
             )
-            val photos = syncPipeline.synchronize(
-                photosClient = photosClient,
-                userId = userId,
+            val photos = syncPipeline.synchronizeMetadata(
                 existing = existing,
                 shouldEnumerate = shouldEnumerate,
                 enumerate = {
@@ -149,9 +156,8 @@ internal class ProtonAlbumRepository @Inject constructor(
                 },
                 commitSnapshot = { cache.writeAlbumPhotos(userId.id, album.nodeUid, it) },
                 commitEnumeration = { snapshots.commit(userId.id, syncKey) },
-                onProgress = { emitAlbumPhotos(userId, album, it, syncing = true) },
             )
-            emitAlbumPhotos(userId, album, photos, syncing = false)
+            emitAlbumPhotos(userId, album, photos, hasLoaded = true, syncing = false)
         } catch (error: CancellationException) {
             if (mutableAlbumPhotosState.value.albumUid == album.nodeUid) {
                 mutableAlbumPhotosState.value = mutableAlbumPhotosState.value.copy(syncing = false)
@@ -165,6 +171,48 @@ internal class ProtonAlbumRepository @Inject constructor(
                     errorMessage = "Could not refresh this Proton album",
                 )
             }
+        }
+    }
+
+    suspend fun hydrateAlbumPhotoThumbnails(
+        userId: UserId,
+        album: ProtonAlbumReference,
+    ) = albumPhotosSyncMutex.withLock {
+        if (!cache.hasAlbumPhotosSnapshot(userId.id, album.nodeUid)) return@withLock
+        val existing = cache.readAlbumPhotos(userId.id, album.nodeUid)
+        emitAlbumPhotos(
+            userId,
+            album,
+            existing,
+            hasLoaded = true,
+            syncing = false,
+            downloadingThumbnails = true,
+        )
+        try {
+            val photosClient = clientProvider.get(userId)
+            val photos = syncPipeline.hydrateThumbnails(
+                photosClient = photosClient,
+                userId = userId,
+                existing = existing,
+                commitSnapshot = { cache.writeAlbumPhotos(userId.id, album.nodeUid, it) },
+                onProgress = {
+                    emitAlbumPhotos(
+                        userId,
+                        album,
+                        it,
+                        hasLoaded = true,
+                        syncing = false,
+                        downloadingThumbnails = true,
+                    )
+                },
+            )
+            emitAlbumPhotos(userId, album, photos, hasLoaded = true, syncing = false)
+        } catch (error: CancellationException) {
+            stopAlbumThumbnailProgress(album)
+            throw error
+        } catch (error: Throwable) {
+            LenswaveDiagnostics.reportFailure("album-photo-thumbnail-sync", error)
+            stopAlbumThumbnailProgress(album)
         }
     }
 
@@ -241,7 +289,9 @@ internal class ProtonAlbumRepository @Inject constructor(
         userId: UserId,
         album: ProtonAlbumReference,
         photos: List<ProtonGalleryPhoto>,
+        hasLoaded: Boolean,
         syncing: Boolean,
+        downloadingThumbnails: Boolean = false,
     ) {
         val currentAlbumUid = mutableAlbumPhotosState.value.albumUid
         if (currentAlbumUid != null && currentAlbumUid != album.nodeUid) return
@@ -250,9 +300,19 @@ internal class ProtonAlbumRepository @Inject constructor(
             albumUid = album.nodeUid,
             albumName = album.name,
             photos = photos.toList(),
+            hasLoaded = hasLoaded,
             syncing = syncing,
+            downloadingThumbnails = downloadingThumbnails,
             downloadedThumbnailCount = photos.count(ProtonGalleryPhoto::hasThumbnail),
         )
+    }
+
+    private fun stopAlbumThumbnailProgress(album: ProtonAlbumReference) {
+        if (mutableAlbumPhotosState.value.albumUid == album.nodeUid) {
+            mutableAlbumPhotosState.value = mutableAlbumPhotosState.value.copy(
+                downloadingThumbnails = false,
+            )
+        }
     }
 
     private companion object {

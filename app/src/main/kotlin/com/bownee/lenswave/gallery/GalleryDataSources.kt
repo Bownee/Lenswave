@@ -5,6 +5,7 @@ import com.bownee.lenswave.proton.ProtonAlbumPhotosState
 import com.bownee.lenswave.proton.ProtonAlbumsState
 import com.bownee.lenswave.proton.ProtonGalleryPhoto
 import com.bownee.lenswave.proton.ProtonGalleryState
+import com.bownee.lenswave.proton.ProtonMetadataState
 import com.bownee.lenswave.proton.ProtonPhotoGateway
 import com.bownee.lenswave.proton.ProtonTrashState
 import dagger.Binds
@@ -54,19 +55,19 @@ interface ProtonDuplicateSource {
 
 interface ProtonGalleryReader {
     val state: StateFlow<ProtonGalleryState>
+    val metadataState: StateFlow<ProtonMetadataState>
     val albumsState: StateFlow<ProtonAlbumsState>
     val albumPhotosState: StateFlow<ProtonAlbumPhotosState>
     val trashState: StateFlow<ProtonTrashState>
 
-    suspend fun syncThumbnails(userId: UserId, forceRemote: Boolean = false, maxThumbnailDownloads: Int? = null)
-    suspend fun syncAlbums(userId: UserId, forceRemote: Boolean = false, maxThumbnailDownloads: Int? = null)
+    suspend fun syncMetadata(userId: UserId, forceRemote: Boolean = false)
     suspend fun loadCachedAlbum(userId: UserId, album: ProtonAlbumReference)
-    suspend fun syncAlbumPhotos(userId: UserId, album: ProtonAlbumReference, forceRemote: Boolean = false)
-    suspend fun syncTrash(
+    suspend fun syncAlbumPhotoMetadata(
         userId: UserId,
+        album: ProtonAlbumReference,
         forceRemote: Boolean = false,
-        maxThumbnailDownloads: Int? = null,
     )
+    suspend fun hydrateAlbumPhotoThumbnails(userId: UserId, album: ProtonAlbumReference)
 }
 
 interface ProtonSessionLifecycle {

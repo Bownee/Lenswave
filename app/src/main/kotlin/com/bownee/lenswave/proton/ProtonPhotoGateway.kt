@@ -6,9 +6,17 @@ import com.bownee.lenswave.gallery.ProtonGalleryReader
 import com.bownee.lenswave.gallery.ProtonSessionLifecycle
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import me.proton.core.domain.entity.UserId
 import me.proton.drive.sdk.entity.NodeResultPair
@@ -28,7 +36,11 @@ class ProtonPhotoGateway @Inject internal constructor(
     private val cache: ProtonSessionCache,
     private val sessionGuard: ProtonSessionGuard,
 ) : ProtonGalleryReader, ProtonSessionLifecycle, ProtonDuplicateSource {
+    private val metadataSyncMutex = Mutex()
+    private val mutableMetadataState = MutableStateFlow(ProtonMetadataState())
+
     override val state: StateFlow<ProtonGalleryState> = timeline.state
+    override val metadataState: StateFlow<ProtonMetadataState> = mutableMetadataState.asStateFlow()
     override val albumsState: StateFlow<ProtonAlbumsState> = albums.albumsState
     override val albumPhotosState: StateFlow<ProtonAlbumPhotosState> = albums.albumPhotosState
     override val trashState: StateFlow<ProtonTrashState> = trash.state
@@ -45,28 +57,31 @@ class ProtonPhotoGateway @Inject internal constructor(
             timeline.loadCached(userId)
             albums.loadCached(userId)
             trash.loadCached(userId)
+            mutableMetadataState.value = metadataSnapshot(userId, isLoading = false)
             cache.trimUser(userId.id)
         } }
     }
 
-    override suspend fun syncThumbnails(
-        userId: UserId,
-        forceRemote: Boolean,
-        maxThumbnailDownloads: Int?,
-    ) {
-        withContext(Dispatchers.IO) { sessionGuard.withActiveSession(userId) {
-            timeline.sync(userId, forceRemote, maxThumbnailDownloads)
-        } }
-    }
-
-    override suspend fun syncAlbums(
-        userId: UserId,
-        forceRemote: Boolean,
-        maxThumbnailDownloads: Int?,
-    ) {
-        withContext(Dispatchers.IO) { sessionGuard.withActiveSession(userId) {
-            albums.syncAlbums(userId, forceRemote, maxThumbnailDownloads)
-        } }
+    override suspend fun syncMetadata(userId: UserId, forceRemote: Boolean) {
+        withContext(Dispatchers.IO) {
+            sessionGuard.withActiveSession(userId) {
+                metadataSyncMutex.withLock {
+                    updateThumbnailWorkStatus(null)
+                    mutableMetadataState.value = metadataSnapshot(userId, isLoading = true)
+                    try {
+                        coroutineScope {
+                            listOf(
+                                async { timeline.syncMetadata(userId, forceRemote) },
+                                async { albums.syncMetadata(userId, forceRemote) },
+                                async { trash.syncMetadata(userId, forceRemote) },
+                            ).awaitAll()
+                        }
+                    } finally {
+                        mutableMetadataState.value = metadataSnapshot(userId, isLoading = false)
+                    }
+                }
+            }
+        }
     }
 
     override suspend fun loadCachedAlbum(userId: UserId, album: ProtonAlbumReference) {
@@ -75,24 +90,44 @@ class ProtonPhotoGateway @Inject internal constructor(
         }
     }
 
-    override suspend fun syncAlbumPhotos(
+    override suspend fun syncAlbumPhotoMetadata(
         userId: UserId,
         album: ProtonAlbumReference,
         forceRemote: Boolean,
     ) {
         withContext(Dispatchers.IO) { sessionGuard.withActiveSession(userId) {
-            albums.syncAlbumPhotos(userId, album, forceRemote)
+            albums.syncAlbumPhotoMetadata(userId, album, forceRemote)
         } }
     }
 
-    override suspend fun syncTrash(
+    override suspend fun hydrateAlbumPhotoThumbnails(userId: UserId, album: ProtonAlbumReference) {
+        withContext(Dispatchers.IO) { sessionGuard.withActiveSession(userId) {
+            albums.hydrateAlbumPhotoThumbnails(userId, album)
+        } }
+    }
+
+    internal suspend fun hydrateThumbnails(
         userId: UserId,
-        forceRemote: Boolean,
-        maxThumbnailDownloads: Int?,
+        timelineLimit: Int,
+        albumCoverLimit: Int,
+        trashLimit: Int,
     ) {
         withContext(Dispatchers.IO) {
             sessionGuard.withActiveSession(userId) {
-                trash.sync(userId, forceRemote, maxThumbnailDownloads)
+                val failures = mutableListOf<Throwable>()
+                suspend fun attempt(block: suspend () -> Unit) {
+                    try {
+                        block()
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (error: Throwable) {
+                        failures += error
+                    }
+                }
+                attempt { timeline.hydrateThumbnails(userId, timelineLimit) }
+                attempt { albums.hydrateCoverThumbnails(userId, albumCoverLimit) }
+                attempt { trash.hydrateThumbnails(userId, trashLimit) }
+                failures.firstOrNull()?.let { throw it }
             }
         }
     }
@@ -155,6 +190,7 @@ class ProtonPhotoGateway @Inject internal constructor(
                 timeline.reset()
                 albums.reset()
                 trash.reset()
+                mutableMetadataState.value = ProtonMetadataState()
             }
         } }
     }
@@ -163,6 +199,28 @@ class ProtonPhotoGateway @Inject internal constructor(
 
     internal fun updateThumbnailWorkStatus(status: ProtonThumbnailWorkStatus?) {
         timeline.updateThumbnailWorkStatus(status)
+    }
+
+    internal fun hasCompleteMetadata(userId: UserId): Boolean =
+        metadataState.value.userId == userId.id && metadataState.value.hasLoaded
+
+    private fun metadataSnapshot(userId: UserId, isLoading: Boolean): ProtonMetadataState {
+        val timelineState = timeline.state.value
+        val albumsState = albums.albumsState.value
+        val trashState = trash.state.value
+        val hasLoaded = timelineState.userId == userId.id && timelineState.hasLoaded &&
+            albumsState.userId == userId.id && albumsState.hasLoaded &&
+            trashState.userId == userId.id && trashState.hasLoaded
+        return ProtonMetadataState(
+            userId = userId.id,
+            isLoading = isLoading,
+            hasLoaded = hasLoaded,
+            errorMessage = listOfNotNull(
+                timelineState.errorMessage,
+                albumsState.errorMessage,
+                trashState.errorMessage,
+            ).firstOrNull(),
+        )
     }
 
     private companion object {

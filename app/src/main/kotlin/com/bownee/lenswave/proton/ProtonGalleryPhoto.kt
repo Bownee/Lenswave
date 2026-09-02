@@ -38,8 +38,16 @@ sealed interface ProtonThumbnailWorkStatus {
 data class ProtonGalleryState(
     val userId: String? = null,
     val photos: List<ProtonGalleryPhoto> = emptyList(),
+    val hasLoaded: Boolean = false,
     val syncing: Boolean = false,
     val downloadedThumbnailCount: Int = 0,
     val errorMessage: String? = null,
     val thumbnailWorkStatus: ProtonThumbnailWorkStatus? = null,
+)
+
+data class ProtonMetadataState(
+    val userId: String? = null,
+    val isLoading: Boolean = false,
+    val hasLoaded: Boolean = false,
+    val errorMessage: String? = null,
 )

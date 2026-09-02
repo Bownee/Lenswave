@@ -12,14 +12,14 @@ import org.junit.Test
 
 class ProtonAccountTransitionCoordinatorTest {
     @Test
-    fun accountSwitchUsesOneOrderedBarrierAndEnqueuesOnlyAfterCleanup() = runBlocking {
+    fun accountSwitchUsesOneOrderedBarrierWithoutStartingThumbnails() = runBlocking {
         val events = mutableListOf<String>()
         val coordinator = coordinator(events)
 
         coordinator.transition(UserId("a"), UserId("b"))
 
         assertEquals(
-            listOf("cancel:a", "disconnect:a", "activate:b", "combined-clear:a", "retain:b", "enqueue:b"),
+            listOf("cancel:a", "disconnect:a", "activate:b", "combined-clear:a", "retain:b"),
             events,
         )
     }

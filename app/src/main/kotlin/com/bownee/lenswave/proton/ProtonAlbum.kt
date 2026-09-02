@@ -33,7 +33,9 @@ data class ProtonAlbumPhotosState(
     val albumUid: String? = null,
     val albumName: String = "",
     val photos: List<ProtonGalleryPhoto> = emptyList(),
+    val hasLoaded: Boolean = false,
     val syncing: Boolean = false,
+    val downloadingThumbnails: Boolean = false,
     val downloadedThumbnailCount: Int = 0,
     val errorMessage: String? = null,
 )

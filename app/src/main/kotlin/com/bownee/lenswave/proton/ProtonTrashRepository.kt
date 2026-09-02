@@ -36,11 +36,7 @@ internal class ProtonTrashRepository @Inject constructor(
         )
     }
 
-    suspend fun sync(
-        userId: UserId,
-        forceRemote: Boolean,
-        maxThumbnailDownloads: Int? = null,
-    ) = syncMutex.withLock {
+    suspend fun syncMetadata(userId: UserId, forceRemote: Boolean) = syncMutex.withLock {
         val existing = cache.readTrash(userId.id)
         emit(
             userId,
@@ -68,21 +64,6 @@ internal class ProtonTrashRepository @Inject constructor(
                 existing.toMutableList()
             }
 
-            emit(userId, photos, syncing = true)
-            val positions = photos.indices.associateBy { photos[it].nodeUid }
-            downloads.downloadMissingThumbnails(
-                photosClient = photosClient,
-                userId = userId,
-                nodeUids = photos.filterNot(ProtonTrashPhoto::hasThumbnail).map(ProtonTrashPhoto::nodeUid),
-                maxDownloads = maxThumbnailDownloads,
-                onStored = { nodeUid ->
-                    positions[nodeUid]?.let { position ->
-                        photos[position] = photos[position].copy(hasThumbnail = true)
-                    }
-                },
-                onProgress = { emit(userId, photos, syncing = true) },
-            )
-            cache.writeTrash(userId.id, photos)
             emit(userId, photos, syncing = false)
         } catch (error: CancellationException) {
             mutableState.value = mutableState.value.copy(syncing = false)
@@ -94,6 +75,27 @@ internal class ProtonTrashRepository @Inject constructor(
                 errorMessage = "Could not refresh Proton Trash",
             )
         }
+    }
+
+    suspend fun hydrateThumbnails(userId: UserId, maxDownloads: Int) = syncMutex.withLock {
+        if (!cache.hasTrashSnapshot(userId.id)) return@withLock
+        val photosClient = clientProvider.get(userId)
+        val photos = cache.readTrash(userId.id).toMutableList()
+        val positions = photos.indices.associateBy { photos[it].nodeUid }
+        downloads.downloadMissingThumbnails(
+            photosClient = photosClient,
+            userId = userId,
+            nodeUids = photos.filterNot(ProtonTrashPhoto::hasThumbnail).map(ProtonTrashPhoto::nodeUid),
+            maxDownloads = maxDownloads,
+            onStored = { nodeUid ->
+                positions[nodeUid]?.let { position ->
+                    photos[position] = photos[position].copy(hasThumbnail = true)
+                }
+            },
+            onProgress = { emit(userId, photos, syncing = false) },
+        )
+        cache.writeTrash(userId.id, photos)
+        emit(userId, photos, syncing = false)
     }
 
     suspend fun deletePermanently(

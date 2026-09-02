@@ -2,9 +2,12 @@ package com.bownee.lenswave.gallery
 
 import com.bownee.lenswave.R
 import com.bownee.lenswave.proton.ProtonAlbum
+import com.bownee.lenswave.proton.ProtonAlbumPhotosState
+import com.bownee.lenswave.proton.ProtonAlbumReference
 import com.bownee.lenswave.proton.ProtonAlbumsState
 import com.bownee.lenswave.proton.ProtonGalleryPhoto
 import com.bownee.lenswave.proton.ProtonGalleryState
+import com.bownee.lenswave.proton.ProtonMetadataState
 import com.bownee.lenswave.proton.ProtonThumbnailWorkIssue
 import com.bownee.lenswave.proton.ProtonThumbnailWorkStatus
 import com.bownee.lenswave.proton.ProtonTrashState
@@ -30,11 +33,13 @@ class GalleryUiStateFactoryTest {
             GalleryUiInputs(
                 destination = GalleryDestination.Trash(PhotoSource.PROTON),
                 protonAccountStatus = ProtonAccountStatus.CONNECTED,
+                protonMetadata = loadingMetadata(),
             ),
         )
 
         assertNull(state.emptyState)
-        assertTrue(state.statusText.contains(R.string.loading_proton_trash.toString()))
+        assertTrue(state.statusText.contains(R.string.loading_metadata.toString()))
+        assertFalse(state.isRefreshing)
         assertFalse(state.showDeleteAll)
     }
 
@@ -58,11 +63,13 @@ class GalleryUiStateFactoryTest {
                 destination = GalleryDestination.ProtonAlbums,
                 protonAccountStatus = ProtonAccountStatus.CONNECTED,
                 protonAlbums = ProtonAlbumsState(hasLoaded = false),
+                protonMetadata = loadingMetadata(),
             ),
         )
 
         assertNull(state.emptyState)
-        assertTrue(state.statusText.contains(R.string.loading_proton_albums.toString()))
+        assertTrue(state.statusText.contains(R.string.loading_metadata.toString()))
+        assertFalse(state.isRefreshing)
     }
 
     @Test
@@ -100,6 +107,70 @@ class GalleryUiStateFactoryTest {
 
         assertEquals(listOf(album), (state.content as GalleryContent.Albums).albums)
         assertNull(state.emptyState)
+    }
+
+    @Test
+    fun `initial album photo metadata load does not display refresh indicator`() {
+        val album = ProtonAlbumReference("album", "Trip")
+        val state = factory.create(
+            GalleryUiInputs(
+                destination = GalleryDestination.ProtonAlbumPhotos(album),
+                protonAccountStatus = ProtonAccountStatus.CONNECTED,
+                protonAlbumPhotos = ProtonAlbumPhotosState(
+                    albumUid = album.nodeUid,
+                    albumName = album.name,
+                    syncing = true,
+                ),
+            ),
+        )
+
+        assertNull(state.emptyState)
+        assertFalse(state.isRefreshing)
+        assertTrue(state.statusText.contains(R.string.loading_metadata.toString()))
+    }
+
+    @Test
+    fun `album thumbnail hydration reports progress independently`() {
+        val album = ProtonAlbumReference("album", "Trip")
+        val state = factory.create(
+            GalleryUiInputs(
+                destination = GalleryDestination.ProtonAlbumPhotos(album),
+                protonAccountStatus = ProtonAccountStatus.CONNECTED,
+                protonAlbumPhotos = ProtonAlbumPhotosState(
+                    albumUid = album.nodeUid,
+                    albumName = album.name,
+                    photos = listOf(
+                        ProtonGalleryPhoto("ready", 2, hasThumbnail = true),
+                        ProtonGalleryPhoto("pending", 1, hasThumbnail = false),
+                    ),
+                    hasLoaded = true,
+                    downloadingThumbnails = true,
+                    downloadedThumbnailCount = 1,
+                ),
+            ),
+        )
+
+        assertFalse(state.isRefreshing)
+        assertTrue(state.statusText.contains(R.string.downloading_thumbnails_progress.toString()))
+    }
+
+    @Test
+    fun `paused album thumbnail hydration is silent`() {
+        val album = ProtonAlbumReference("album", "Trip")
+        val state = factory.create(
+            GalleryUiInputs(
+                destination = GalleryDestination.ProtonAlbumPhotos(album),
+                protonAccountStatus = ProtonAccountStatus.CONNECTED,
+                protonAlbumPhotos = ProtonAlbumPhotosState(
+                    albumUid = album.nodeUid,
+                    albumName = album.name,
+                    photos = listOf(ProtonGalleryPhoto("pending", 1, hasThumbnail = false)),
+                    hasLoaded = true,
+                ),
+            ),
+        )
+
+        assertFalse(state.statusText.contains(R.string.downloading_thumbnails_progress.toString()))
     }
 
     @Test
@@ -165,7 +236,9 @@ class GalleryUiStateFactoryTest {
                 protonAccountStatus = ProtonAccountStatus.CONNECTED,
                 protonGallery = ProtonGalleryState(
                     photos = listOf(ProtonGalleryPhoto("node", 42, hasThumbnail = true)),
+                    hasLoaded = true,
                 ),
+                protonMetadata = loadedMetadata(),
             ),
         )
 
@@ -174,21 +247,22 @@ class GalleryUiStateFactoryTest {
     }
 
     @Test
-    fun `background Proton thumbnail sync uses status instead of refresh indicator`() {
+    fun `background worker with no pending thumbnails uses the normal count`() {
         val state = factory.create(
             GalleryUiInputs(
                 destination = GalleryDestination.ProtonTimeline,
                 protonAccountStatus = ProtonAccountStatus.CONNECTED,
                 protonGallery = ProtonGalleryState(
-                    syncing = true,
+                    hasLoaded = true,
                     thumbnailWorkStatus = ProtonThumbnailWorkStatus.Running(1, 25),
                 ),
+                protonMetadata = loadedMetadata(),
             ),
         )
 
         assertFalse(state.isRefreshing)
-        assertNull(state.emptyState)
-        assertTrue(state.statusText.contains(R.string.loading_proton_timeline.toString()))
+        assertNotNull(state.emptyState)
+        assertFalse(state.statusText.contains(R.string.downloading_thumbnails_progress.toString()))
     }
 
     @Test
@@ -202,10 +276,11 @@ class GalleryUiStateFactoryTest {
                         ProtonGalleryPhoto("ready", 42, hasThumbnail = true),
                         ProtonGalleryPhoto("pending", 41, hasThumbnail = false),
                     ),
-                    syncing = true,
+                    hasLoaded = true,
                     downloadedThumbnailCount = 1,
                     thumbnailWorkStatus = ProtonThumbnailWorkStatus.Running(1, 25),
                 ),
+                protonMetadata = loadedMetadata(),
             ),
         )
 
@@ -214,60 +289,93 @@ class GalleryUiStateFactoryTest {
     }
 
     @Test
-    fun `foreground Proton metadata sync displays refresh indicator`() {
+    fun `initial Proton metadata sync does not display refresh indicator`() {
         val state = factory.create(
             GalleryUiInputs(
                 destination = GalleryDestination.ProtonTimeline,
                 protonAccountStatus = ProtonAccountStatus.CONNECTED,
                 protonGallery = ProtonGalleryState(syncing = true),
+                protonMetadata = loadingMetadata(),
+            ),
+        )
+
+        assertFalse(state.isRefreshing)
+        assertTrue(state.statusText.contains(R.string.loading_metadata.toString()))
+    }
+
+    @Test
+    fun `manual refresh alone displays the refresh indicator`() {
+        val state = factory.create(
+            GalleryUiInputs(
+                destination = GalleryDestination.ProtonTimeline,
+                protonAccountStatus = ProtonAccountStatus.CONNECTED,
+                protonGallery = ProtonGalleryState(hasLoaded = true),
+                protonMetadata = loadedMetadata().copy(isLoading = true),
+                isRefreshing = true,
             ),
         )
 
         assertTrue(state.isRefreshing)
+        assertFalse(state.statusText.contains(R.string.loading_metadata.toString()))
     }
 
     @Test
-    fun `timed out Proton sync reports its scheduled retry without spinning`() {
+    fun `thumbnail retry is silent`() {
         val state = factory.create(
             GalleryUiInputs(
                 destination = GalleryDestination.ProtonTimeline,
                 protonAccountStatus = ProtonAccountStatus.CONNECTED,
                 protonGallery = ProtonGalleryState(
+                    photos = listOf(ProtonGalleryPhoto("pending", 42, hasThumbnail = false)),
+                    hasLoaded = true,
                     thumbnailWorkStatus = ProtonThumbnailWorkStatus.RetryScheduled(
                         attempt = 2,
                         maximumAttempts = 25,
                         issue = ProtonThumbnailWorkIssue.TIMEOUT,
                     ),
                 ),
+                protonMetadata = loadedMetadata(),
             ),
         )
 
         assertFalse(state.isRefreshing)
-        assertNull(state.emptyState)
-        assertTrue(state.statusText.contains(R.string.proton_sync_timeout_retry_scheduled.toString()))
-        assertTrue(state.statusText.contains("2, 25"))
+        assertFalse(state.statusText.contains(R.string.downloading_thumbnails_progress.toString()))
+        assertFalse(state.statusText.contains(R.string.proton_sync_timeout_retry_scheduled.toString()))
     }
 
     @Test
-    fun `exhausted Proton sync reports that manual refresh is required`() {
+    fun `stopped thumbnail work is silent`() {
         val state = factory.create(
             GalleryUiInputs(
                 destination = GalleryDestination.ProtonTimeline,
                 protonAccountStatus = ProtonAccountStatus.CONNECTED,
                 protonGallery = ProtonGalleryState(
+                    hasLoaded = true,
                     thumbnailWorkStatus = ProtonThumbnailWorkStatus.Stopped(
                         attempt = 25,
                         maximumAttempts = 25,
                         issue = ProtonThumbnailWorkIssue.ERROR,
                     ),
                 ),
+                protonMetadata = loadedMetadata(),
             ),
         )
 
         assertFalse(state.isRefreshing)
         assertNotNull(state.emptyState)
-        assertTrue(state.statusText.contains(R.string.proton_sync_stopped.toString()))
+        assertFalse(state.statusText.contains(R.string.proton_sync_stopped.toString()))
     }
+
+    private fun loadingMetadata() = ProtonMetadataState(
+        userId = "user",
+        isLoading = true,
+        hasLoaded = false,
+    )
+
+    private fun loadedMetadata() = ProtonMetadataState(
+        userId = "user",
+        hasLoaded = true,
+    )
 
     private fun deviceAsset(
         id: String,

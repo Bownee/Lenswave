@@ -25,30 +25,37 @@ internal class ProtonTimelineRepository @Inject constructor(
     val state: StateFlow<ProtonGalleryState> = mutableState.asStateFlow()
 
     fun loadCached(userId: UserId) {
-        emit(userId, cache.readIndex(userId.id), syncing = false)
+        emit(
+            userId = userId,
+            photos = cache.readIndex(userId.id),
+            hasLoaded = cache.hasTimelineSnapshot(userId.id),
+            syncing = false,
+        )
     }
 
-    suspend fun sync(userId: UserId, forceRemote: Boolean, maxThumbnailDownloads: Int? = null) = syncMutex.withLock {
+    suspend fun syncMetadata(userId: UserId, forceRemote: Boolean) = syncMutex.withLock {
         val existing = cache.readIndex(userId.id)
-        emit(userId, existing, syncing = true)
+        emit(
+            userId = userId,
+            photos = existing,
+            hasLoaded = cache.hasTimelineSnapshot(userId.id),
+            syncing = true,
+        )
         try {
             val photosClient = clientProvider.get(userId)
             val shouldEnumerate = snapshots.shouldEnumerate(
                 userId.id, ProtonSyncSource.TIMELINE, SYNC_KEY, forceRemote, cache.hasTimelineSnapshot(userId.id),
             )
-            val photos = syncPipeline.synchronize(
-                photosClient = photosClient,
-                userId = userId,
+            val photos = syncPipeline.synchronizeMetadata(
                 existing = existing,
                 shouldEnumerate = shouldEnumerate,
-                maxThumbnailDownloads = maxThumbnailDownloads,
                 enumerate = {
                     photosClient.enumerateTimeline().toList().map { item ->
-                    ProtonGalleryPhoto(
-                        nodeUid = item.nodeUid.value,
-                        captureTimeEpochSeconds = item.captureTime.epochSecond,
-                        hasThumbnail = cache.thumbnailIsDecodable(userId.id, item.nodeUid.value),
-                    )
+                        ProtonGalleryPhoto(
+                            nodeUid = item.nodeUid.value,
+                            captureTimeEpochSeconds = item.captureTime.epochSecond,
+                            hasThumbnail = cache.thumbnailIsDecodable(userId.id, item.nodeUid.value),
+                        )
                     }
                 },
                 prepareSnapshot = { remotePhotos ->
@@ -60,9 +67,8 @@ internal class ProtonTimelineRepository @Inject constructor(
                 },
                 commitSnapshot = { cache.writeIndex(userId.id, it) },
                 commitEnumeration = { snapshots.commit(userId.id, SYNC_KEY) },
-                onProgress = { emit(userId, it, syncing = true) },
             )
-            emit(userId, photos, syncing = false)
+            emit(userId, photos, hasLoaded = true, syncing = false)
         } catch (error: CancellationException) {
             mutableState.value = mutableState.value.copy(syncing = false)
             throw error
@@ -75,10 +81,30 @@ internal class ProtonTimelineRepository @Inject constructor(
         }
     }
 
+    suspend fun hydrateThumbnails(userId: UserId, maxDownloads: Int) = syncMutex.withLock {
+        val existing = cache.readIndex(userId.id)
+        if (!cache.hasTimelineSnapshot(userId.id)) return@withLock
+        val photosClient = clientProvider.get(userId)
+        val photos = syncPipeline.hydrateThumbnails(
+            photosClient = photosClient,
+            userId = userId,
+            existing = existing,
+            maxThumbnailDownloads = maxDownloads,
+            commitSnapshot = { cache.writeIndex(userId.id, it) },
+            onProgress = { emit(userId, it, hasLoaded = true, syncing = false) },
+        )
+        emit(userId, photos, hasLoaded = true, syncing = false)
+    }
+
     internal suspend fun removePhotos(userId: UserId, nodeUids: Set<String>): Unit = syncMutex.withLock {
         if (nodeUids.isEmpty()) return@withLock
         cache.removePhotos(userId.id, nodeUids)
-        emit(userId, mutableState.value.photos.filterNot { it.nodeUid in nodeUids }, syncing = false)
+        emit(
+            userId,
+            mutableState.value.photos.filterNot { it.nodeUid in nodeUids },
+            hasLoaded = true,
+            syncing = false,
+        )
     }
 
     internal fun reset() {
@@ -89,12 +115,18 @@ internal class ProtonTimelineRepository @Inject constructor(
         mutableState.value = mutableState.value.copy(thumbnailWorkStatus = status)
     }
 
-    private fun emit(userId: UserId, photos: List<ProtonGalleryPhoto>, syncing: Boolean) {
+    private fun emit(
+        userId: UserId,
+        photos: List<ProtonGalleryPhoto>,
+        hasLoaded: Boolean,
+        syncing: Boolean,
+    ) {
         val workerStatus = mutableState.value.thumbnailWorkStatus
             .takeIf { status -> status is ProtonThumbnailWorkStatus.Running }
         mutableState.value = ProtonGalleryState(
             userId = userId.id,
             photos = photos.toList(),
+            hasLoaded = hasLoaded,
             syncing = syncing,
             downloadedThumbnailCount = photos.count(ProtonGalleryPhoto::hasThumbnail),
             thumbnailWorkStatus = workerStatus,
