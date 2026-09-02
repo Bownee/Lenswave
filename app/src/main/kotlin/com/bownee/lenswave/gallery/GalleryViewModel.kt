@@ -11,6 +11,7 @@ import com.bownee.lenswave.proton.ProtonAlbumsState
 import com.bownee.lenswave.proton.ProtonAccountSessionManager
 import com.bownee.lenswave.proton.ProtonAccountSessionState
 import com.bownee.lenswave.proton.ProtonGalleryState
+import com.bownee.lenswave.proton.ProtonThumbnailScheduler
 import com.bownee.lenswave.proton.ProtonTrashState
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -41,6 +42,7 @@ class GalleryViewModel @Inject internal constructor(
     private val accountManager: AccountManager,
     private val deviceRepository: DevicePhotoSource,
     private val protonRepository: ProtonGalleryReader,
+    private val protonThumbnailScheduler: ProtonThumbnailScheduler,
     private val combinedRepository: CombinedPhotoMatcher,
     private val accountSessionManager: ProtonAccountSessionManager,
     private val navigationStore: GalleryNavigationStore,
@@ -245,24 +247,24 @@ class GalleryViewModel @Inject internal constructor(
         when (selectedDestination) {
             GalleryDestination.Combined -> coroutineScope {
                 val deviceRefresh = if (hasDeviceAccess) async { loadDevicePhotos() } else null
-                val protonRefresh = currentUserId?.let { userId ->
-                    async(Dispatchers.IO) {
-                        protonRepository.syncThumbnails(userId, forceRemote)
+                val protonRefresh = if (forceRemote) {
+                    currentUserId?.let { userId ->
+                        async(Dispatchers.IO) { refreshTimelineMetadata(userId) }
                     }
-                }
+                } else null
                 deviceRefresh?.await()
                 protonRefresh?.await()
                 startCombinedMatchingIfNeeded(forceRecheck = forceRemote)?.join()
             }
             is GalleryDestination.Device -> if (hasDeviceAccess) loadDevicePhotos()
-            GalleryDestination.ProtonTimeline -> currentUserId?.let { userId ->
-                withContext(Dispatchers.IO) {
-                    protonRepository.syncThumbnails(userId, forceRemote)
+            GalleryDestination.ProtonTimeline -> if (forceRemote) {
+                currentUserId?.let { userId ->
+                    withContext(Dispatchers.IO) { refreshTimelineMetadata(userId) }
                 }
             }
-            GalleryDestination.ProtonAlbums -> currentUserId?.let { userId ->
-                withContext(Dispatchers.IO) {
-                    protonRepository.syncAlbums(userId, forceRemote)
+            GalleryDestination.ProtonAlbums -> if (forceRemote) {
+                currentUserId?.let { userId ->
+                    withContext(Dispatchers.IO) { refreshAlbumMetadata(userId) }
                 }
             }
             is GalleryDestination.ProtonAlbumPhotos -> currentUserId?.let { userId ->
@@ -283,6 +285,35 @@ class GalleryViewModel @Inject internal constructor(
                 }
             }
         }
+    }
+
+    private suspend fun refreshTimelineMetadata(userId: UserId) {
+        refreshProtonMetadata(userId) {
+            protonRepository.syncThumbnails(
+                userId = userId,
+                forceRemote = true,
+                maxThumbnailDownloads = METADATA_ONLY_THUMBNAIL_LIMIT,
+            )
+        }
+    }
+
+    private suspend fun refreshAlbumMetadata(userId: UserId) {
+        refreshProtonMetadata(userId) {
+            protonRepository.syncAlbums(
+                userId = userId,
+                forceRemote = true,
+                maxThumbnailDownloads = METADATA_ONLY_THUMBNAIL_LIMIT,
+            )
+        }
+    }
+
+    private suspend fun refreshProtonMetadata(
+        userId: UserId,
+        refresh: suspend () -> Unit,
+    ) {
+        protonThumbnailScheduler.cancelAndAwait(userId)
+        refresh()
+        protonThumbnailScheduler.enqueue(userId)
     }
 
     private suspend fun loadDevicePhotos() {
@@ -482,6 +513,7 @@ class GalleryViewModel @Inject internal constructor(
     }
 
     private companion object {
+        const val METADATA_ONLY_THUMBNAIL_LIMIT = 0
         const val MINIMUM_REFRESH_INDICATOR_MILLIS = 450L
         const val STATE_DESTINATION = "gallery.destination"
         const val STATE_DEVICE_COLLECTION = "gallery.device-collection"

@@ -316,13 +316,16 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
     private fun GalleryUiInputs.isProtonSyncing(): Boolean = when (val current = destination) {
         GalleryDestination.Combined,
         GalleryDestination.ProtonTimeline,
-        -> protonGallery.syncing || protonGallery.thumbnailWorkStatus is ProtonThumbnailWorkStatus.Running
-        GalleryDestination.ProtonAlbums -> protonAlbums.syncing
+        -> protonGallery.syncing && !protonGallery.thumbnailWorkerIsRunning()
+        GalleryDestination.ProtonAlbums -> protonAlbums.syncing && !protonGallery.thumbnailWorkerIsRunning()
         is GalleryDestination.ProtonAlbumPhotos ->
             protonAlbumPhotos.albumUid == current.album.nodeUid && protonAlbumPhotos.syncing
         is GalleryDestination.Trash -> current.source == PhotoSource.PROTON && protonTrash.syncing
         is GalleryDestination.Device -> false
     }
+
+    private fun ProtonGalleryState.thumbnailWorkerIsRunning(): Boolean =
+        thumbnailWorkStatus is ProtonThumbnailWorkStatus.Running
 
     private fun ProtonGalleryState.workIsPending(): Boolean = syncing || when (thumbnailWorkStatus) {
         is ProtonThumbnailWorkStatus.Running,

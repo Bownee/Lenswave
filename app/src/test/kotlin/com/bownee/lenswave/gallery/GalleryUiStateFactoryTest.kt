@@ -88,7 +88,7 @@ class GalleryUiStateFactoryTest {
     }
 
     @Test
-    fun `automatic Proton timeline sync is visible while loading its first page`() {
+    fun `background Proton thumbnail sync uses status instead of refresh indicator`() {
         val state = factory.create(
             GalleryUiInputs(
                 destination = GalleryDestination.ProtonTimeline,
@@ -100,13 +100,13 @@ class GalleryUiStateFactoryTest {
             ),
         )
 
-        assertTrue(state.isRefreshing)
+        assertFalse(state.isRefreshing)
         assertNull(state.emptyState)
         assertTrue(state.statusText.contains(R.string.loading_proton_timeline.toString()))
     }
 
     @Test
-    fun `automatic Proton timeline sync reports thumbnail progress`() {
+    fun `background Proton thumbnail sync reports progress without refresh indicator`() {
         val state = factory.create(
             GalleryUiInputs(
                 destination = GalleryDestination.ProtonTimeline,
@@ -123,8 +123,21 @@ class GalleryUiStateFactoryTest {
             ),
         )
 
-        assertTrue(state.isRefreshing)
+        assertFalse(state.isRefreshing)
         assertTrue(state.statusText.contains(R.string.downloading_thumbnails_progress.toString()))
+    }
+
+    @Test
+    fun `foreground Proton metadata sync displays refresh indicator`() {
+        val state = factory.create(
+            GalleryUiInputs(
+                destination = GalleryDestination.ProtonTimeline,
+                protonAccountStatus = ProtonAccountStatus.CONNECTED,
+                protonGallery = ProtonGalleryState(syncing = true),
+            ),
+        )
+
+        assertTrue(state.isRefreshing)
     }
 
     @Test
