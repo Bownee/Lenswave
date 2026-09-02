@@ -18,6 +18,12 @@ internal object LenswaveDiagnostics {
         (error as? ProtonDriveSdkException)?.error?.let { sdkError ->
             appendSdkError("sdk", sdkError)
             sdkError.innerError?.let { innerError -> appendSdkError("inner", innerError) }
+            sdkError.safeStackFrames().forEachIndexed { index, frame ->
+                append(" sdkFrame")
+                append(index + 1)
+                append("=")
+                append(frame)
+            }
         }
     }
 
@@ -52,6 +58,18 @@ internal object LenswaveDiagnostics {
     private fun String.safeDiagnosticValue(): String? =
         takeIf { value -> SAFE_DIAGNOSTIC_VALUE.matches(value) }
 
+    private fun ProtonSdkError.safeStackFrames(): List<String> = context
+        .orEmpty()
+        .lineSequence()
+        .map(String::trim)
+        .mapNotNull { line -> SAFE_STACK_FRAME.matchEntire(line)?.groupValues?.get(1) }
+        .take(MAX_STACK_FRAMES)
+        .toList()
+
     private const val TAG = "Lenswave"
+    private const val MAX_STACK_FRAMES = 4
     private val SAFE_DIAGNOSTIC_VALUE = Regex("[A-Za-z0-9_.-]{1,64}")
+    private val SAFE_STACK_FRAME = Regex(
+        """at ([A-Za-z0-9_.${'$'}<>-]+\.[A-Za-z0-9_${'$'}<>-]+\([A-Za-z0-9_.: -]{1,100}\))""",
+    )
 }

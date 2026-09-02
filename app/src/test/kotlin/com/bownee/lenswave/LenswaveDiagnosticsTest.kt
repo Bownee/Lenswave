@@ -23,7 +23,15 @@ class LenswaveDiagnosticsTest {
             domain = ProtonSdkError.ErrorDomain.Api,
             primaryCode = 401,
             secondaryCode = 10,
-            context = "private-account-id",
+            context = """
+                java.lang.IllegalArgumentException: private-account-id
+                    at retrofit2.RequestFactory.Builder.parseMethodAnnotation(RequestFactory.java:232)
+                    at me.proton.drive.sdk.internal.ApiProviderBridge.execute(ApiProviderBridge.kt:117)
+                    at unsafe.Exfiltrate.frame(/private/account:42)
+                    at safe.Third.frame(Unknown Source)
+                    at safe.Fourth.frame(Native Method)
+                    at safe.Fifth.frame(Fifth.kt:5)
+            """.trimIndent(),
             innerError = innerError,
         )
 
@@ -33,14 +41,20 @@ class LenswaveDiagnosticsTest {
         )
 
         assertEquals(
-            "operation=timeline-sync failure=ProtonDriveSdkException " +
+                "operation=timeline-sync failure=ProtonDriveSdkException " +
                 "sdkDomain=Api sdkType=ApiResponse sdkPrimaryCode=401 sdkSecondaryCode=10 " +
-                "innerDomain=Network innerType=NetworkTimeout innerPrimaryCode=408 innerSecondaryCode=2",
+                "innerDomain=Network innerType=NetworkTimeout innerPrimaryCode=408 innerSecondaryCode=2 " +
+                "sdkFrame1=retrofit2.RequestFactory.Builder.parseMethodAnnotation(RequestFactory.java:232) " +
+                "sdkFrame2=me.proton.drive.sdk.internal.ApiProviderBridge.execute(ApiProviderBridge.kt:117) " +
+                "sdkFrame3=safe.Third.frame(Unknown Source) " +
+                "sdkFrame4=safe.Fourth.frame(Native Method)",
             summary,
         )
         assertFalse(summary.contains("secret"))
         assertFalse(summary.contains("private"))
         assertFalse(summary.contains("example.test"))
+        assertFalse(summary.contains("Exfiltrate"))
+        assertFalse(summary.contains("Fifth"))
     }
 
     @Test
