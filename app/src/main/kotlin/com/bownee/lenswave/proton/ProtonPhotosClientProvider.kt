@@ -2,10 +2,14 @@ package com.bownee.lenswave.proton
 
 import android.content.Context
 import androidx.core.content.edit
+import com.bownee.lenswave.LenswaveDiagnostics
+import com.bownee.lenswave.storage.AtomicFileStore
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.nio.channels.WritableByteChannel
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -24,8 +28,6 @@ import me.proton.drive.sdk.ProtonPhotosClient
 import me.proton.drive.sdk.entity.ClientCreateRequest
 import me.proton.drive.sdk.entity.NodeUid
 import me.proton.drive.sdk.entity.PhotosDownloaderRequest
-import java.nio.channels.WritableByteChannel
-import com.bownee.lenswave.storage.AtomicFileStore
 
 @Singleton
 class ProtonPhotosClientProvider @Inject constructor(
@@ -41,12 +43,19 @@ class ProtonPhotosClientProvider @Inject constructor(
     private var client: ProtonPhotosClient? = null
     private var loggerProvider: LoggerProvider? = null
 
-    suspend fun get(userId: UserId): ProtonPhotosClient = mutex.withLock {
-        client?.takeIf { clientUserId == userId } ?: create(userId).also { created ->
-            client?.close()
-            client = created
-            clientUserId = userId
+    suspend fun get(userId: UserId): ProtonPhotosClient = try {
+        mutex.withLock {
+            client?.takeIf { clientUserId == userId } ?: create(userId).also { created ->
+                client?.close()
+                client = created
+                clientUserId = userId
+            }
         }
+    } catch (error: CancellationException) {
+        throw error
+    } catch (error: Throwable) {
+        LenswaveDiagnostics.reportFailure("proton-client-create", error)
+        throw error
     }
 
     suspend fun disconnect(userId: UserId) = mutex.withLock {
