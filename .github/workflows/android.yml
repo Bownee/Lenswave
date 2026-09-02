@@ -71,7 +71,9 @@ jobs:
         shell: bash
         run: |
           seeds="app/build/outputs/mapping/minified/seeds.txt"
+          mapping="app/build/outputs/mapping/minified/mapping.txt"
           test -s "$seeds"
+          test -s "$mapping"
           grep -Fq \
             'com.bownee.lenswave.LenswaveApplication: com.bownee.lenswave.LenswaveApplication$Companion Companion' \
             "$seeds"
@@ -86,6 +88,8 @@ jobs:
               "me.proton.drive.sdk.internal.ProtonDriveSdkNativeClient: .* ${callback}\\(" \
               "$seeds"
           done
+          grep -Fq 'kotlin.coroutines.Continuation' "$seeds"
+          grep -Eq '^retrofit2.Response -> ' "$mapping"
 
       - name: Prepare APK and verification artifacts
         shell: bash
@@ -175,6 +179,7 @@ jobs:
           script: |
             chmod +x gradlew
             ./gradlew connectedDebugAndroidTest -Plenswave.includeX86TestAbi=true --stacktrace
+            ./gradlew connectedMinifiedAndroidTest -Plenswave.instrumentationBuildType=minified -Plenswave.includeX86TestAbi=true -Pandroid.testInstrumentationRunnerArguments.class=com.bownee.lenswave.proton.ProtonSdkJniContractInstrumentedTest --stacktrace
 
       - name: Upload device-test evidence
         if: always()
