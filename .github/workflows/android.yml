@@ -178,14 +178,8 @@ jobs:
           emulator-options: -no-window -gpu software -no-snapshot -noaudio -no-boot-anim
           script: |
             chmod +x gradlew
-            ./gradlew connectedDebugAndroidTest \
-              -Plenswave.includeX86TestAbi=true \
-              --stacktrace
-            ./gradlew connectedMinifiedAndroidTest \
-              -Plenswave.instrumentationBuildType=minified \
-              -Plenswave.includeX86TestAbi=true \
-              -Pandroid.testInstrumentationRunnerArguments.class=com.bownee.lenswave.proton.ProtonSdkJniContractInstrumentedTest \
-              --stacktrace
+            ./gradlew connectedDebugAndroidTest -Plenswave.includeX86TestAbi=true --stacktrace
+            ./gradlew connectedMinifiedAndroidTest -Plenswave.instrumentationBuildType=minified -Plenswave.includeX86TestAbi=true -Pandroid.testInstrumentationRunnerArguments.class=com.bownee.lenswave.proton.ProtonSdkJniContractInstrumentedTest --stacktrace
 
       - name: Upload device-test evidence
         if: always()
