@@ -105,38 +105,30 @@ class ProtonPhotoGateway @Inject internal constructor(
         }
     }
 
-    internal suspend fun downloadNextQueuedThumbnail(userId: UserId): ProtonThumbnailQueueStep =
+    override suspend fun downloadVisibleThumbnails(userId: UserId) {
         withContext(Dispatchers.IO) {
             sessionGuard.withActiveSession(userId) {
-                val entry = thumbnailQueue.nextReady(userId.id)
-                    ?: return@withActiveSession ProtonThumbnailQueueStep.Idle(
-                        thumbnailQueue.hasPending(userId.id)
-                    )
-                try {
-                    downloads.downloadThumbnail(userId, entry.nodeUid)
-                    if (thumbnailQueue.complete(userId.id, entry.nodeUid)) {
-                        if (TIMELINE_QUEUE_SOURCE in entry.sources) {
-                            timeline.markThumbnailAvailable(userId, entry.nodeUid)
-                        }
-                        if (ALBUM_COVERS_QUEUE_SOURCE in entry.sources) {
-                            albums.markCoverThumbnailAvailable(userId, entry.nodeUid)
-                        }
-                        if (TRASH_QUEUE_SOURCE in entry.sources) {
-                            trash.markThumbnailAvailable(userId, entry.nodeUid)
-                        }
-                        if (entry.sources.any { source -> source.startsWith("$ALBUM_PHOTOS_QUEUE_SOURCE:") }) {
-                            albums.markAlbumPhotoThumbnailAvailable(userId, entry.nodeUid)
-                        }
-                    } else {
-                        downloads.removeThumbnail(userId, entry.nodeUid)
-                    }
-                    ProtonThumbnailQueueStep.Downloaded
-                } catch (error: CancellationException) {
-                    throw error
-                } catch (_: Throwable) {
-                    thumbnailQueue.defer(userId.id, entry.nodeUid)
-                    ProtonThumbnailQueueStep.Failed
-                }
+                processThumbnailBatch(
+                    userId,
+                    thumbnailQueue.claimVisible(
+                        userId.id,
+                        ProtonThumbnailDownloadPolicy.VISIBLE_CLAIM_SIZE,
+                    ),
+                )
+            }
+        }
+    }
+
+    internal suspend fun downloadNextQueuedThumbnailBatch(userId: UserId): ProtonThumbnailQueueStep =
+        withContext(Dispatchers.IO) {
+            sessionGuard.withActiveSession(userId) {
+                processThumbnailBatch(
+                    userId,
+                    thumbnailQueue.claimReady(
+                        userId.id,
+                        ProtonThumbnailDownloadPolicy.BACKGROUND_CLAIM_SIZE,
+                    ),
+                )
             }
         }
 
@@ -211,6 +203,62 @@ class ProtonPhotoGateway @Inject internal constructor(
 
     internal fun updateThumbnailWorkStatus(status: ProtonThumbnailWorkStatus?) {
         timeline.updateThumbnailWorkStatus(status)
+    }
+
+    private suspend fun processThumbnailBatch(
+        userId: UserId,
+        entries: List<ProtonThumbnailQueueEntry>,
+    ): ProtonThumbnailQueueStep {
+        if (entries.isEmpty()) {
+            return ProtonThumbnailQueueStep.Idle(thumbnailQueue.hasPending(userId.id))
+        }
+        val nodeUids = entries.map(ProtonThumbnailQueueEntry::nodeUid)
+        return try {
+            val result = downloads.downloadThumbnails(userId, nodeUids)
+            val completed = thumbnailQueue.settle(
+                userId.id,
+                result.successfulNodeUids,
+                result.failures.keys,
+            )
+            val completedNodeUids = completed.mapTo(mutableSetOf(), ProtonThumbnailQueueEntry::nodeUid)
+            result.successfulNodeUids.filterNot { nodeUid -> nodeUid in completedNodeUids }
+                .forEach { nodeUid -> downloads.removeThumbnail(userId, nodeUid) }
+            publishThumbnailAvailability(userId, completed)
+            if (result.failures.isEmpty()) {
+                ProtonThumbnailQueueStep.Downloaded
+            } else {
+                ProtonThumbnailQueueStep.Failed
+            }
+        } catch (error: CancellationException) {
+            thumbnailQueue.release(userId.id, nodeUids)
+            throw error
+        } catch (_: Throwable) {
+            thumbnailQueue.settle(userId.id, emptySet(), nodeUids.toSet())
+            ProtonThumbnailQueueStep.Failed
+        }
+    }
+
+    private fun publishThumbnailAvailability(
+        userId: UserId,
+        entries: Collection<ProtonThumbnailQueueEntry>,
+    ) {
+        if (entries.isEmpty()) return
+        val timelineNodeUids = mutableSetOf<String>()
+        val albumCoverNodeUids = mutableSetOf<String>()
+        val trashNodeUids = mutableSetOf<String>()
+        val albumPhotoNodeUids = mutableSetOf<String>()
+        entries.forEach { entry ->
+            if (TIMELINE_QUEUE_SOURCE in entry.sources) timelineNodeUids += entry.nodeUid
+            if (ALBUM_COVERS_QUEUE_SOURCE in entry.sources) albumCoverNodeUids += entry.nodeUid
+            if (TRASH_QUEUE_SOURCE in entry.sources) trashNodeUids += entry.nodeUid
+            if (entry.sources.any { source -> source.startsWith("$ALBUM_PHOTOS_QUEUE_SOURCE:") }) {
+                albumPhotoNodeUids += entry.nodeUid
+            }
+        }
+        timeline.markThumbnailsAvailable(userId, timelineNodeUids)
+        albums.markCoverThumbnailsAvailable(userId, albumCoverNodeUids)
+        trash.markThumbnailsAvailable(userId, trashNodeUids)
+        albums.markAlbumPhotoThumbnailsAvailable(userId, albumPhotoNodeUids)
     }
 
     private suspend fun reconcileTimelineThumbnailQueue(userId: UserId) {

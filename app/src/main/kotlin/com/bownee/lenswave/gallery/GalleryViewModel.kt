@@ -23,6 +23,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -173,7 +174,13 @@ class GalleryViewModel @Inject internal constructor(
         visiblePriorityJob = viewModelScope.launch(Dispatchers.IO) {
             if (currentUserId != userId || destination != destinationAtStart) return@launch
             protonRepository.prioritizeVisibleThumbnails(userId, nodeUids)
-            protonThumbnailScheduler.enqueue(userId)
+            delay(VISIBLE_THUMBNAIL_DEBOUNCE_MILLIS)
+            if (currentUserId != userId || destination != destinationAtStart) return@launch
+            try {
+                protonRepository.downloadVisibleThumbnails(userId)
+            } finally {
+                protonThumbnailScheduler.enqueue(userId)
+            }
         }
     }
 
@@ -594,6 +601,7 @@ class GalleryViewModel @Inject internal constructor(
     }
 
     private companion object {
+        const val VISIBLE_THUMBNAIL_DEBOUNCE_MILLIS = 100L
         const val STATE_DESTINATION = "gallery.destination"
         const val STATE_DEVICE_COLLECTION = "gallery.device-collection"
         const val STATE_TRASH_SOURCE = "gallery.trash-source"

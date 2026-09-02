@@ -146,16 +146,17 @@ internal class ProtonAlbumRepository @Inject constructor(
         }
     }
 
-    internal fun markCoverThumbnailAvailable(userId: UserId, nodeUid: String) {
+    internal fun markCoverThumbnailsAvailable(userId: UserId, nodeUids: Set<String>) {
+        if (nodeUids.isEmpty()) return
         mutableAlbumsState.update { state ->
             if (state.userId != userId.id) return@update state
-            val completedCoverCount = state.albums.count { album ->
-                album.coverPhotoNodeUid == nodeUid && !album.hasCoverThumbnail
+            var completedCoverCount = 0
+            val albums = state.albums.map { album ->
+                if (album.coverPhotoNodeUid !in nodeUids || album.hasCoverThumbnail) return@map album
+                completedCoverCount++
+                album.copy(hasCoverThumbnail = true)
             }
             if (completedCoverCount == 0) return@update state
-            val albums = state.albums.map { album ->
-                if (album.coverPhotoNodeUid == nodeUid) album.copy(hasCoverThumbnail = true) else album
-            }
             state.copy(
                 albums = albums,
                 downloadedCoverCount = state.downloadedCoverCount + completedCoverCount,
@@ -163,18 +164,20 @@ internal class ProtonAlbumRepository @Inject constructor(
         }
     }
 
-    internal fun markAlbumPhotoThumbnailAvailable(userId: UserId, nodeUid: String) {
+    internal fun markAlbumPhotoThumbnailsAvailable(userId: UserId, nodeUids: Set<String>) {
+        if (nodeUids.isEmpty()) return
         mutableAlbumPhotosState.update { state ->
             if (state.userId != userId.id) return@update state
-            val position = state.photos.indexOfFirst { photo ->
-                photo.nodeUid == nodeUid && !photo.hasThumbnail
+            var completedCount = 0
+            val photos = state.photos.map { photo ->
+                if (photo.nodeUid !in nodeUids || photo.hasThumbnail) return@map photo
+                completedCount++
+                photo.copy(hasThumbnail = true)
             }
-            if (position < 0) return@update state
-            val photos = state.photos.toMutableList()
-            photos[position] = photos[position].copy(hasThumbnail = true)
+            if (completedCount == 0) return@update state
             state.copy(
                 photos = photos,
-                downloadedThumbnailCount = state.downloadedThumbnailCount + 1,
+                downloadedThumbnailCount = state.downloadedThumbnailCount + completedCount,
             )
         }
     }

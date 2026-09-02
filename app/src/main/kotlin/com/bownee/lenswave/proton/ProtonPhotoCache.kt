@@ -9,6 +9,7 @@ import java.io.File
 import com.bownee.lenswave.LenswaveClock
 import com.bownee.lenswave.storage.AtomicFileStore
 import com.bownee.lenswave.storage.SecureFileStore
+import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -31,6 +32,7 @@ internal class ProtonPhotoCache @Inject constructor(
         deleteRecursively()
         mkdirs()
     }
+    private val validatedThumbnails = ConcurrentHashMap.newKeySet<ThumbnailCacheKey>()
 
     /** Metadata hydration only needs availability; authenticated contents are validated when read. */
     fun thumbnailExists(userId: String, nodeUid: String): Boolean =
@@ -40,13 +42,33 @@ internal class ProtonPhotoCache @Inject constructor(
             }
         }
 
-    override fun thumbnailIsDecodable(userId: String, nodeUid: String): Boolean =
-        validateThumbnailFile(userId, thumbnailFile(userId, nodeUid))
+    override fun thumbnailIsDecodable(userId: String, nodeUid: String): Boolean {
+        val key = ThumbnailCacheKey(userId, nodeUid)
+        val file = thumbnailFile(userId, nodeUid)
+        if (key in validatedThumbnails && file.isFile && file.length() > 0L) return true
+        validatedThumbnails.remove(key)
+        return validateThumbnailFile(key, file)
+    }
 
     override fun readThumbnail(userId: String, nodeUid: String): ByteArray? {
+        val key = ThumbnailCacheKey(userId, nodeUid)
         val file = thumbnailFile(userId, nodeUid)
-        return file.takeIf { validateThumbnailFile(userId, it) }
-            ?.let { secureFiles.read(scope(userId), it) }
+        if (!file.isFile || file.length() <= 0L) {
+            validatedThumbnails.remove(key)
+            file.delete()
+            return null
+        }
+        val bytes = runCatching { secureFiles.read(scope(userId), file) }.getOrElse {
+            validatedThumbnails.remove(key)
+            file.delete()
+            return null
+        }
+        if (key !in validatedThumbnails && !isDecodableThumbnail(bytes)) {
+            file.delete()
+            return null
+        }
+        validatedThumbnails += key
+        return bytes
     }
 
     override fun writeThumbnail(userId: String, nodeUid: String, bytes: ByteArray) {
@@ -55,21 +77,29 @@ internal class ProtonPhotoCache @Inject constructor(
         target.parentFile?.mkdirs()
         secureFiles.write(scope(userId), target, bytes, "Could not commit thumbnail cache file")
         target.setLastModified(clock.nowMillis())
+        validatedThumbnails += ThumbnailCacheKey(userId, nodeUid)
     }
 
     override fun removeThumbnail(userId: String, nodeUid: String) {
+        validatedThumbnails.remove(ThumbnailCacheKey(userId, nodeUid))
         thumbnailFile(userId, nodeUid).delete()
     }
 
-    private fun validateThumbnailFile(userId: String, file: File): Boolean {
+    private fun validateThumbnailFile(key: ThumbnailCacheKey, file: File): Boolean {
         if (!file.isFile || file.length() <= 0L) {
+            validatedThumbnails.remove(key)
             file.delete()
             return false
         }
         val valid = runCatching {
-            isDecodableThumbnail(secureFiles.read(scope(userId), file))
+            isDecodableThumbnail(secureFiles.read(scope(key.userId), file))
         }.getOrDefault(false)
-        if (!valid) file.delete()
+        if (valid) {
+            validatedThumbnails += key
+        } else {
+            validatedThumbnails.remove(key)
+            file.delete()
+        }
         return valid
     }
 
@@ -324,6 +354,7 @@ internal class ProtonPhotoCache @Inject constructor(
         ttlMillis: Long = THUMBNAIL_TTL_MILLIS,
     ) {
         trimDirectory(thumbnailDirectory(userId), limitBytes, ttlMillis)
+        pruneValidatedThumbnails(userId)
     }
 
     override fun reconcilePhotos(
@@ -355,13 +386,14 @@ internal class ProtonPhotoCache @Inject constructor(
                 file.delete()
             }
         }
+        pruneValidatedThumbnails(userId)
         return changes
     }
 
     override fun removePhotos(userId: String, nodeUids: Collection<String>) {
         val removed = nodeUids.toSet()
         removed.forEach { nodeUid ->
-            thumbnailFile(userId, nodeUid).delete()
+            removeThumbnail(userId, nodeUid)
             originalFile(userId, nodeUid).delete()
             decryptedOriginalFile(userId, nodeUid).delete()
         }
@@ -382,6 +414,7 @@ internal class ProtonPhotoCache @Inject constructor(
     }
 
     override fun clearUser(userId: String) {
+        forgetValidatedThumbnails(userId)
         val indexDeleted = userDirectory(userId).deleteRecursively()
         val originalsDeleted = originalDirectory(userId).deleteRecursively()
         val decryptedDeleted = decryptedDirectory(userId).deleteRecursively()
@@ -400,12 +433,27 @@ internal class ProtonPhotoCache @Inject constructor(
         decrypted.listFiles()?.filter { it.name != retainedName }?.forEach { directory ->
             check(directory.deleteRecursively()) { "Could not remove orphaned decrypted Proton media" }
         }
+        validatedThumbnails.filter { key -> key.userId != userId }
+            .toSet()
+            .let(validatedThumbnails::removeAll)
     }
 
     private fun thumbnailFile(userId: String, nodeUid: String): File =
         File(thumbnailDirectory(userId), "${safeName(nodeUid)}.thumb")
 
     private fun thumbnailDirectory(userId: String): File = File(userDirectory(userId), "thumbnails")
+
+    private fun pruneValidatedThumbnails(userId: String) {
+        validatedThumbnails.filter { key ->
+            key.userId == userId && !thumbnailExists(key.userId, key.nodeUid)
+        }.toSet().let(validatedThumbnails::removeAll)
+    }
+
+    private fun forgetValidatedThumbnails(userId: String) {
+        validatedThumbnails.filter { key -> key.userId == userId }
+            .toSet()
+            .let(validatedThumbnails::removeAll)
+    }
 
     private fun originalFile(userId: String, nodeUid: String): File =
         File(originalDirectory(userId), "${safeName(nodeUid)}.image")
@@ -514,6 +562,8 @@ internal class ProtonPhotoCache @Inject constructor(
     }
 
     private fun safeName(value: String): String = AtomicFileStore.safeName(value)
+
+    private data class ThumbnailCacheKey(val userId: String, val nodeUid: String)
 
     private companion object {
         const val ORIGINAL_CACHE_LIMIT_BYTES = 256L * 1024L * 1024L

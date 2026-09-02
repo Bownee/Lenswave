@@ -77,18 +77,20 @@ internal class ProtonTrashRepository @Inject constructor(
         }
     }
 
-    internal fun markThumbnailAvailable(userId: UserId, nodeUid: String) {
+    internal fun markThumbnailsAvailable(userId: UserId, nodeUids: Set<String>) {
+        if (nodeUids.isEmpty()) return
         mutableState.update { state ->
             if (state.userId != userId.id) return@update state
-            val position = state.photos.indexOfFirst { photo ->
-                photo.nodeUid == nodeUid && !photo.hasThumbnail
+            var completedCount = 0
+            val photos = state.photos.map { photo ->
+                if (photo.nodeUid !in nodeUids || photo.hasThumbnail) return@map photo
+                completedCount++
+                photo.copy(hasThumbnail = true)
             }
-            if (position < 0) return@update state
-            val photos = state.photos.toMutableList()
-            photos[position] = photos[position].copy(hasThumbnail = true)
+            if (completedCount == 0) return@update state
             state.copy(
                 photos = photos,
-                downloadedThumbnailCount = state.downloadedThumbnailCount + 1,
+                downloadedThumbnailCount = state.downloadedThumbnailCount + completedCount,
             )
         }
     }

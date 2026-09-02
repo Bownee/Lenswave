@@ -52,7 +52,7 @@ class ProtonThumbnailWorker(
                 var sawFailure = false
                 var runIssue: ProtonThumbnailWorkIssue? = null
                 while (true) {
-                    when (val step = repository.downloadNextQueuedThumbnail(requestedUserId)) {
+                    when (val step = repository.downloadNextQueuedThumbnailBatch(requestedUserId)) {
                         ProtonThumbnailQueueStep.Downloaded -> Unit
                         ProtonThumbnailQueueStep.Failed -> sawFailure = true
                         is ProtonThumbnailQueueStep.Idle -> {

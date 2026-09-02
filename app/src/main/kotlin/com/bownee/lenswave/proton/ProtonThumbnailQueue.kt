@@ -31,6 +31,7 @@ internal class ProtonThumbnailQueue @Inject constructor(
     private val dirtyUsers = mutableSetOf<String>()
     private val currentSectionNodeUids = mutableMapOf<String, Set<String>>()
     private val visibleNodeUids = mutableMapOf<String, Set<String>>()
+    private val claimedNodeUids = mutableMapOf<String, MutableSet<String>>()
 
     suspend fun replaceSource(userId: String, source: String, pendingNodeUids: Collection<String>) {
         replaceSources(userId, mapOf(source to pendingNodeUids))
@@ -77,6 +78,7 @@ internal class ProtonThumbnailQueue @Inject constructor(
                 }
             }
             entries.values.removeAll { entry -> entry.sources.isEmpty() }
+            claimedNodeUids[userId]?.retainAll(entries.keys)
             persist(userId, entries)
         }
     }
@@ -130,8 +132,54 @@ internal class ProtonThumbnailQueue @Inject constructor(
             .firstOrNull()
     }
 
+    suspend fun claimReady(userId: String, limit: Int): List<ProtonThumbnailQueueEntry> =
+        claim(userId, limit, maximumPriority = Int.MAX_VALUE)
+
+    suspend fun claimVisible(userId: String, limit: Int): List<ProtonThumbnailQueueEntry> =
+        claim(userId, limit, maximumPriority = VISIBLE_PRIORITY)
+
+    suspend fun settle(
+        userId: String,
+        successfulNodeUids: Set<String>,
+        failedNodeUids: Set<String>,
+    ): List<ProtonThumbnailQueueEntry> = mutex.withLock {
+        require(successfulNodeUids.intersect(failedNodeUids).isEmpty()) {
+            "A thumbnail cannot succeed and fail in the same batch"
+        }
+        val entries = entries(userId)
+        val completed = successfulNodeUids.mapNotNull(entries::remove)
+        val now = clock.nowMillis()
+        failedNodeUids.forEach { nodeUid ->
+            val entry = entries[nodeUid] ?: return@forEach
+            val retryCount = entry.retryCount + 1
+            entries[nodeUid] = entry.copy(
+                retryCount = retryCount,
+                retryAtMillis = now + retryDelayMillis(retryCount),
+            )
+        }
+        val settled = successfulNodeUids + failedNodeUids
+        claimedNodeUids[userId]?.let { claimed ->
+            claimed.removeAll(settled)
+            if (claimed.isEmpty()) claimedNodeUids.remove(userId)
+        }
+        if (completed.isNotEmpty() || failedNodeUids.any(entries::containsKey)) {
+            persist(userId, entries)
+        }
+        completed
+    }
+
+    suspend fun release(userId: String, nodeUids: Collection<String>) {
+        mutex.withLock {
+            claimedNodeUids[userId]?.let { claimed ->
+                claimed.removeAll(nodeUids.toSet())
+                if (claimed.isEmpty()) claimedNodeUids.remove(userId)
+            }
+        }
+    }
+
     suspend fun complete(userId: String, nodeUid: String): Boolean = mutex.withLock {
         val removed = entries(userId).remove(nodeUid) != null
+        claimedNodeUids[userId]?.remove(nodeUid)
         if (removed) dirtyUsers += userId
         removed
     }
@@ -145,6 +193,7 @@ internal class ProtonThumbnailQueue @Inject constructor(
                 retryCount = retryCount,
                 retryAtMillis = clock.nowMillis() + retryDelayMillis(retryCount),
             )
+            claimedNodeUids[userId]?.remove(nodeUid)
             persist(userId, entries)
         }
     }
@@ -163,6 +212,7 @@ internal class ProtonThumbnailQueue @Inject constructor(
             dirtyUsers.remove(userId)
             currentSectionNodeUids.remove(userId)
             visibleNodeUids.remove(userId)
+            claimedNodeUids.remove(userId)
         }
     }
 
@@ -188,6 +238,25 @@ internal class ProtonThumbnailQueue @Inject constructor(
 
     private fun nextOrder(entries: Collection<ProtonThumbnailQueueEntry>): Long =
         (entries.maxOfOrNull(ProtonThumbnailQueueEntry::order) ?: 0L) + 1L
+
+    private suspend fun claim(
+        userId: String,
+        limit: Int,
+        maximumPriority: Int,
+    ): List<ProtonThumbnailQueueEntry> = mutex.withLock {
+        require(limit > 0) { "Thumbnail claim limit must be positive" }
+        val now = clock.nowMillis()
+        val claimed = claimedNodeUids.getOrPut(userId, ::mutableSetOf)
+        entries(userId).values
+            .asSequence()
+            .filter { entry -> entry.retryAtMillis <= now }
+            .filter { entry -> entry.priority <= maximumPriority }
+            .filterNot { entry -> entry.nodeUid in claimed }
+            .sortedWith(compareBy<ProtonThumbnailQueueEntry> { it.priority }.thenByDescending { it.order })
+            .take(limit)
+            .toList()
+            .onEach { entry -> claimed += entry.nodeUid }
+    }
 
     private fun retryDelayMillis(retryCount: Int): Long {
         val multiplier = 1L shl (retryCount - 1).coerceIn(0, MAX_RETRY_SHIFT)
