@@ -394,6 +394,23 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
         })
     }
 
+    private fun managePhotoAccess() {
+        if (DevicePermissionPolicy.shouldOpenSettingsToManage(deviceAccessLevel())) {
+            openApplicationSettings()
+        } else {
+            requestDeviceAccess()
+        }
+    }
+
+    private fun photoAccessMenuTitle(): String {
+        val accessLabel = when (deviceAccessLevel()) {
+            DeviceAccessLevel.NONE -> R.string.photo_access_none
+            DeviceAccessLevel.PARTIAL -> R.string.photo_access_selected
+            DeviceAccessLevel.FULL -> R.string.photo_access_all
+        }
+        return getString(R.string.photo_access_state, getString(accessLabel))
+    }
+
     private fun selectDeviceCollection(collection: DeviceCollection) {
         hideDevicePicker()
         selectDestination(GalleryDestination.Device(collection), scrollToTop = true)
@@ -424,7 +441,7 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
             } else {
                 menu.add(android.view.Menu.NONE, SETTINGS_DISCONNECT_PROTON, 0, R.string.disconnect_proton)
             }
-            menu.add(android.view.Menu.NONE, SETTINGS_PHOTO_ACCESS, 1, R.string.manage_photo_access)
+            menu.add(android.view.Menu.NONE, SETTINGS_PHOTO_ACCESS, 1, photoAccessMenuTitle())
             menu.add(android.view.Menu.NONE, SETTINGS_PRIVACY, 2, R.string.privacy_and_data)
             menu.add(
                 android.view.Menu.NONE,
@@ -436,7 +453,7 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
                 when (item.itemId) {
                     SETTINGS_CONNECT_PROTON -> connectProton()
                     SETTINGS_DISCONNECT_PROTON -> confirmDisconnectProton()
-                    SETTINGS_PHOTO_ACCESS -> requestDeviceAccess()
+                    SETTINGS_PHOTO_ACCESS -> managePhotoAccess()
                     SETTINGS_PRIVACY -> showPrivacySettings()
                 }
                 true

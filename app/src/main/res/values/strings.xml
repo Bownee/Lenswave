@@ -164,7 +164,10 @@
     <string name="allow_photo_access_settings_message">Android no longer shows the permission prompt. Open Lenswave settings and allow photo access to continue.</string>
     <string name="photo_access_rationale">Lenswave needs access to show device photos. On Android 14 and later you can grant access to selected photos only.</string>
     <string name="disconnect_proton">Disconnect Proton</string>
-    <string name="manage_photo_access">Manage photo access</string>
+    <string name="photo_access_state">Photo access: %1$s</string>
+    <string name="photo_access_none">None</string>
+    <string name="photo_access_selected">Selected photos</string>
+    <string name="photo_access_all">All photos</string>
     <string name="app_version">Lenswave v%1$s</string>
     <string name="disconnect_proton_question">Disconnect Proton?</string>
     <string name="disconnect_proton_message">Cached Proton media and combined-gallery matches will be cryptographically erased from this device.</string>

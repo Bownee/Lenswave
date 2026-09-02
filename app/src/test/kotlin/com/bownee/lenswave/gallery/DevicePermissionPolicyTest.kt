@@ -3,6 +3,8 @@ package com.bownee.lenswave.gallery
 import android.Manifest
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DevicePermissionPolicyTest {
@@ -30,5 +32,11 @@ class DevicePermissionPolicyTest {
         assertEquals(DeviceAccessLevel.PARTIAL, DevicePermissionPolicy.accessLevel(34, false, true, false))
         assertEquals(DeviceAccessLevel.NONE, DevicePermissionPolicy.accessLevel(34, false, false, false))
         assertEquals(DeviceAccessLevel.FULL, DevicePermissionPolicy.accessLevel(34, true, true, false))
+    }
+
+    @Test fun grantedAccessIsManagedInSettings() {
+        assertFalse(DevicePermissionPolicy.shouldOpenSettingsToManage(DeviceAccessLevel.NONE))
+        assertTrue(DevicePermissionPolicy.shouldOpenSettingsToManage(DeviceAccessLevel.PARTIAL))
+        assertTrue(DevicePermissionPolicy.shouldOpenSettingsToManage(DeviceAccessLevel.FULL))
     }
 }

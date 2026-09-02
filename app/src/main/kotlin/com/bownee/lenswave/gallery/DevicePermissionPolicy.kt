@@ -26,4 +26,7 @@ internal object DevicePermissionPolicy {
         apiLevel < Build.VERSION_CODES.TIRAMISU && legacyReadGranted -> DeviceAccessLevel.FULL
         else -> DeviceAccessLevel.NONE
     }
+
+    fun shouldOpenSettingsToManage(accessLevel: DeviceAccessLevel): Boolean =
+        accessLevel != DeviceAccessLevel.NONE
 }
