@@ -15,7 +15,7 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class AccessibilityContractInstrumentedTest {
-    @Test fun viewerNavigationHasNamedActionsAndFortyEightDpTargets() {
+    @Test fun viewerHasNamedIconActionsAndFortyEightDpTargets() {
         ActivityScenario.launch(GalleryActivity::class.java).use { scenario ->
             scenario.onActivity { activity ->
                 val screen = PhotoViewerScreen(
@@ -30,11 +30,6 @@ class AccessibilityContractInstrumentedTest {
                         onEdit = {},
                         onDelete = {},
                         onRetry = {},
-                        onPrevious = {},
-                        onNext = {},
-                        onZoomOut = {},
-                        onResetZoom = {},
-                        onZoomIn = {},
                         onLayoutChanged = {},
                     ),
                 )
@@ -45,14 +40,12 @@ class AccessibilityContractInstrumentedTest {
                 screen.root.layout(0, 0, 1_080, 1_920)
                 val minimumTarget = activity.dp(48)
                 listOf(
-                    screen.previousButton,
-                    screen.nextButton,
-                    screen.zoomOutButton,
-                    screen.zoomResetButton,
-                    screen.zoomInButton,
+                    screen.editButton,
+                    screen.deleteButton,
                 ).forEach { button ->
-                    assertTrue(button.text.isNotBlank())
+                    assertTrue(button.contentDescription.isNotBlank())
                     assertTrue(button.hasOnClickListeners())
+                    assertTrue(button.measuredWidth >= minimumTarget)
                     assertTrue(button.measuredHeight >= minimumTarget)
                 }
                 screen.photoView.close()

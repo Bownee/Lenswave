@@ -49,6 +49,8 @@ import com.bownee.lenswave.gallery.GalleryEmptyAction
 import com.bownee.lenswave.gallery.GalleryGrouping
 import com.bownee.lenswave.gallery.GalleryFastScrollLayoutPolicy
 import com.bownee.lenswave.gallery.GallerySpace
+import com.bownee.lenswave.gallery.GalleryThumbnailCacheIdentity
+import com.bownee.lenswave.gallery.GalleryThumbnailCachePolicy
 import com.bownee.lenswave.gallery.GalleryUiState
 import com.bownee.lenswave.gallery.GalleryViewModel
 import com.bownee.lenswave.gallery.PhotoSource
@@ -64,6 +66,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import me.proton.core.accountmanager.domain.AccountManager
 import me.proton.core.auth.presentation.AuthOrchestrator
+import me.proton.core.domain.entity.UserId
 import me.proton.core.usersettings.domain.usecase.ObserveUserSettings
 import me.proton.core.usersettings.domain.usecase.PerformUpdateTelemetry
 import javax.inject.Inject
@@ -109,6 +112,7 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
     private var visibleAssets: List<GalleryAsset> = emptyList()
     private var fastScrollEdgePadding = 0
     private var pendingUpdateVersionName: String? = null
+    private var thumbnailCacheIdentity: GalleryThumbnailCacheIdentity? = null
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -159,14 +163,6 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
         if (this::screen.isInitialized) screen.dispose()
         authOrchestrator.unregister()
         super.onDestroy()
-    }
-
-    override fun onStop() {
-        // The editor/viewer can retain a full-size bitmap; do not keep the gallery LRU beneath it.
-        if (this::screen.isInitialized && !isChangingConfigurations) {
-            screen.adapter.clearThumbnails()
-        }
-        super.onStop()
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -301,6 +297,7 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
         val destinationChanged = renderedDestination != state.destination
         val contentChanged = renderedContent != state.content
         currentUiState = state
+        updateThumbnailCacheIdentity(deviceAccessLevel(), state.currentUserId)
         renderedDestination = state.destination
         renderedContent = state.content
         if (contentChanged || destinationChanged) {
@@ -368,8 +365,20 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
     }
 
     private fun updateDeviceAccess() {
-        if (this::screen.isInitialized) screen.adapter.clearThumbnails()
-        viewModel.setDeviceAccess(deviceAccessLevel())
+        val accessLevel = deviceAccessLevel()
+        updateThumbnailCacheIdentity(accessLevel, currentUiState.currentUserId)
+        viewModel.setDeviceAccess(accessLevel)
+    }
+
+    private fun updateThumbnailCacheIdentity(
+        accessLevel: DeviceAccessLevel,
+        userId: UserId?,
+    ) {
+        val identity = GalleryThumbnailCacheIdentity(accessLevel, userId)
+        if (GalleryThumbnailCachePolicy.shouldInvalidate(thumbnailCacheIdentity, identity)) {
+            screen.adapter.clearThumbnails()
+        }
+        thumbnailCacheIdentity = identity
     }
 
     @SuppressLint("InlinedApi") // Permission strings are queried only by the API-aware policy.

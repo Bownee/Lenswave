@@ -9,14 +9,12 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.FrameLayout
-import android.widget.HorizontalScrollView
 import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.core.view.ViewCompat
-import androidx.core.widget.TextViewCompat
 
 internal class PhotoViewerScreen(
     private val context: Context,
@@ -50,13 +48,8 @@ internal class PhotoViewerScreen(
     val retryButton: Button
     val backButton: ImageButton
     val actions: LinearLayout
-    val editButton: Button
-    val deleteButton: Button
-    val previousButton: Button
-    val nextButton: Button
-    val zoomOutButton: Button
-    val zoomResetButton: Button
-    val zoomInButton: Button
+    val editButton: ImageButton
+    val deleteButton: ImageButton
     val detailsSheet: LinearLayout
     val detailsContent: LinearLayout
     val detailsProgress: ProgressBar
@@ -148,11 +141,11 @@ internal class PhotoViewerScreen(
             },
         )
 
-        editButton = smallIconLabelButton(context.getString(R.string.edit), R.drawable.ic_edit).apply {
+        editButton = smallIconButton(context.getString(R.string.edit), R.drawable.ic_edit).apply {
             isEnabled = false
             setOnClickListener { actions.onEdit() }
         }
-        deleteButton = smallIconLabelButton(
+        deleteButton = smallIconButton(
             context.getString(if (requestIsTrashed) R.string.delete_forever else R.string.delete),
             R.drawable.ic_delete,
             destructive = true,
@@ -164,36 +157,17 @@ internal class PhotoViewerScreen(
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
             addView(editButton, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
+                context.dp(48),
                 context.dp(48),
             ))
             addView(deleteButton, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
+                context.dp(48),
                 context.dp(48),
             ).apply { marginStart = context.dp(8) })
         }
-        previousButton = textButton(R.string.previous_photo) { actions.onPrevious() }
-        zoomOutButton = textButton(R.string.zoom_out) { actions.onZoomOut() }
-        zoomResetButton = textButton(R.string.reset_zoom) { actions.onResetZoom() }
-        zoomInButton = textButton(R.string.zoom_in) { actions.onZoomIn() }
-        nextButton = textButton(R.string.next_photo) { actions.onNext() }
-        val navigationButtons = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-            addView(previousButton, scrollableButton())
-            addView(zoomOutButton, scrollableButton())
-            addView(zoomResetButton, scrollableButton())
-            addView(zoomInButton, scrollableButton())
-            addView(nextButton, scrollableButton())
-        }
-        val navigationScroller = HorizontalScrollView(context).apply {
-            isHorizontalScrollBarEnabled = false
-            isFillViewport = true
-            addView(navigationButtons)
-        }
         this.actions = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            minimumHeight = context.dp(160)
+            minimumHeight = context.dp(112)
             setPadding(context.dp(8), context.dp(6), context.dp(8), context.dp(8))
             addView(TextView(context).apply {
                 setText(R.string.swipe_up_for_details)
@@ -202,7 +176,6 @@ internal class PhotoViewerScreen(
                 setTextColor(UiStyle.muted)
                 setOnClickListener { actions.onShowDetails() }
             }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, context.dp(48)))
-            addView(navigationScroller, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
             addView(buttons, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
         root.addView(
@@ -261,38 +234,17 @@ internal class PhotoViewerScreen(
         return DetailsSheet(container, progress, content)
     }
 
-    private fun smallIconLabelButton(label: String, icon: Int, destructive: Boolean = false) =
-        Button(context).apply {
-            text = label
-            textSize = 13f
-            setTextColor(if (destructive) Color.rgb(255, 146, 146) else UiStyle.text)
-            isAllCaps = false
-            setCompoundDrawablesRelativeWithIntrinsicBounds(icon, 0, 0, 0)
-            TextViewCompat.setCompoundDrawableTintList(this, ColorStateList.valueOf(
-                if (destructive) Color.rgb(255, 146, 146) else UiStyle.text
-            ))
-            compoundDrawablePadding = context.dp(7)
-            setPadding(context.dp(14), 0, context.dp(14), 0)
+    private fun smallIconButton(label: String, icon: Int, destructive: Boolean = false) =
+        ImageButton(context).apply {
+            setImageResource(icon)
+            imageTintList = ColorStateList.valueOf(
+                if (destructive) Color.rgb(255, 146, 146) else UiStyle.text,
+            )
+            contentDescription = label
+            ViewCompat.setTooltipText(this, label)
+            setPadding(context.dp(12), context.dp(12), context.dp(12), context.dp(12))
             background = UiStyle.rounded(context, Color.argb(220, 29, 33, 40), 15)
         }
-
-    private fun textButton(label: Int, onClick: () -> Unit) = Button(context).apply {
-        setText(label)
-        textSize = 11f
-        isAllCaps = false
-        minWidth = 0
-        minimumWidth = 0
-        minimumHeight = context.dp(48)
-        setPadding(context.dp(3), 0, context.dp(3), 0)
-        setTextColor(UiStyle.text)
-        background = UiStyle.rounded(context, Color.argb(220, 29, 33, 40), 12)
-        setOnClickListener { onClick() }
-    }
-
-    private fun scrollableButton() = LinearLayout.LayoutParams(
-        ViewGroup.LayoutParams.WRAP_CONTENT,
-        context.dp(48),
-    ).apply { marginEnd = context.dp(4) }
 
     private fun photoLayoutParams() = FrameLayout.LayoutParams(
         ViewGroup.LayoutParams.MATCH_PARENT,
@@ -314,11 +266,6 @@ internal class PhotoViewerScreen(
         val onEdit: () -> Unit,
         val onDelete: () -> Unit,
         val onRetry: () -> Unit,
-        val onPrevious: () -> Unit,
-        val onNext: () -> Unit,
-        val onZoomOut: () -> Unit,
-        val onResetZoom: () -> Unit,
-        val onZoomIn: () -> Unit,
         val onLayoutChanged: (Int) -> Unit,
     )
 

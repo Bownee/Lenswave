@@ -17,9 +17,7 @@ import android.view.View
 import android.view.KeyEvent
 import android.view.ViewGroup
 import android.view.animation.PathInterpolator
-import android.widget.Button
 import android.widget.FrameLayout
-import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
@@ -85,11 +83,6 @@ class PhotoViewerActivity : FragmentActivity() {
     private val actions get() = screen.actions
     private val editButton get() = screen.editButton
     private val deleteButton get() = screen.deleteButton
-    private val previousButton get() = screen.previousButton
-    private val nextButton get() = screen.nextButton
-    private val zoomOutButton get() = screen.zoomOutButton
-    private val zoomResetButton get() = screen.zoomResetButton
-    private val zoomInButton get() = screen.zoomInButton
     private val detailsSheet get() = screen.detailsSheet
     private val detailsContent get() = screen.detailsContent
     private val detailsProgress get() = screen.detailsProgress
@@ -192,11 +185,6 @@ class PhotoViewerActivity : FragmentActivity() {
                 onEdit = ::openEditor,
                 onDelete = ::deletePhoto,
                 onRetry = ::loadPhoto,
-                onPrevious = { navigatePhoto(-1) },
-                onNext = { navigatePhoto(1) },
-                onZoomOut = { photoView.zoomOut() },
-                onResetZoom = { photoView.resetZoom() },
-                onZoomIn = { photoView.zoomIn() },
                 onLayoutChanged = ::updatePhotoDetailsLayout,
             ),
         )
@@ -488,11 +476,6 @@ class PhotoViewerActivity : FragmentActivity() {
         deleteButton.isEnabled = enabled
         editButton.alpha = if (editButton.isEnabled) 1f else 0.45f
         deleteButton.alpha = if (enabled) 1f else 0.45f
-        previousButton.isEnabled = enabled && adjacentTo(request.stableId, -1) != null
-        nextButton.isEnabled = enabled && adjacentTo(request.stableId, 1) != null
-        zoomOutButton.isEnabled = enabled
-        zoomResetButton.isEnabled = enabled
-        zoomInButton.isEnabled = enabled
     }
 
     private fun adjacentTo(stableId: String, offset: Int): PhotoRequest? {
