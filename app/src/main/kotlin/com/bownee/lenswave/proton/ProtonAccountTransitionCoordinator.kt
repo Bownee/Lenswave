@@ -29,6 +29,7 @@ class ProtonAccountTransitionCoordinator @Inject constructor(
         nextUserId?.let { sessionLifecycle.activate(it) }
         previousUserId?.let { combinedPhotoMatcher.clear(it) }
         cacheCleaner.retainOnlyUser(nextUserId?.id)
+        nextUserId?.let(thumbnailScheduler::enqueue)
     }
 }
 

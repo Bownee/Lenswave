@@ -222,9 +222,16 @@ class ProtonPhotoPickerActivity : FragmentActivity() {
     }
 
     private suspend fun refreshMetadata(userId: UserId, forceRemote: Boolean) {
-        thumbnailScheduler.cancelAndAwait(userId)
         repository.syncMetadata(userId, forceRemote)
-        if (repository.hasCompleteMetadata(userId)) thumbnailScheduler.enqueue(userId)
+        if (repository.metadataState.value.userId == userId.id &&
+            repository.metadataState.value.hasLoaded
+        ) {
+            repository.prioritizeThumbnailSection(
+                userId,
+                repository.state.value.photos.map(ProtonGalleryPhoto::nodeUid),
+            )
+            thumbnailScheduler.enqueue(userId)
+        }
     }
 
     private fun openPhoto(photo: ProtonGalleryPhoto) {

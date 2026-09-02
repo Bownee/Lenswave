@@ -65,11 +65,24 @@ internal class GalleryScreen(
 
     private var pendingStickyMonthPosition: Int? = null
     private var stickyMonthUpdatePosted = false
+    private var visibleThumbnailUpdatePosted = false
+    private var lastVisibleThumbnailNodeUids: Set<String> = emptySet()
     private val stickyMonthUpdate = Runnable {
         stickyMonthUpdatePosted = false
         val position = pendingStickyMonthPosition ?: return@Runnable
         pendingStickyMonthPosition = null
         updateStickyMonth(position)
+    }
+    private val visibleThumbnailUpdate = Runnable {
+        visibleThumbnailUpdatePosted = false
+        val headerCount = list.headerViewsCount
+        val firstRow = (list.firstVisiblePosition - headerCount).coerceAtLeast(0)
+        val lastRowExclusive = (list.lastVisiblePosition - headerCount + 1).coerceAtLeast(firstRow)
+        val nodeUids = adapter.pendingProtonThumbnailNodeUids(firstRow, lastRowExclusive - firstRow)
+        if (nodeUids != lastVisibleThumbnailNodeUids) {
+            lastVisibleThumbnailNodeUids = nodeUids
+            actions.onVisibleThumbnailsChanged(nodeUids)
+        }
     }
 
     init {
@@ -164,8 +177,16 @@ internal class GalleryScreen(
 
     fun dispose() {
         list.removeCallbacks(stickyMonthUpdate)
+        list.removeCallbacks(visibleThumbnailUpdate)
         pendingStickyMonthPosition = null
         stickyMonthUpdatePosted = false
+        visibleThumbnailUpdatePosted = false
+    }
+
+    fun scheduleVisibleThumbnailUpdate() {
+        if (visibleThumbnailUpdatePosted) return
+        visibleThumbnailUpdatePosted = true
+        list.postOnAnimation(visibleThumbnailUpdate)
     }
 
     fun resetScroll() {
@@ -229,7 +250,10 @@ internal class GalleryScreen(
     private fun attachScrollListeners() {
         list.setOnFastScrollInteractionListener { active ->
             adapter.setFastScrolling(active)
-            if (!active) scheduleStickyMonthUpdate(list.firstVisiblePosition)
+            if (!active) {
+                scheduleStickyMonthUpdate(list.firstVisiblePosition)
+                scheduleVisibleThumbnailUpdate()
+            }
         }
         list.setOnScrollListener(object : AbsListView.OnScrollListener {
             override fun onScrollStateChanged(view: AbsListView?, scrollState: Int) = Unit
@@ -239,7 +263,10 @@ internal class GalleryScreen(
                 firstVisibleItem: Int,
                 visibleItemCount: Int,
                 totalItemCount: Int,
-            ) = scheduleStickyMonthUpdate(firstVisibleItem)
+            ) {
+                scheduleStickyMonthUpdate(firstVisibleItem)
+                scheduleVisibleThumbnailUpdate()
+            }
         })
     }
 
@@ -516,6 +543,7 @@ internal class GalleryScreen(
         val onPhotoClicked: (GalleryAsset) -> Unit,
         val onAlbumClicked: (ProtonAlbum) -> Unit,
         val onSelectionChanged: (List<GalleryAsset>) -> Unit,
+        val onVisibleThumbnailsChanged: (Set<String>) -> Unit,
         val onRefresh: () -> Unit,
         val onSourceBarLayout: () -> Unit,
         val onAlbumBack: () -> Unit,

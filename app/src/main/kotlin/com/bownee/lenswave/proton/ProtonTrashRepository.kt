@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import me.proton.core.domain.entity.UserId
@@ -19,7 +20,6 @@ import me.proton.drive.sdk.entity.NodeUid
 internal class ProtonTrashRepository @Inject constructor(
     private val clientProvider: ProtonPhotosClientProvider,
     private val cache: ProtonTrashCache,
-    private val downloads: ProtonDownloadRepository,
     private val snapshots: ProtonSnapshotCoordinator,
 ) {
     private val syncMutex = Mutex()
@@ -77,25 +77,20 @@ internal class ProtonTrashRepository @Inject constructor(
         }
     }
 
-    suspend fun hydrateThumbnails(userId: UserId, maxDownloads: Int) = syncMutex.withLock {
-        if (!cache.hasTrashSnapshot(userId.id)) return@withLock
-        val photosClient = clientProvider.get(userId)
-        val photos = cache.readTrash(userId.id).toMutableList()
-        val positions = photos.indices.associateBy { photos[it].nodeUid }
-        downloads.downloadMissingThumbnails(
-            photosClient = photosClient,
-            userId = userId,
-            nodeUids = photos.filterNot(ProtonTrashPhoto::hasThumbnail).map(ProtonTrashPhoto::nodeUid),
-            maxDownloads = maxDownloads,
-            onStored = { nodeUid ->
-                positions[nodeUid]?.let { position ->
-                    photos[position] = photos[position].copy(hasThumbnail = true)
-                }
-            },
-            onProgress = { emit(userId, photos, syncing = false) },
-        )
-        cache.writeTrash(userId.id, photos)
-        emit(userId, photos, syncing = false)
+    internal fun markThumbnailAvailable(userId: UserId, nodeUid: String) {
+        mutableState.update { state ->
+            if (state.userId != userId.id) return@update state
+            val position = state.photos.indexOfFirst { photo ->
+                photo.nodeUid == nodeUid && !photo.hasThumbnail
+            }
+            if (position < 0) return@update state
+            val photos = state.photos.toMutableList()
+            photos[position] = photos[position].copy(hasThumbnail = true)
+            state.copy(
+                photos = photos,
+                downloadedThumbnailCount = state.downloadedThumbnailCount + 1,
+            )
+        }
     }
 
     suspend fun deletePermanently(

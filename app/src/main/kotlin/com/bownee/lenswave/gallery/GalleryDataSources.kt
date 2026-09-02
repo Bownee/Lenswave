@@ -67,7 +67,8 @@ interface ProtonGalleryReader {
         album: ProtonAlbumReference,
         forceRemote: Boolean = false,
     )
-    suspend fun hydrateAlbumPhotoThumbnails(userId: UserId, album: ProtonAlbumReference)
+    suspend fun prioritizeThumbnailSection(userId: UserId, nodeUids: Collection<String>)
+    suspend fun prioritizeVisibleThumbnails(userId: UserId, nodeUids: Collection<String>)
 }
 
 interface ProtonSessionLifecycle {

@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import me.proton.core.domain.entity.UserId
@@ -81,19 +82,20 @@ internal class ProtonTimelineRepository @Inject constructor(
         }
     }
 
-    suspend fun hydrateThumbnails(userId: UserId, maxDownloads: Int) = syncMutex.withLock {
-        val existing = cache.readIndex(userId.id)
-        if (!cache.hasTimelineSnapshot(userId.id)) return@withLock
-        val photosClient = clientProvider.get(userId)
-        val photos = syncPipeline.hydrateThumbnails(
-            photosClient = photosClient,
-            userId = userId,
-            existing = existing,
-            maxThumbnailDownloads = maxDownloads,
-            commitSnapshot = { cache.writeIndex(userId.id, it) },
-            onProgress = { emit(userId, it, hasLoaded = true, syncing = false) },
-        )
-        emit(userId, photos, hasLoaded = true, syncing = false)
+    internal fun markThumbnailAvailable(userId: UserId, nodeUid: String) {
+        mutableState.update { state ->
+            if (state.userId != userId.id) return@update state
+            val position = state.photos.indexOfFirst { photo ->
+                photo.nodeUid == nodeUid && !photo.hasThumbnail
+            }
+            if (position < 0) return@update state
+            val photos = state.photos.toMutableList()
+            photos[position] = photos[position].copy(hasThumbnail = true)
+            state.copy(
+                photos = photos,
+                downloadedThumbnailCount = state.downloadedThumbnailCount + 1,
+            )
+        }
     }
 
     internal suspend fun removePhotos(userId: UserId, nodeUids: Set<String>): Unit = syncMutex.withLock {

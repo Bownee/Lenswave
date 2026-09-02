@@ -41,22 +41,23 @@ interface ProtonTrashCache {
 interface ProtonMediaCache {
     fun readThumbnail(userId: String, nodeUid: String): ByteArray?
     fun writeThumbnail(userId: String, nodeUid: String, bytes: ByteArray)
+    fun removeThumbnail(userId: String, nodeUid: String)
     fun thumbnailIsDecodable(userId: String, nodeUid: String): Boolean
     fun readOriginal(userId: String, nodeUid: String): File?
     fun createOriginalTarget(userId: String, nodeUid: String): Pair<File, File>
     fun commitOriginal(userId: String, nodeUid: String, plaintext: File, target: File): File
     fun onOriginalStored(userId: String, target: File)
-    fun trimThumbnails(
-        userId: String,
-        limitBytes: Long = 96L * 1024L * 1024L,
-        ttlMillis: Long = 7L * 24L * 60L * 60L * 1_000L,
-    )
 }
 
 interface ProtonSessionCache {
     fun clearUser(userId: String)
     fun trimUser(userId: String)
     fun writeLastSuccessfulSync(userId: String, source: String, timestampMillis: Long)
+}
+
+internal interface ProtonThumbnailQueueStore {
+    fun readThumbnailQueue(userId: String): List<ProtonThumbnailQueueEntry>
+    fun writeThumbnailQueue(userId: String, entries: List<ProtonThumbnailQueueEntry>)
 }
 
 @Module
@@ -67,4 +68,7 @@ internal abstract class ProtonCacheModule {
     @Binds abstract fun bindTrashCache(implementation: ProtonPhotoCache): ProtonTrashCache
     @Binds abstract fun bindMediaCache(implementation: ProtonPhotoCache): ProtonMediaCache
     @Binds abstract fun bindSessionCache(implementation: ProtonPhotoCache): ProtonSessionCache
+    @Binds abstract fun bindThumbnailQueueStore(
+        implementation: ProtonPhotoCache,
+    ): ProtonThumbnailQueueStore
 }

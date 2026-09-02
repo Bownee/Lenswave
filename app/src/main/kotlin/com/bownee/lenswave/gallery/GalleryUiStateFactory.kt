@@ -202,13 +202,10 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
         val statusDetail = when {
             albumState.syncing -> text.string(R.string.loading_metadata)
             albumState.errorMessage != null -> text.string(R.string.could_not_refresh)
-            albumState.downloadingThumbnails && albumState.downloadedThumbnailCount < albumState.photos.size ->
-                text.string(
-                    R.string.downloading_thumbnails_progress,
-                    albumState.downloadedThumbnailCount,
-                    albumState.photos.size,
-                )
-            else -> photoCountStatus(assets.size)
+            else -> protonLoadingDetail(
+                inputs,
+                ProtonThumbnailProgressCalculator.timeline(albumState.photos),
+            ) ?: photoCountStatus(assets.size)
         }
         val status = status(destination.album.name, statusDetail)
         val emptyState = when {

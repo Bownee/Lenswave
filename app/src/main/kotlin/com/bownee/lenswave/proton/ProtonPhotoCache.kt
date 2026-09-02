@@ -13,7 +13,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
-class ProtonPhotoCache @Inject constructor(
+internal class ProtonPhotoCache @Inject constructor(
     @ApplicationContext context: Context,
     private val secureFiles: SecureFileStore,
     private val clock: LenswaveClock,
@@ -23,7 +23,8 @@ class ProtonPhotoCache @Inject constructor(
     ProtonAlbumCache,
     ProtonTrashCache,
     ProtonMediaCache,
-    ProtonSessionCache {
+    ProtonSessionCache,
+    ProtonThumbnailQueueStore {
     private val root = File(context.filesDir, "proton-photo-cache").apply { mkdirs() }
     private val originals = File(context.cacheDir, "proton-originals").apply { mkdirs() }
     private val decrypted = File(context.cacheDir, "proton-decrypted").apply {
@@ -50,6 +51,10 @@ class ProtonPhotoCache @Inject constructor(
         target.parentFile?.mkdirs()
         secureFiles.write(scope(userId), target, bytes, "Could not commit thumbnail cache file")
         target.setLastModified(clock.nowMillis())
+    }
+
+    override fun removeThumbnail(userId: String, nodeUid: String) {
+        thumbnailFile(userId, nodeUid).delete()
     }
 
     private fun validateThumbnailFile(userId: String, file: File): Boolean {
@@ -194,6 +199,58 @@ class ProtonPhotoCache @Inject constructor(
         )
     }
 
+    override fun readThumbnailQueue(userId: String): List<ProtonThumbnailQueueEntry> {
+        val queue = thumbnailQueueFile(userId)
+        if (!queue.isFile) return emptyList()
+        return runCatching {
+            val array = JSONArray(readText(userId, queue))
+            buildList {
+                for (position in 0 until array.length()) {
+                    val value = array.getJSONObject(position)
+                    val sources = value.getJSONArray("sources")
+                    add(
+                        ProtonThumbnailQueueEntry(
+                            nodeUid = value.getString("nodeUid"),
+                            sources = buildSet {
+                                for (sourcePosition in 0 until sources.length()) {
+                                    add(sources.getString(sourcePosition))
+                                }
+                            },
+                            priority = value.getInt("priority"),
+                            order = value.getLong("order"),
+                            retryCount = value.optInt("retryCount"),
+                            retryAtMillis = value.optLong("retryAtMillis"),
+                        )
+                    )
+                }
+            }
+        }.getOrElse {
+            queue.delete()
+            emptyList()
+        }
+    }
+
+    override fun writeThumbnailQueue(userId: String, entries: List<ProtonThumbnailQueueEntry>) {
+        val array = JSONArray()
+        entries.forEach { entry ->
+            array.put(
+                JSONObject()
+                    .put("nodeUid", entry.nodeUid)
+                    .put("sources", JSONArray(entry.sources.sorted()))
+                    .put("priority", entry.priority)
+                    .put("order", entry.order)
+                    .put("retryCount", entry.retryCount)
+                    .put("retryAtMillis", entry.retryAtMillis)
+            )
+        }
+        writeAtomically(
+            userId,
+            thumbnailQueueFile(userId),
+            array.toString(),
+            "Could not commit Proton thumbnail queue",
+        )
+    }
+
     override fun reconcileAlbums(userId: String, remoteAlbumUids: Collection<String>) {
         val validNames = remoteAlbumUids.mapTo(mutableSetOf(), ::safeName)
         albumPhotosDirectory(userId).listFiles()?.forEach { file ->
@@ -257,10 +314,10 @@ class ProtonPhotoCache @Inject constructor(
         trimDirectory(decryptedDirectory(userId), DECRYPTED_CACHE_LIMIT_BYTES, DECRYPTED_TTL_MILLIS)
     }
 
-    override fun trimThumbnails(
+    private fun trimThumbnails(
         userId: String,
-        limitBytes: Long,
-        ttlMillis: Long,
+        limitBytes: Long = THUMBNAIL_CACHE_LIMIT_BYTES,
+        ttlMillis: Long = THUMBNAIL_TTL_MILLIS,
     ) {
         trimDirectory(thumbnailDirectory(userId), limitBytes, ttlMillis)
     }
@@ -370,6 +427,9 @@ class ProtonPhotoCache @Inject constructor(
     private fun syncMetadataFile(userId: String, source: String): File =
         File(File(userDirectory(userId), "sync"), "${safeName(source)}.timestamp")
 
+    private fun thumbnailQueueFile(userId: String): File =
+        File(userDirectory(userId), "thumbnail-queue.json")
+
     private fun userDirectory(userId: String): File = File(root, safeName(userId))
 
     private fun readPhotoIndex(userId: String, index: File): List<ProtonGalleryPhoto> {
@@ -454,8 +514,10 @@ class ProtonPhotoCache @Inject constructor(
     private companion object {
         const val ORIGINAL_CACHE_LIMIT_BYTES = 256L * 1024L * 1024L
         const val DECRYPTED_CACHE_LIMIT_BYTES = 64L * 1024L * 1024L
+        const val THUMBNAIL_CACHE_LIMIT_BYTES = 96L * 1024L * 1024L
         const val ORIGINAL_TTL_MILLIS = 60L * 60L * 1_000L
         const val DECRYPTED_TTL_MILLIS = 30L * 60L * 1_000L
+        const val THUMBNAIL_TTL_MILLIS = 7L * 24L * 60L * 60L * 1_000L
         const val STALE_PART_TTL_MILLIS = 24L * 60L * 60L * 1_000L
     }
 }

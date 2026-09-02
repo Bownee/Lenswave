@@ -73,6 +73,9 @@ class GalleryListAdapter(
 
     fun selectedPhotos(): List<GalleryAsset> = selected.values.toList()
 
+    fun pendingProtonThumbnailNodeUids(firstPosition: Int, visibleItemCount: Int): Set<String> =
+        GalleryThumbnailPriorityPolicy.pendingNodeUids(rows, firstPosition, visibleItemCount)
+
     fun monthLabelForPosition(position: Int): String? {
         for (index in position.coerceAtMost(rows.lastIndex) downTo 0) {
             (rows[index] as? GalleryRow.MonthHeader)?.let { return it.label }
@@ -355,5 +358,32 @@ class GalleryListAdapter(
         const val ALBUM_COVER_ASPECT = 0.72f
         const val PHOTO_GAP_PX = 2
         const val ALBUM_GAP_PX = 4
+    }
+}
+
+internal object GalleryThumbnailPriorityPolicy {
+    fun pendingNodeUids(
+        rows: List<GalleryRow>,
+        firstPosition: Int,
+        visibleItemCount: Int,
+    ): Set<String> {
+        if (visibleItemCount <= 0 || rows.isEmpty()) return emptySet()
+        val start = firstPosition.coerceAtLeast(0)
+        val end = (start + visibleItemCount).coerceAtMost(rows.size)
+        return buildSet {
+            rows.subList(start.coerceAtMost(end), end).forEach { row ->
+                when (row) {
+                    is GalleryRow.MonthHeader -> Unit
+                    is GalleryRow.Photos -> row.items.forEach { asset ->
+                        (asset.primaryReplica as? PhotoReplica.Proton)
+                            ?.takeUnless(PhotoReplica.Proton::hasThumbnail)
+                            ?.let { add(it.nodeUid) }
+                    }
+                    is GalleryRow.Albums -> row.items.forEach { album ->
+                        if (!album.hasCoverThumbnail) album.coverPhotoNodeUid?.let(::add)
+                    }
+                }
+            }
+        }
     }
 }

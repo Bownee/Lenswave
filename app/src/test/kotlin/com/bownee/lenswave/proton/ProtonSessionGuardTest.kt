@@ -42,6 +42,33 @@ class ProtonSessionGuardTest {
     }
 
     @Test
+    fun operationsForTheSameUserCanRunConcurrently() = runBlocking {
+        val guard = ProtonSessionGuard()
+        val user = UserId("user")
+        guard.activate(user) { }
+        val bothEntered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var enteredCount = 0
+
+        val operations = List(2) {
+            async(Dispatchers.Default) {
+                guard.withActiveSession(user) {
+                    synchronized(guard) {
+                        enteredCount++
+                        if (enteredCount == 2) bothEntered.complete(Unit)
+                    }
+                    release.await()
+                }
+            }
+        }
+
+        bothEntered.await()
+        assertEquals(2, enteredCount)
+        release.complete(Unit)
+        operations.forEach { it.await() }
+    }
+
+    @Test
     fun activationAndDisconnectEnforceSessionOwnership() = runBlocking {
         val guard = ProtonSessionGuard()
         val userA = UserId("a")
@@ -86,6 +113,22 @@ class ProtonSessionGuardTest {
         }
         assertEquals(1, retries)
         assertTrue(guard.isActive(userB))
+    }
+
+    @Test
+    fun failedInactiveDisconnectPreservesTheActiveSession() = runBlocking {
+        val guard = ProtonSessionGuard()
+        val activeUser = UserId("active")
+        guard.activate(activeUser) { }
+
+        assertThrows(IllegalStateException::class.java) {
+            runBlocking {
+                guard.disconnect(UserId("inactive")) { error("teardown failed") }
+            }
+        }
+
+        assertTrue(guard.isActive(activeUser))
+        assertEquals("active", guard.withActiveSession(activeUser) { "active" })
     }
 
     @Test

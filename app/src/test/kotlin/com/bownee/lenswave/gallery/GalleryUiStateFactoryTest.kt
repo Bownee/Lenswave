@@ -136,6 +136,9 @@ class GalleryUiStateFactoryTest {
             GalleryUiInputs(
                 destination = GalleryDestination.ProtonAlbumPhotos(album),
                 protonAccountStatus = ProtonAccountStatus.CONNECTED,
+                protonGallery = ProtonGalleryState(
+                    thumbnailWorkStatus = ProtonThumbnailWorkStatus.Running(1, 25),
+                ),
                 protonAlbumPhotos = ProtonAlbumPhotosState(
                     albumUid = album.nodeUid,
                     albumName = album.name,
@@ -144,7 +147,6 @@ class GalleryUiStateFactoryTest {
                         ProtonGalleryPhoto("pending", 1, hasThumbnail = false),
                     ),
                     hasLoaded = true,
-                    downloadingThumbnails = true,
                     downloadedThumbnailCount = 1,
                 ),
             ),
@@ -390,7 +392,6 @@ class GalleryUiStateFactoryTest {
 
         assertFalse(state.isRefreshing)
         assertFalse(state.statusText.contains(R.string.downloading_thumbnails_progress.toString()))
-        assertFalse(state.statusText.contains(R.string.proton_sync_timeout_retry_scheduled.toString()))
     }
 
     @Test
@@ -413,7 +414,6 @@ class GalleryUiStateFactoryTest {
 
         assertFalse(state.isRefreshing)
         assertNotNull(state.emptyState)
-        assertFalse(state.statusText.contains(R.string.proton_sync_stopped.toString()))
     }
 
     private fun loadingMetadata() = ProtonMetadataState(

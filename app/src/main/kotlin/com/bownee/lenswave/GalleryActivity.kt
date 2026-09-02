@@ -8,9 +8,9 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.net.Uri
 import android.provider.Settings
 import android.view.Gravity
 import android.view.View
@@ -26,6 +26,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.edit
 import androidx.core.graphics.Insets
 import androidx.core.graphics.drawable.toDrawable
+import androidx.core.net.toUri
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -176,7 +177,7 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
 
     override fun onUpdateRequested() {
         try {
-            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(LATEST_RELEASE_PAGE_URL)))
+            startActivity(Intent(Intent.ACTION_VIEW, LATEST_RELEASE_PAGE_URL.toUri()))
         } catch (_: ActivityNotFoundException) {
             Toast.makeText(this, R.string.no_browser_for_update, Toast.LENGTH_LONG).show()
         }
@@ -205,6 +206,7 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
                 onPhotoClicked = ::openPhoto,
                 onAlbumClicked = ::openAlbum,
                 onSelectionChanged = ::showSelection,
+                onVisibleThumbnailsChanged = viewModel::prioritizeVisibleThumbnails,
                 onRefresh = {
                     hideDevicePicker()
                     viewModel.requestRefresh()
@@ -309,6 +311,7 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
                     adapter.submitAlbums(content.albums)
                 }
             }
+            screen.scheduleVisibleThumbnailUpdate()
         }
         state.emptyState?.let { empty ->
             screen.showEmptyState(
