@@ -54,32 +54,32 @@ internal class ProtonAlbumRepository @Inject constructor(
 
     suspend fun syncMetadata(userId: UserId, forceRemote: Boolean) = albumsSyncMutex.withLock {
         val existing = cache.readAlbums(userId.id)
-        emitAlbums(
-            userId,
-            existing,
-            syncing = true,
-            hasLoaded = cache.hasAlbumsSnapshot(userId.id),
-        )
+        val hasCachedSnapshot = cache.hasAlbumsSnapshot(userId.id)
         try {
-            val photosClient = clientProvider.get(userId)
             val shouldEnumerate = snapshots.shouldEnumerate(
-                userId.id, ProtonSyncSource.ALBUMS, ALBUMS_SYNC_KEY, forceRemote, cache.hasAlbumsSnapshot(userId.id),
+                userId.id,
+                ProtonSyncSource.ALBUMS,
+                ALBUMS_SYNC_KEY,
+                forceRemote,
+                hasCachedSnapshot,
             )
-            val albums = if (shouldEnumerate) {
-                val sharedNodeUids = photosClient.enumerateSharedWithMeNodeUids().toList()
-                (photosClient.enumerateAlbumNodeUids().toList() + sharedNodeUids)
-                    .distinctBy(NodeUid::value)
-                    .map { nodeUid -> loadAlbum(photosClient, userId, nodeUid) }
-                    .sortedByDescending(ProtonAlbum::lastActivityEpochSeconds)
-                    .toMutableList()
-                    .also { remoteAlbums ->
-                        cache.reconcileAlbums(userId.id, remoteAlbums.map(ProtonAlbum::nodeUid))
-                        cache.writeAlbums(userId.id, remoteAlbums)
-                        snapshots.commit(userId.id, ALBUMS_SYNC_KEY)
-                    }
-            } else {
-                existing.toMutableList()
+            if (!shouldEnumerate) {
+                emitAlbums(userId, existing, syncing = false, hasLoaded = true)
+                return@withLock
             }
+            emitAlbums(userId, existing, syncing = true, hasLoaded = hasCachedSnapshot)
+            val photosClient = clientProvider.get(userId)
+            val sharedNodeUids = photosClient.enumerateSharedWithMeNodeUids().toList()
+            val albums = (photosClient.enumerateAlbumNodeUids().toList() + sharedNodeUids)
+                .distinctBy(NodeUid::value)
+                .map { nodeUid -> loadAlbum(photosClient, userId, nodeUid) }
+                .sortedByDescending(ProtonAlbum::lastActivityEpochSeconds)
+                .toMutableList()
+                .also { remoteAlbums ->
+                    cache.reconcileAlbums(userId.id, remoteAlbums.map(ProtonAlbum::nodeUid))
+                    cache.writeAlbums(userId.id, remoteAlbums)
+                    snapshots.commit(userId.id, ALBUMS_SYNC_KEY)
+                }
 
             emitAlbums(userId, albums, syncing = false)
         } catch (error: CancellationException) {
@@ -100,26 +100,23 @@ internal class ProtonAlbumRepository @Inject constructor(
         forceRemote: Boolean,
     ) = albumPhotosSyncMutex.withLock {
         val existing = cache.readAlbumPhotos(userId.id, album.nodeUid)
-        emitAlbumPhotos(
-            userId,
-            album,
-            existing,
-            hasLoaded = cache.hasAlbumPhotosSnapshot(userId.id, album.nodeUid),
-            syncing = true,
-        )
+        val hasCachedSnapshot = cache.hasAlbumPhotosSnapshot(userId.id, album.nodeUid)
         try {
-            val photosClient = clientProvider.get(userId)
             val syncKey = "$ALBUM_PHOTOS_SYNC_KEY:${album.nodeUid}"
             val shouldEnumerate = snapshots.shouldEnumerate(
                 userId.id,
                 ProtonSyncSource.ALBUM_PHOTOS,
                 syncKey,
                 forceRemote,
-                cache.hasAlbumPhotosSnapshot(userId.id, album.nodeUid),
+                hasCachedSnapshot,
             )
+            if (!shouldEnumerate) {
+                emitAlbumPhotos(userId, album, existing, hasLoaded = true, syncing = false)
+                return@withLock
+            }
+            emitAlbumPhotos(userId, album, existing, hasLoaded = hasCachedSnapshot, syncing = true)
+            val photosClient = clientProvider.get(userId)
             val photos = syncPipeline.synchronizeMetadata(
-                existing = existing,
-                shouldEnumerate = shouldEnumerate,
                 enumerate = {
                     photosClient.enumerateAlbum(NodeUid(album.nodeUid)).toList().map { item ->
                         ProtonGalleryPhoto(

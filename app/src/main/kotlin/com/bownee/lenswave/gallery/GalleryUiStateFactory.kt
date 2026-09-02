@@ -76,7 +76,11 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
                 append(text.string(R.string.status_separator))
                 append(text.string(R.string.loading_metadata))
             } else if (inputs.protonAccountStatus == ProtonAccountStatus.CONNECTED) {
-                val detail = if (inputs.protonGallery.syncing) {
+                val detail = if (inputs.shouldShowMetadataLoading(
+                        inputs.protonGallery.syncing,
+                        inputs.protonGallery.hasLoaded,
+                    )
+                ) {
                     text.string(R.string.loading_metadata)
                 } else {
                     protonLoadingDetail(
@@ -101,7 +105,7 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
         val emptyState = when {
             assets.isNotEmpty() || inputs.devicePhotos.isLoading -> null
             inputs.protonAccountStatus == ProtonAccountStatus.CONNECTED &&
-                (inputs.protonGallery.syncing || !inputs.protonGallery.hasLoaded) -> null
+                !inputs.protonGallery.hasLoaded -> null
             inputs.protonAccountStatus == ProtonAccountStatus.CONNECTING -> loadingMetadataEmptyState()
             inputs.protonAccountStatus == ProtonAccountStatus.DISCONNECTED -> GalleryEmptyState(
                 title = text.string(R.string.no_device_photos),
@@ -163,7 +167,10 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
         protonUnavailable(inputs)?.let { return it }
         val assets = inputs.protonGallery.photos.map { it.toGalleryAsset() }
         val statusDetail = when {
-            inputs.protonGallery.syncing -> text.string(R.string.loading_metadata)
+            inputs.shouldShowMetadataLoading(
+                inputs.protonGallery.syncing,
+                inputs.protonGallery.hasLoaded,
+            ) -> text.string(R.string.loading_metadata)
             inputs.protonGallery.errorMessage != null -> text.string(R.string.could_not_refresh)
             else -> protonLoadingDetail(
                 inputs,
@@ -177,7 +184,7 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
                 text.string(R.string.could_not_load_proton_photos),
                 text.string(R.string.check_connection_refresh),
             )
-            inputs.protonGallery.syncing || !inputs.protonGallery.hasLoaded -> null
+            !inputs.protonGallery.hasLoaded -> null
             else -> GalleryEmptyState(
                 text.string(R.string.no_proton_photos),
                 text.string(R.string.proton_photos_appear_here),
@@ -191,7 +198,8 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
         val state = inputs.protonAlbums
         val albums = state.albums
         val statusDetail = when {
-            state.syncing -> text.string(R.string.loading_metadata)
+            inputs.shouldShowMetadataLoading(state.syncing, state.hasLoaded) ->
+                text.string(R.string.loading_metadata)
             state.errorMessage != null -> text.string(R.string.could_not_refresh)
             else -> protonLoadingDetail(
                 inputs,
@@ -205,7 +213,7 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
                 text.string(R.string.could_not_load_proton_albums),
                 text.string(R.string.check_connection_refresh),
             )
-            state.syncing || !state.hasLoaded -> null
+            !state.hasLoaded -> null
             else -> GalleryEmptyState(
                 text.string(R.string.no_proton_albums),
                 text.string(R.string.proton_albums_appear_here),
@@ -223,7 +231,8 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
             ?: ProtonAlbumPhotosState()
         val assets = albumState.photos.map { it.toGalleryAsset() }
         val statusDetail = when {
-            albumState.syncing -> text.string(R.string.loading_metadata)
+            inputs.shouldShowMetadataLoading(albumState.syncing, albumState.hasLoaded) ->
+                text.string(R.string.loading_metadata)
             albumState.errorMessage != null -> text.string(R.string.could_not_refresh)
             else -> protonLoadingDetail(
                 inputs,
@@ -232,7 +241,7 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
         }
         val status = status(destination.album.name, statusDetail)
         val emptyState = when {
-            assets.isNotEmpty() || albumState.syncing || !albumState.hasLoaded -> null
+            assets.isNotEmpty() || !albumState.hasLoaded -> null
             albumState.errorMessage != null -> GalleryEmptyState(
                 title = text.string(R.string.could_not_load_album),
                 message = text.string(R.string.check_connection_refresh),
@@ -295,7 +304,8 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
         val state = inputs.protonTrash
         val assets = ProtonTrashGallery.createPhotos(state.photos)
         val statusDetail = when {
-            state.syncing -> text.string(R.string.loading_metadata)
+            inputs.shouldShowMetadataLoading(state.syncing, state.hasLoaded) ->
+                text.string(R.string.loading_metadata)
             state.errorMessage != null -> text.string(R.string.could_not_refresh)
             else -> protonLoadingDetail(
                 inputs,
@@ -309,7 +319,7 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
                 text.string(R.string.could_not_load_proton_trash),
                 text.string(R.string.check_connection_refresh),
             )
-            state.syncing || !state.hasLoaded -> null
+            !state.hasLoaded -> null
             else -> GalleryEmptyState(
                 text.string(R.string.trash_empty),
                 text.string(R.string.proton_trash_empty_message),
@@ -363,6 +373,11 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
         showDeleteAll = showDeleteAll,
         selectedDeviceCollection = inputs.selectedDeviceCollection,
     )
+
+    private fun GalleryUiInputs.shouldShowMetadataLoading(
+        syncing: Boolean,
+        hasLoaded: Boolean,
+    ): Boolean = syncing && (!hasLoaded || isRefreshing)
 
     private fun protonLoadingDetail(
         inputs: GalleryUiInputs,

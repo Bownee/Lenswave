@@ -36,20 +36,22 @@ internal class ProtonTimelineRepository @Inject constructor(
 
     suspend fun syncMetadata(userId: UserId, forceRemote: Boolean) = syncMutex.withLock {
         val existing = cache.readIndex(userId.id)
-        emit(
-            userId = userId,
-            photos = existing,
-            hasLoaded = cache.hasTimelineSnapshot(userId.id),
-            syncing = true,
-        )
+        val hasCachedSnapshot = cache.hasTimelineSnapshot(userId.id)
         try {
-            val photosClient = clientProvider.get(userId)
             val shouldEnumerate = snapshots.shouldEnumerate(
-                userId.id, ProtonSyncSource.TIMELINE, SYNC_KEY, forceRemote, cache.hasTimelineSnapshot(userId.id),
+                userId.id,
+                ProtonSyncSource.TIMELINE,
+                SYNC_KEY,
+                forceRemote,
+                hasCachedSnapshot,
             )
+            if (!shouldEnumerate) {
+                emit(userId, existing, hasLoaded = true, syncing = false)
+                return@withLock
+            }
+            emit(userId, existing, hasLoaded = hasCachedSnapshot, syncing = true)
+            val photosClient = clientProvider.get(userId)
             val photos = syncPipeline.synchronizeMetadata(
-                existing = existing,
-                shouldEnumerate = shouldEnumerate,
                 enumerate = {
                     photosClient.enumerateTimeline().toList().map { item ->
                         ProtonGalleryPhoto(

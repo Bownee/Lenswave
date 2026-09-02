@@ -38,30 +38,30 @@ internal class ProtonTrashRepository @Inject constructor(
 
     suspend fun syncMetadata(userId: UserId, forceRemote: Boolean) = syncMutex.withLock {
         val existing = cache.readTrash(userId.id)
-        emit(
-            userId,
-            existing,
-            syncing = true,
-            hasLoaded = cache.hasTrashSnapshot(userId.id),
-        )
+        val hasCachedSnapshot = cache.hasTrashSnapshot(userId.id)
         try {
-            val photosClient = clientProvider.get(userId)
             val shouldEnumerate = snapshots.shouldEnumerate(
-                userId.id, ProtonSyncSource.TRASH, SYNC_KEY, forceRemote, cache.hasTrashSnapshot(userId.id),
+                userId.id,
+                ProtonSyncSource.TRASH,
+                SYNC_KEY,
+                forceRemote,
+                hasCachedSnapshot,
             )
-            val photos = if (shouldEnumerate) {
-                photosClient.enumerateTrashNodeUids().toList().mapNotNull { nodeUid ->
-                    requireNotNull(photosClient.getNode(nodeUid)) {
-                        "Proton returned no node for ${nodeUid.value}"
-                    }.toProtonTrashPhoto(
-                        hasThumbnail = cache.thumbnailIsDecodable(userId.id, nodeUid.value),
-                    )
-                }.sortedByDescending(ProtonTrashPhoto::trashedAtEpochSeconds).toMutableList().also {
-                    cache.writeTrash(userId.id, it)
-                    snapshots.commit(userId.id, SYNC_KEY)
-                }
-            } else {
-                existing.toMutableList()
+            if (!shouldEnumerate) {
+                emit(userId, existing, syncing = false, hasLoaded = true)
+                return@withLock
+            }
+            emit(userId, existing, syncing = true, hasLoaded = hasCachedSnapshot)
+            val photosClient = clientProvider.get(userId)
+            val photos = photosClient.enumerateTrashNodeUids().toList().mapNotNull { nodeUid ->
+                requireNotNull(photosClient.getNode(nodeUid)) {
+                    "Proton returned no node for ${nodeUid.value}"
+                }.toProtonTrashPhoto(
+                    hasThumbnail = cache.thumbnailIsDecodable(userId.id, nodeUid.value),
+                )
+            }.sortedByDescending(ProtonTrashPhoto::trashedAtEpochSeconds).toMutableList().also {
+                cache.writeTrash(userId.id, it)
+                snapshots.commit(userId.id, SYNC_KEY)
             }
 
             emit(userId, photos, syncing = false)

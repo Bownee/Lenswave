@@ -166,6 +166,48 @@ class GalleryUiStateFactoryTest {
     }
 
     @Test
+    fun `cached timeline background refresh is visually silent`() {
+        val state = factory.create(
+            GalleryUiInputs(
+                destination = GalleryDestination.ProtonTimeline,
+                protonAccountStatus = ProtonAccountStatus.CONNECTED,
+                protonGallery = ProtonGalleryState(hasLoaded = true, syncing = true),
+            ),
+        )
+
+        assertFalse(state.statusText.contains(R.string.loading_metadata.toString()))
+        assertNotNull(state.emptyState)
+    }
+
+    @Test
+    fun `cached albums background refresh is visually silent`() {
+        val state = factory.create(
+            GalleryUiInputs(
+                destination = GalleryDestination.ProtonAlbums,
+                protonAccountStatus = ProtonAccountStatus.CONNECTED,
+                protonAlbums = ProtonAlbumsState(hasLoaded = true, syncing = true),
+            ),
+        )
+
+        assertFalse(state.statusText.contains(R.string.loading_metadata.toString()))
+        assertNotNull(state.emptyState)
+    }
+
+    @Test
+    fun `cached trash background refresh is visually silent`() {
+        val state = factory.create(
+            GalleryUiInputs(
+                destination = GalleryDestination.Trash(PhotoSource.PROTON),
+                protonAccountStatus = ProtonAccountStatus.CONNECTED,
+                protonTrash = ProtonTrashState(hasLoaded = true, syncing = true),
+            ),
+        )
+
+        assertFalse(state.statusText.contains(R.string.loading_metadata.toString()))
+        assertNotNull(state.emptyState)
+    }
+
+    @Test
     fun `album metadata is visible before its cover thumbnail loads`() {
         val album = ProtonAlbum(
             nodeUid = "album",
