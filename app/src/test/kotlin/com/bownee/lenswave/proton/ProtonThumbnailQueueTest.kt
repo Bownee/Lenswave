@@ -188,7 +188,7 @@ class ProtonThumbnailQueueTest {
         queue.replaceSource(USER_ID, "album:kept", candidates("kept-photo"))
         queue.replaceSource(USER_ID, "album:deleted", candidates("deleted-photo"))
 
-        queue.retainAlbumSources(USER_ID, listOf("kept"))
+        queue.replaceSources(USER_ID, emptyMap(), retainedAlbumNodeUids = listOf("kept"))
 
         assertEquals(listOf("kept-photo"), store.entries.getValue(USER_ID).map { it.nodeUid })
     }

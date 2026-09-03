@@ -59,10 +59,3 @@ data class GalleryUiState(
     val isTrash: Boolean
         get() = destination is GalleryDestination.Trash
 }
-
-internal data class GallerySourceSnapshot<T>(
-    val items: List<T> = emptyList(),
-    val isLoading: Boolean = false,
-    val hasLoaded: Boolean = false,
-    val errorMessage: String? = null,
-)

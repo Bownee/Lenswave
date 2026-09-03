@@ -24,8 +24,7 @@ data class ProtonAlbumsState(
     val albums: List<ProtonAlbum> = emptyList(),
     val hasLoaded: Boolean = false,
     val syncing: Boolean = false,
-    val downloadedCoverCount: Int = 0,
-    val errorMessage: String? = null,
+    val refreshFailed: Boolean = false,
 )
 
 data class ProtonAlbumPhotosState(
@@ -35,6 +34,5 @@ data class ProtonAlbumPhotosState(
     val photos: List<ProtonGalleryPhoto> = emptyList(),
     val hasLoaded: Boolean = false,
     val syncing: Boolean = false,
-    val downloadedThumbnailCount: Int = 0,
-    val errorMessage: String? = null,
+    val refreshFailed: Boolean = false,
 )

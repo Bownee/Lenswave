@@ -135,10 +135,10 @@ class ProtonPhotosClientProvider @Inject constructor(
         )
     }
 
-    private companion object {
+    internal companion object {
         const val BASE_URL = "https://drive-api.proton.me/"
-        const val PREFERENCES_NAME = "proton-sdk"
-        fun clientUidKey(userId: UserId): String =
+        private const val PREFERENCES_NAME = "proton-sdk"
+        private fun clientUidKey(userId: UserId): String =
             "client-uid-${AtomicFileStore.safeName(userId.id)}"
     }
 }

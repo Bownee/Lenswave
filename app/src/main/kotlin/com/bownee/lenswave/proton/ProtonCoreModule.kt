@@ -92,7 +92,7 @@ object ProtonCoreModule {
 
     @Provides
     @BaseProtonApiUrl
-    fun provideBaseUrl(): HttpUrl = "https://drive-api.proton.me/".toHttpUrl()
+    fun provideBaseUrl(): HttpUrl = ProtonPhotosClientProvider.BASE_URL.toHttpUrl()
 
     @Provides
     @HumanVerificationApiHost

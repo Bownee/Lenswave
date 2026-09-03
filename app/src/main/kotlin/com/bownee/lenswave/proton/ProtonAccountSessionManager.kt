@@ -27,7 +27,6 @@ data class ProtonAccountSessionState(
     val activeUserId: UserId? = null,
     val initialized: Boolean = false,
     val transitioning: Boolean = false,
-    val transitionFailed: Boolean = false,
 )
 
 /** Owns every process-wide Proton account transition, including failure recovery. */
@@ -59,7 +58,6 @@ class ProtonAccountSessionManager @Inject constructor(
                 throw error
             } catch (error: Throwable) {
                 LenswaveDiagnostics.reportFailure("account-observer", error)
-                mutableState.value = mutableState.value.copy(transitionFailed = true)
                 delay(retryDelayMillis)
                 retryDelayMillis = (retryDelayMillis * 2).coerceAtMost(MAX_RETRY_MILLIS)
             }
@@ -98,10 +96,7 @@ class ProtonAccountSessionManager @Inject constructor(
                 throw error
             } catch (error: Throwable) {
                 LenswaveDiagnostics.reportFailure("account-transition", error)
-                mutableState.value = mutableState.value.copy(
-                    transitioning = true,
-                    transitionFailed = true,
-                )
+                mutableState.value = mutableState.value.copy(transitioning = true)
                 delay(retryDelayMillis)
                 retryDelayMillis = (retryDelayMillis * 2).coerceAtMost(MAX_RETRY_MILLIS)
             }

@@ -44,9 +44,11 @@ internal class ProtonTagListingClient @Inject constructor(
                     tag = tag.apiValue,
                 )
             }.valueOrThrow
+            var lastLinkId: String? = null
             val page = response.getValue("Photos").jsonArray.map { value ->
                 val photo = value.jsonObject
                 val linkId = photo.getValue("LinkID").jsonPrimitive.content
+                lastLinkId = linkId
                 ProtonGalleryPhoto(
                     nodeUid = "$volumeId~$linkId",
                     captureTimeEpochSeconds = photo.getValue("CaptureTime").jsonPrimitive.content.toLong(),
@@ -54,7 +56,7 @@ internal class ProtonTagListingClient @Inject constructor(
                 )
             }
             photos += page
-            previousPageLastLinkId = page.lastOrNull()?.nodeUid?.substringAfter('~')
+            previousPageLastLinkId = lastLinkId
         } while (page.size == PAGE_SIZE)
         return photos
     }

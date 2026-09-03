@@ -318,7 +318,7 @@ class ProtonPhotoGateway @Inject internal constructor(
             if (TIMELINE_QUEUE_SOURCE in entry.sources) timelineNodeUids += entry.nodeUid
             if (ALBUM_COVERS_QUEUE_SOURCE in entry.sources) albumCoverNodeUids += entry.nodeUid
             if (TRASH_QUEUE_SOURCE in entry.sources) trashNodeUids += entry.nodeUid
-            if (entry.sources.any { source -> source.startsWith("$ALBUM_PHOTOS_QUEUE_SOURCE:") }) {
+            if (entry.sources.any { source -> source.startsWith("${ProtonThumbnailQueue.ALBUM_PHOTOS_SOURCE}:") }) {
                 albumPhotoNodeUids += entry.nodeUid
             }
         }
@@ -377,7 +377,7 @@ class ProtonPhotoGateway @Inject internal constructor(
         }?.let { state ->
             thumbnailQueue.replaceSource(
                 userId.id,
-                "$ALBUM_PHOTOS_QUEUE_SOURCE:${album.nodeUid}",
+                "${ProtonThumbnailQueue.ALBUM_PHOTOS_SOURCE}:${album.nodeUid}",
                 state.photos.filterNot(ProtonGalleryPhoto::hasThumbnail).map { photo ->
                     ProtonThumbnailCandidate(photo.nodeUid, photo.captureTimeEpochSeconds)
                 },
@@ -406,7 +406,7 @@ class ProtonPhotoGateway @Inject internal constructor(
         }
         albums.albumPhotosState.value.let { state ->
             if (state.photos.any { photo -> photo.nodeUid == nodeUid }) {
-                state.albumUid?.let { albumUid -> add("$ALBUM_PHOTOS_QUEUE_SOURCE:$albumUid") }
+                state.albumUid?.let { albumUid -> add("${ProtonThumbnailQueue.ALBUM_PHOTOS_SOURCE}:$albumUid") }
             }
         }
     }
@@ -416,7 +416,6 @@ class ProtonPhotoGateway @Inject internal constructor(
         const val TIMELINE_QUEUE_SOURCE = "timeline"
         const val ALBUM_COVERS_QUEUE_SOURCE = "album-covers"
         const val TRASH_QUEUE_SOURCE = "trash"
-        const val ALBUM_PHOTOS_QUEUE_SOURCE = "album"
         const val UNKNOWN_CAPTURE_TIME = Long.MIN_VALUE
     }
 }

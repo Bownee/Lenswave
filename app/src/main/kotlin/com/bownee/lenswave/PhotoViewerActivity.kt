@@ -5,9 +5,9 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
-import android.graphics.Bitmap
 import android.graphics.Color
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.text.format.DateFormat
 import android.text.format.Formatter
@@ -18,7 +18,6 @@ import android.view.animation.PathInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
-import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
@@ -52,7 +51,6 @@ import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import me.proton.core.domain.entity.UserId
@@ -75,7 +73,6 @@ class PhotoViewerActivity : FragmentActivity() {
     private val root get() = screen.root
     private val backgroundScrim get() = screen.backgroundScrim
     private val photoDetailsScroll get() = screen.photoDetailsScroll
-    private val photoDetailsSurface get() = screen.photoDetailsSurface
     private val mediaFrame get() = screen.mediaFrame
     private val thumbnailPreview get() = screen.thumbnailPreview
     private val peekPreview get() = screen.peekPreview
@@ -102,7 +99,6 @@ class PhotoViewerActivity : FragmentActivity() {
     private var favoriteInProgress = false
     private var dismissing = false
     private var photoReady = false
-    private var thumbnailBitmap: Bitmap? = null
     private var previewStableId: String? = null
     private var peekStableId: String? = null
     private var peekOffset = 0
@@ -301,7 +297,6 @@ class PhotoViewerActivity : FragmentActivity() {
         }
 
         clearThumbnailPreview()
-        thumbnailBitmap = requireNotNull(bitmap)
         previewStableId = requestedPhoto.stableId
         thumbnailPreview.setImageBitmap(bitmap)
         thumbnailPreview.visibility = View.VISIBLE
@@ -601,7 +596,6 @@ class PhotoViewerActivity : FragmentActivity() {
             hidePeek()
             return
         }
-        thumbnailBitmap = bitmap
         previewStableId = request.stableId
         thumbnailPreview.setImageBitmap(bitmap)
         thumbnailPreview.alpha = 1f
@@ -974,7 +968,6 @@ class PhotoViewerActivity : FragmentActivity() {
         mediaTitle.animate().alpha(1f).setDuration(duration).setInterpolator(verticalSettleInterpolator).start()
     }
 
-    @Suppress("DEPRECATION")
     private fun animateDismissToGallery(velocity: Float = 0f) {
         dismissing = true
         setActionsEnabled(false)
@@ -991,7 +984,7 @@ class PhotoViewerActivity : FragmentActivity() {
             .setInterpolator(verticalSettleInterpolator)
             .withEndAction {
                 finish()
-                overridePendingTransition(0, 0)
+                disableExitTransition()
             }
             .start()
         if (activeMedia !== photoView) {
@@ -1236,6 +1229,15 @@ class PhotoViewerActivity : FragmentActivity() {
             .coerceIn(140L, 260L)
     }
 
+    @Suppress("DEPRECATION")
+    private fun disableExitTransition() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            overrideActivityTransition(OVERRIDE_TRANSITION_CLOSE, 0, 0)
+        } else {
+            overridePendingTransition(0, 0)
+        }
+    }
+
     private fun handleBack() {
         if (detailsShown) hideDetails() else finish()
     }
@@ -1409,7 +1411,6 @@ class PhotoViewerActivity : FragmentActivity() {
         thumbnailPreview.translationY = 0f
         thumbnailPreview.scaleX = 1f
         thumbnailPreview.scaleY = 1f
-        thumbnailBitmap = null
         previewStableId = null
     }
 

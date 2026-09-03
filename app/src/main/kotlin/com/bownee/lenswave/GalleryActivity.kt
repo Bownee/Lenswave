@@ -106,7 +106,7 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
         ActivityResultContracts.RequestPermission()
     ) {
         notificationPermissionRequestInFlight = false
-        getSharedPreferences("permissions", MODE_PRIVATE).edit {
+        getSharedPreferences(PERMISSION_PREFERENCES_NAME, MODE_PRIVATE).edit {
             putBoolean(KEY_THUMBNAIL_NOTIFICATION_PERMISSION_REQUESTED, true)
         }
     }
@@ -300,7 +300,7 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
     }
 
     private fun requestThumbnailNotificationPermissionIfNeeded(state: GalleryUiState) {
-        val preferences = getSharedPreferences("permissions", MODE_PRIVATE)
+        val preferences = getSharedPreferences(PERMISSION_PREFERENCES_NAME, MODE_PRIVATE)
         if (!ThumbnailNotificationPermissionPolicy.shouldRequest(
                 apiLevel = Build.VERSION.SDK_INT,
                 protonConnected = state.isProtonConnected,
@@ -377,11 +377,11 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
             } else {
                 menu.add(android.view.Menu.NONE, SETTINGS_DISCONNECT_PROTON, 0, R.string.disconnect_proton)
             }
-            menu.add(android.view.Menu.NONE, SETTINGS_PRIVACY, 2, R.string.privacy_and_data)
+            menu.add(android.view.Menu.NONE, SETTINGS_PRIVACY, 1, R.string.privacy_and_data)
             menu.add(
                 android.view.Menu.NONE,
                 android.view.Menu.NONE,
-                3,
+                2,
                 getString(R.string.app_version, BuildConfig.VERSION_NAME),
             ).isEnabled = false
             setOnMenuItemClickListener { item ->
@@ -451,7 +451,6 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
     }
 
     private fun showSelection(selected: List<GalleryAsset>) {
-        val selecting = selected.isNotEmpty()
         val viewingTrash = currentUiState.isTrash
         screen.renderSelection(
             selectedCount = selected.size,
@@ -615,7 +614,8 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
         const val STATE_PENDING_UPDATE_VERSION = "gallery.pending-update-version"
         const val SETTINGS_CONNECT_PROTON = 1
         const val SETTINGS_DISCONNECT_PROTON = 2
-        const val SETTINGS_PRIVACY = 4
+        const val SETTINGS_PRIVACY = 3
+        const val PERMISSION_PREFERENCES_NAME = "permissions"
         const val KEY_THUMBNAIL_NOTIFICATION_PERMISSION_REQUESTED =
             "thumbnail-notification-permission-requested-v2"
     }

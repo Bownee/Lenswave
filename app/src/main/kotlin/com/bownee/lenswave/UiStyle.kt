@@ -91,26 +91,6 @@ object UiStyle {
 fun Context.dp(value: Int): Int =
     (value * resources.displayMetrics.density + 0.5f).toInt()
 
-internal fun View.applyVisibleVerticalScrollbar() {
-    isVerticalScrollBarEnabled = true
-    scrollBarStyle = View.SCROLLBARS_INSIDE_OVERLAY
-    setScrollBarSize(context.dp(5))
-    setScrollBarDefaultDelayBeforeFade(2_000)
-    setScrollBarFadeDuration(450)
-    setScrollbarFadingEnabled(true)
-    setVerticalScrollbarPosition(
-        if (layoutDirection == View.LAYOUT_DIRECTION_RTL) {
-            View.SCROLLBAR_POSITION_LEFT
-        } else {
-            View.SCROLLBAR_POSITION_RIGHT
-        }
-    )
-    verticalScrollbarThumbDrawable = GradientDrawable().apply {
-        shape = GradientDrawable.RECTANGLE
-        cornerRadius = context.dp(3).toFloat()
-        setColor(Color.argb(230, 214, 218, 228))
-    }
-}
 
 internal fun AbsListView.applyDraggableFastScroll() {
     isVerticalScrollBarEnabled = false

@@ -7,7 +7,6 @@ import android.view.MotionEvent
 import android.view.View
 import androidx.core.content.res.ResourcesCompat
 import androidx.core.view.isEmpty
-import androidx.core.view.ViewCompat
 import com.bownee.lenswave.R
 import com.bownee.lenswave.dp
 import kotlin.math.roundToInt

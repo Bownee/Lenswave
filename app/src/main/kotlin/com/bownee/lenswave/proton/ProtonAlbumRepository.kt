@@ -48,7 +48,6 @@ internal class ProtonAlbumRepository @Inject constructor(
             albumName = album.name,
             photos = photos,
             hasLoaded = cache.hasAlbumPhotosSnapshot(userId.id, album.nodeUid),
-            downloadedThumbnailCount = photos.count(ProtonGalleryPhoto::hasThumbnail),
         )
     }
 
@@ -89,7 +88,7 @@ internal class ProtonAlbumRepository @Inject constructor(
             LenswaveDiagnostics.reportFailure("album-sync", error)
             mutableAlbumsState.value = mutableAlbumsState.value.copy(
                 syncing = false,
-                errorMessage = "Could not refresh Proton albums",
+                refreshFailed = true,
             )
         }
     }
@@ -140,7 +139,7 @@ internal class ProtonAlbumRepository @Inject constructor(
             if (mutableAlbumPhotosState.value.albumUid == album.nodeUid) {
                 mutableAlbumPhotosState.value = mutableAlbumPhotosState.value.copy(
                     syncing = false,
-                    errorMessage = "Could not refresh this Proton album",
+                    refreshFailed = true,
                 )
             }
         }
@@ -159,7 +158,6 @@ internal class ProtonAlbumRepository @Inject constructor(
             if (completedCoverCount == 0) return@update state
             state.copy(
                 albums = albums,
-                downloadedCoverCount = state.downloadedCoverCount + completedCoverCount,
             )
         }
     }
@@ -177,7 +175,6 @@ internal class ProtonAlbumRepository @Inject constructor(
             if (invalidatedCount == 0) return@update state
             state.copy(
                 albums = albums,
-                downloadedCoverCount = (state.downloadedCoverCount - invalidatedCount).coerceAtLeast(0),
             )
         }
     }
@@ -195,7 +192,6 @@ internal class ProtonAlbumRepository @Inject constructor(
             if (completedCount == 0) return@update state
             state.copy(
                 photos = photos,
-                downloadedThumbnailCount = state.downloadedThumbnailCount + completedCount,
             )
         }
     }
@@ -213,7 +209,6 @@ internal class ProtonAlbumRepository @Inject constructor(
             if (invalidatedCount == 0) return@update state
             state.copy(
                 photos = photos,
-                downloadedThumbnailCount = (state.downloadedThumbnailCount - invalidatedCount).coerceAtLeast(0),
             )
         }
     }
@@ -228,7 +223,6 @@ internal class ProtonAlbumRepository @Inject constructor(
                 cache.writeAlbumPhotos(userId.id, albumUid, remaining)
                 mutableAlbumPhotosState.value = current.copy(
                     photos = remaining,
-                    downloadedThumbnailCount = remaining.count(ProtonGalleryPhoto::hasThumbnail),
                 )
             }
             // ProtonPhotoCache removes the nodes from every album index and reconciles all counts.
@@ -236,9 +230,6 @@ internal class ProtonAlbumRepository @Inject constructor(
             val updatedAlbums = cache.readAlbums(userId.id)
             mutableAlbumsState.value = mutableAlbumsState.value.copy(
                 albums = updatedAlbums,
-                downloadedCoverCount = updatedAlbums.count {
-                    it.coverPhotoNodeUid != null && it.hasCoverThumbnail
-                },
             )
             }
         }
@@ -283,7 +274,6 @@ internal class ProtonAlbumRepository @Inject constructor(
             albums = albums.toList(),
             hasLoaded = hasLoaded,
             syncing = syncing,
-            downloadedCoverCount = albums.count { it.coverPhotoNodeUid != null && it.hasCoverThumbnail },
         )
     }
 
@@ -303,7 +293,6 @@ internal class ProtonAlbumRepository @Inject constructor(
             photos = photos.toList(),
             hasLoaded = hasLoaded,
             syncing = syncing,
-            downloadedThumbnailCount = photos.count(ProtonGalleryPhoto::hasThumbnail),
         )
     }
 

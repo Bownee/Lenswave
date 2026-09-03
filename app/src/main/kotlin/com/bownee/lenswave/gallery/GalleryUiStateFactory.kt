@@ -59,14 +59,14 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
                 inputs.protonGallery.syncing,
                 inputs.protonGallery.hasLoaded,
             ) -> text.string(R.string.loading_metadata)
-            inputs.protonGallery.errorMessage != null -> text.string(R.string.could_not_refresh)
+            inputs.protonGallery.refreshFailed -> text.string(R.string.could_not_refresh)
             else -> protonLoadingDetail(
                 ProtonThumbnailProgressCalculator.timeline(inputs.protonGallery.photos),
             ) ?: photoCountStatus(assets.size)
         }
         val emptyState = when {
             assets.isNotEmpty() -> null
-            inputs.protonGallery.errorMessage != null -> GalleryEmptyState(
+            inputs.protonGallery.refreshFailed -> GalleryEmptyState(
                 text.string(R.string.could_not_load_proton_photos),
                 text.string(R.string.check_connection_refresh),
             )
@@ -89,7 +89,7 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
         val assets = state.photos.map { it.toGalleryAsset(tagIndex) }
         val statusDetail = when {
             state.syncing || !state.hasLoaded -> text.string(R.string.loading_metadata)
-            state.errorMessage != null -> text.string(R.string.could_not_refresh)
+            state.refreshFailed -> text.string(R.string.could_not_refresh)
             else -> protonLoadingDetail(
                 ProtonThumbnailProgressCalculator.timeline(state.photos),
             ) ?: photoCountStatus(assets.size)
@@ -97,14 +97,14 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
         val label = text.string(destination.tag.labelRes)
         val emptyState = when {
             assets.isNotEmpty() -> null
-            state.errorMessage != null -> GalleryEmptyState(
-                text.string(R.string.could_not_load_proton_filter, label),
+            state.refreshFailed -> GalleryEmptyState(
+                text.string(R.string.could_not_load_proton_tag, label),
                 text.string(R.string.check_connection_refresh),
             )
             !state.hasLoaded -> null
             else -> GalleryEmptyState(
-                text.string(R.string.no_media_in_filter, label),
-                text.string(R.string.proton_filtered_media_appear_here),
+                text.string(R.string.no_media_with_tag, label),
+                text.string(R.string.proton_tagged_media_appear_here),
             )
         }
         return base(inputs, GalleryContent.Photos(assets), statusDetail, emptyState)
@@ -187,7 +187,7 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
             ProtonAccountStatus.CONNECTED -> when {
                 inputs.shouldShowMetadataLoading(albums.syncing, albums.hasLoaded) ->
                     text.string(R.string.loading_metadata)
-                albums.errorMessage != null -> text.string(R.string.could_not_refresh)
+                albums.refreshFailed -> text.string(R.string.could_not_refresh)
                 else -> protonLoadingDetail(
                     ProtonThumbnailProgressCalculator.albumCovers(albums.albums),
                 ) ?: albumCountStatus(albums.albums.size)
@@ -219,14 +219,14 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
         val statusDetail = when {
             inputs.shouldShowMetadataLoading(albumState.syncing, albumState.hasLoaded) ->
                 text.string(R.string.loading_metadata)
-            albumState.errorMessage != null -> text.string(R.string.could_not_refresh)
+            albumState.refreshFailed -> text.string(R.string.could_not_refresh)
             else -> protonLoadingDetail(
                 ProtonThumbnailProgressCalculator.timeline(albumState.photos),
             ) ?: photoCountStatus(assets.size)
         }
         val emptyState = when {
             assets.isNotEmpty() || !albumState.hasLoaded -> null
-            albumState.errorMessage != null -> GalleryEmptyState(
+            albumState.refreshFailed -> GalleryEmptyState(
                 title = text.string(R.string.could_not_load_album),
                 message = text.string(R.string.check_connection_refresh),
             )
@@ -247,14 +247,14 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
         val statusDetail = when {
             inputs.shouldShowMetadataLoading(state.syncing, state.hasLoaded) ->
                 text.string(R.string.loading_metadata)
-            state.errorMessage != null -> text.string(R.string.could_not_refresh)
+            state.refreshFailed -> text.string(R.string.could_not_refresh)
             else -> protonLoadingDetail(
                 ProtonThumbnailProgressCalculator.trash(state.photos),
             ) ?: photoCountStatus(assets.size)
         }
         val emptyState = when {
             assets.isNotEmpty() -> null
-            state.errorMessage != null -> GalleryEmptyState(
+            state.refreshFailed -> GalleryEmptyState(
                 text.string(R.string.could_not_load_proton_trash),
                 text.string(R.string.check_connection_refresh),
             )

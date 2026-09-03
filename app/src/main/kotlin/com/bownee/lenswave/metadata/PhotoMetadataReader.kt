@@ -3,9 +3,10 @@ package com.bownee.lenswave.metadata
 import android.content.Context
 import android.graphics.BitmapFactory
 import android.net.Uri
-import android.provider.MediaStore
-import android.provider.OpenableColumns
+import android.text.format.Formatter
 import androidx.exifinterface.media.ExifInterface
+import com.bownee.lenswave.ExifOrientation
+import com.bownee.lenswave.R
 import java.io.File
 import java.text.DateFormat
 import java.util.Date
@@ -30,6 +31,7 @@ data class PhotoLocation(
     fun coordinateText(): String = String.format(Locale.US, "%.5f, %.5f", latitude, longitude)
 }
 
+/** Builds the rows of the photo details sheet from a decrypted original on local storage. */
 class PhotoMetadataReader @Inject constructor() {
     fun read(
         context: Context,
@@ -38,37 +40,7 @@ class PhotoMetadataReader @Inject constructor() {
         fallbackTimestamp: Long,
     ): List<PhotoMetadataItem> {
         val resolver = context.contentResolver
-        var displayName = fallbackName
-        var size = 0L
-        var capturedAt = fallbackTimestamp
-        runCatching {
-            resolver.query(
-                uri,
-                arrayOf(
-                    OpenableColumns.DISPLAY_NAME,
-                    OpenableColumns.SIZE,
-                    MediaStore.Images.Media.DATE_TAKEN,
-                ),
-                null,
-                null,
-                null,
-            )?.use { cursor ->
-                if (cursor.moveToFirst()) {
-                    cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME).takeIf { it >= 0 }?.let { column ->
-                        displayName = cursor.getString(column).orEmpty().ifBlank { displayName }
-                    }
-                    cursor.getColumnIndex(OpenableColumns.SIZE).takeIf { it >= 0 }?.let { column ->
-                        size = cursor.getLong(column)
-                    }
-                    cursor.getColumnIndex(MediaStore.Images.Media.DATE_TAKEN).takeIf { it >= 0 }?.let { column ->
-                        capturedAt = cursor.getLong(column).takeIf { it > 0 } ?: capturedAt
-                    }
-                }
-            }
-        }
-        if (uri.scheme == "file") {
-            size = size.takeIf { it > 0 } ?: File(requireNotNull(uri.path)).length()
-        }
+        val size = if (uri.scheme == "file") File(requireNotNull(uri.path)).length() else 0L
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         runCatching {
             resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
@@ -86,51 +58,51 @@ class PhotoMetadataReader @Inject constructor() {
         val height = if (rotated) rawWidth else rawHeight
 
         return buildList {
-            displayName.takeIf(String::isNotBlank)?.let { add(PhotoMetadataItem("File name", it)) }
-            capturedAt.takeIf { it > 0 }?.let {
-                add(PhotoMetadataItem("Captured", DateFormat.getDateTimeInstance().format(Date(it))))
+            fun row(labelRes: Int, value: String?, action: PhotoMetadataAction? = null) {
+                if (value.isNullOrBlank()) return
+                add(PhotoMetadataItem(context.getString(labelRes), value, action))
             }
-            if (width > 0 && height > 0) add(PhotoMetadataItem("Dimensions", "$width × $height px"))
-            size.takeIf { it > 0 }?.let { add(PhotoMetadataItem("File size", formatBytes(it))) }
-            mimeType.takeIf(String::isNotBlank)?.let { add(PhotoMetadataItem("Format", it)) }
-            exif?.camera.takeIfNotBlank()?.let { add(PhotoMetadataItem("Camera", it)) }
-            exif?.lens.takeIfNotBlank()?.let { add(PhotoMetadataItem("Lens", it)) }
-            exif?.aperture.takeIfNotBlank()?.let { add(PhotoMetadataItem("Aperture", "f/$it")) }
-            exif?.exposure.takeIfNotBlank()?.let { add(PhotoMetadataItem("Exposure", "$it s")) }
-            exif?.iso.takeIfNotBlank()?.let { add(PhotoMetadataItem("ISO", it)) }
-            exif?.focalLength.takeIfNotBlank()?.let { add(PhotoMetadataItem("Focal length", "$it mm")) }
-            exif?.description.takeIfNotBlank()?.let { add(PhotoMetadataItem("Description", it)) }
-            exif?.artist.takeIfNotBlank()?.let { add(PhotoMetadataItem("Artist", it)) }
-            exif?.copyright.takeIfNotBlank()?.let { add(PhotoMetadataItem("Copyright", it)) }
+            row(R.string.metadata_file_name, fallbackName)
+            row(
+                R.string.metadata_captured,
+                fallbackTimestamp.takeIf { it > 0 }?.let { DateFormat.getDateTimeInstance().format(Date(it)) },
+            )
+            if (width > 0 && height > 0) {
+                row(R.string.metadata_dimensions, context.getString(R.string.metadata_dimensions_value, width, height))
+            }
+            row(R.string.metadata_file_size, size.takeIf { it > 0 }?.let { Formatter.formatShortFileSize(context, it) })
+            row(R.string.metadata_format, mimeType)
+            row(R.string.metadata_camera, exif?.camera)
+            row(R.string.metadata_lens, exif?.lens)
+            row(R.string.metadata_aperture, exif?.aperture?.let { context.getString(R.string.metadata_aperture_value, it) })
+            row(R.string.metadata_exposure, exif?.exposure?.let { context.getString(R.string.metadata_exposure_value, it) })
+            row(R.string.metadata_iso, exif?.iso)
+            row(
+                R.string.metadata_focal_length,
+                exif?.focalLength?.let { context.getString(R.string.metadata_focal_length_value, it) },
+            )
+            row(R.string.metadata_description, exif?.description)
+            row(R.string.metadata_artist, exif?.artist)
+            row(R.string.metadata_copyright, exif?.copyright)
             exif?.location?.let { location ->
-                add(PhotoMetadataItem(
-                    label = "Coordinates",
-                    value = location.coordinateText(),
-                    action = PhotoMetadataAction.OpenMap(location.latitude, location.longitude),
-                ))
-                location.altitudeMeters?.let { altitude ->
-                    add(PhotoMetadataItem("GPS altitude", String.format(Locale.getDefault(), "%.1f m", altitude)))
-                }
+                row(
+                    R.string.metadata_coordinates,
+                    location.coordinateText(),
+                    PhotoMetadataAction.OpenMap(location.latitude, location.longitude),
+                )
+                row(
+                    R.string.metadata_gps_altitude,
+                    location.altitudeMeters?.let { context.getString(R.string.metadata_gps_altitude_value, it) },
+                )
             }
-            exif?.gpsDirection.takeIfNotBlank()?.let { add(PhotoMetadataItem("GPS direction", "$it°")) }
+            row(
+                R.string.metadata_gps_direction,
+                exif?.gpsDirection?.let { context.getString(R.string.metadata_gps_direction_value, it) },
+            )
         }
-    }
-
-    private fun formatBytes(bytes: Long): String {
-        if (bytes < 1_024) return "$bytes B"
-        val units = arrayOf("KB", "MB", "GB")
-        var value = bytes / 1_024.0
-        var unit = 0
-        while (value >= 1_024 && unit < units.lastIndex) {
-            value /= 1_024
-            unit++
-        }
-        return String.format(Locale.getDefault(), "%.1f %s", value, units[unit])
     }
 
     private fun Int?.orZero(): Int = this ?: 0
-
-    private fun String?.takeIfNotBlank(): String? = this?.takeIf(String::isNotBlank)
 
     private data class ExifSnapshot(
         val width: Int,
@@ -168,7 +140,7 @@ class PhotoMetadataReader @Inject constructor() {
                 return ExifSnapshot(
                     width = exif.getAttributeInt(ExifInterface.TAG_IMAGE_WIDTH, 0),
                     height = exif.getAttributeInt(ExifInterface.TAG_IMAGE_LENGTH, 0),
-                    rotationDegrees = orientationDegrees(orientationValue),
+                    rotationDegrees = ExifOrientation.degrees(orientationValue),
                     camera = listOfNotNull(
                         exif.attribute(ExifInterface.TAG_MAKE),
                         exif.attribute(ExifInterface.TAG_MODEL),
@@ -202,17 +174,6 @@ class PhotoMetadataReader @Inject constructor() {
                     .trimEnd('0')
                     .trimEnd('.')
             }
-
-            private fun orientationDegrees(value: Int): Int = when (value) {
-                ExifInterface.ORIENTATION_ROTATE_90,
-                ExifInterface.ORIENTATION_TRANSPOSE -> 90
-                ExifInterface.ORIENTATION_ROTATE_180,
-                ExifInterface.ORIENTATION_FLIP_VERTICAL -> 180
-                ExifInterface.ORIENTATION_ROTATE_270,
-                ExifInterface.ORIENTATION_TRANSVERSE -> 270
-                else -> 0
-            }
-
         }
     }
 }

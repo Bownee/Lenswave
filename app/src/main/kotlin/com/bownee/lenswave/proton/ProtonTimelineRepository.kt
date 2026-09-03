@@ -93,7 +93,7 @@ internal class ProtonTimelineRepository @Inject constructor(
             LenswaveDiagnostics.reportFailure("timeline-sync", error)
             mutableState.value = mutableState.value.copy(
                 syncing = false,
-                errorMessage = "Could not refresh Proton Photos",
+                refreshFailed = true,
             )
         }
     }
@@ -146,7 +146,7 @@ internal class ProtonTimelineRepository @Inject constructor(
                     ProtonTagState(
                         photos = existing,
                         hasLoaded = hasCachedSnapshot,
-                        errorMessage = "Could not refresh this Proton filter",
+                        refreshFailed = true,
                     ),
                 )
             }
@@ -165,7 +165,6 @@ internal class ProtonTimelineRepository @Inject constructor(
             if (completedCount == 0) return@update state
             state.copy(
                 photos = photos,
-                downloadedThumbnailCount = state.downloadedThumbnailCount + completedCount,
                 tags = state.tags.mapValues { (_, tagState) ->
                     tagState.copy(photos = tagState.photos.map { photo ->
                         if (photo.nodeUid in nodeUids) photo.copy(hasThumbnail = true) else photo
@@ -188,7 +187,6 @@ internal class ProtonTimelineRepository @Inject constructor(
             if (invalidatedCount == 0) return@update state
             state.copy(
                 photos = photos,
-                downloadedThumbnailCount = (state.downloadedThumbnailCount - invalidatedCount).coerceAtLeast(0),
                 tags = state.tags.mapValues { (_, tagState) ->
                     tagState.copy(photos = tagState.photos.map { photo ->
                         if (photo.nodeUid in nodeUids) photo.copy(hasThumbnail = false) else photo
@@ -224,7 +222,7 @@ internal class ProtonTimelineRepository @Inject constructor(
             ProtonTagState(
                 photos = nextFavorites,
                 hasLoaded = currentFavoriteState?.hasLoaded == true,
-                errorMessage = currentFavoriteState?.errorMessage,
+                refreshFailed = currentFavoriteState?.refreshFailed == true,
             ),
         )
     }
@@ -267,7 +265,6 @@ internal class ProtonTimelineRepository @Inject constructor(
             photos = photos.toList(),
             hasLoaded = hasLoaded,
             syncing = syncing,
-            downloadedThumbnailCount = photos.count(ProtonGalleryPhoto::hasThumbnail),
             thumbnailWorkStatus = workerStatus,
             tags = tags,
         )

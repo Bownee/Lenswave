@@ -72,7 +72,7 @@ internal class ProtonTrashRepository @Inject constructor(
             LenswaveDiagnostics.reportFailure("trash-sync", error)
             mutableState.value = mutableState.value.copy(
                 syncing = false,
-                errorMessage = "Could not refresh Proton Trash",
+                refreshFailed = true,
             )
         }
     }
@@ -90,7 +90,6 @@ internal class ProtonTrashRepository @Inject constructor(
             if (completedCount == 0) return@update state
             state.copy(
                 photos = photos,
-                downloadedThumbnailCount = state.downloadedThumbnailCount + completedCount,
             )
         }
     }
@@ -108,7 +107,6 @@ internal class ProtonTrashRepository @Inject constructor(
             if (invalidatedCount == 0) return@update state
             state.copy(
                 photos = photos,
-                downloadedThumbnailCount = (state.downloadedThumbnailCount - invalidatedCount).coerceAtLeast(0),
             )
         }
     }
@@ -148,7 +146,6 @@ internal class ProtonTrashRepository @Inject constructor(
             photos = photos.toList(),
             hasLoaded = hasLoaded,
             syncing = syncing,
-            downloadedThumbnailCount = photos.count(ProtonTrashPhoto::hasThumbnail),
         )
     }
 

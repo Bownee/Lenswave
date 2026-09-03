@@ -2,6 +2,7 @@ package com.bownee.lenswave
 
 import android.content.Intent
 import android.os.Bundle
+import androidx.core.content.IntentCompat
 import com.bownee.lenswave.gallery.GalleryAsset
 import com.bownee.lenswave.gallery.MediaKind
 import com.bownee.lenswave.gallery.PhotoTarget
@@ -60,9 +61,8 @@ data class PhotoRequest(
             isFavorite = intent.getBooleanExtra(PhotoViewerActivity.EXTRA_IS_FAVORITE, false),
         )
 
-        @Suppress("DEPRECATION")
         fun navigationFrom(intent: Intent): List<PhotoRequest> =
-            intent.getParcelableArrayListExtra<Bundle>(PhotoViewerActivity.EXTRA_NAVIGATION)
+            IntentCompat.getParcelableArrayListExtra(intent, PhotoViewerActivity.EXTRA_NAVIGATION, Bundle::class.java)
                 .orEmpty()
                 .map { value -> from(Intent().putExtras(value)) }
     }

@@ -257,7 +257,7 @@ internal class ProtonPhotoCache @Inject constructor(
     override fun reconcileAlbums(userId: String, remoteAlbumUids: Collection<String>) {
         val validNames = remoteAlbumUids.mapTo(mutableSetOf(), ::safeName)
         albumPhotosDirectory(userId).listFiles()?.forEach { file ->
-            if (isStalePartial(file) || file.extension != "part" && file.nameWithoutExtension !in validNames) {
+            if (file.isPrunable(validNames)) {
                 file.delete()
             }
         }
@@ -344,12 +344,12 @@ internal class ProtonPhotoCache @Inject constructor(
         val validNames = (remoteNodeUids + retainedNodeUids).mapTo(mutableSetOf(), ::safeName)
         thumbnails.removeUnreferenced(userId, remoteNodeUids + retainedNodeUids)
         originalDirectory(userId).listFiles()?.forEach { file ->
-            if (isStalePartial(file) || file.extension != "part" && file.nameWithoutExtension !in validNames) {
+            if (file.isPrunable(validNames)) {
                 file.delete()
             }
         }
         decryptedDirectory(userId).listFiles()?.forEach { file ->
-            if (isStalePartial(file) || file.extension != "part" && file.nameWithoutExtension !in validNames) {
+            if (file.isPrunable(validNames)) {
                 file.delete()
             }
         }
@@ -497,6 +497,10 @@ internal class ProtonPhotoCache @Inject constructor(
     private fun readText(userId: String, file: File): String = secureFiles.readText(scope(userId), file)
 
     private fun scope(userId: String): String = "proton-media:$userId"
+
+    /** Stale partial downloads and completed files that no longer belong to a known node. */
+    private fun File.isPrunable(validNames: Set<String>): Boolean =
+        isStalePartial(this) || (extension != "part" && nameWithoutExtension !in validNames)
 
     private fun isStalePartial(file: File): Boolean =
         file.extension == "part" && isExpired(file, STALE_PART_TTL_MILLIS)

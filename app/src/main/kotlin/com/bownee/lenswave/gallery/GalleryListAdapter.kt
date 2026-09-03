@@ -98,8 +98,6 @@ class GalleryListAdapter(
         return null
     }
 
-    fun isDateHeader(position: Int): Boolean = rows.getOrNull(position) is GalleryRow.DateHeader
-
     override fun getCount(): Int = rows.size
 
     override fun getItem(position: Int): GalleryRow = rows[position]

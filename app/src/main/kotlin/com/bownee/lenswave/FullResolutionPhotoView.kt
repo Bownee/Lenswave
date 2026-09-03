@@ -64,21 +64,11 @@ class FullResolutionPhotoView @JvmOverloads constructor(
     private var scale = 1f
     private var offsetX = 0f
     private var offsetY = 0f
-    private var directionalDragStartX = 0f
-    private var directionalDragStartY = 0f
-    private var directionalDragDistanceX = 0f
-    private var directionalDragDistanceY = 0f
-    private var directionalDragVelocityY = 0f
-    private var directionalDragLastRawY = 0f
-    private var directionalDragLastEventTime = 0L
-    private var directionalDragAxis = DragAxis.NONE
-    private var directionalDragBlocked = false
+    private var touchStartX = 0f
+    private var touchStartY = 0f
+    private var touchBlocked = false
     private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
-    private val directionalDragSlop = touchSlop * 1.35f
     private var zoomAnimator: ValueAnimator? = null
-
-    var onVerticalDetailsDrag: ((distance: Float, velocity: Float, finished: Boolean) -> Unit)? = null
-    var onHorizontalPhotoDrag: ((distance: Float, finished: Boolean) -> Unit)? = null
 
     private val scaleDetector = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
         override fun onScaleBegin(detector: ScaleGestureDetector): Boolean {
@@ -215,7 +205,6 @@ class FullResolutionPhotoView @JvmOverloads constructor(
         scale = 1f
         offsetX = 0f
         offsetY = 0f
-        resetDirectionalDrag()
         invalidate()
         if (!decoderExecutor.isShutdown) decoderExecutor.execute(::releaseDecoder)
     }
@@ -250,12 +239,12 @@ class FullResolutionPhotoView @JvmOverloads constructor(
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         val isClick = event.actionMasked == MotionEvent.ACTION_UP &&
-            !directionalDragBlocked &&
+            !touchBlocked &&
             max(
-                abs(directionalDragStartX - event.rawX),
-                abs(directionalDragStartY - event.rawY),
+                abs(touchStartX - event.rawX),
+                abs(touchStartY - event.rawY),
             ) < touchSlop
-        trackDirectionalDrag(event)
+        trackTouchStart(event)
         scaleDetector.onTouchEvent(event)
         gestureDetector.onTouchEvent(event)
         if (isClick) performClick()
@@ -344,107 +333,15 @@ class FullResolutionPhotoView @JvmOverloads constructor(
         }
     }
 
-    private fun trackDirectionalDrag(event: MotionEvent) {
+    private fun trackTouchStart(event: MotionEvent) {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                directionalDragStartX = event.rawX
-                directionalDragStartY = event.rawY
-                directionalDragDistanceX = 0f
-                directionalDragDistanceY = 0f
-                directionalDragVelocityY = 0f
-                directionalDragLastRawY = event.rawY
-                directionalDragLastEventTime = event.eventTime
-                directionalDragAxis = DragAxis.NONE
-                directionalDragBlocked = false
+                touchStartX = event.rawX
+                touchStartY = event.rawY
+                touchBlocked = false
             }
-            MotionEvent.ACTION_POINTER_DOWN -> {
-                directionalDragAxis = DragAxis.NONE
-                directionalDragBlocked = true
-            }
-            MotionEvent.ACTION_MOVE -> {
-                if (event.pointerCount != 1 || directionalDragBlocked || !isAtFitScale()) return
-                updateDirectionalVelocity(event)
-                directionalDragDistanceX = directionalDragStartX - event.rawX
-                directionalDragDistanceY = directionalDragStartY - event.rawY
-                lockDirectionalDragAxis()
-                when (directionalDragAxis) {
-                    DragAxis.VERTICAL -> onVerticalDetailsDrag?.invoke(
-                        directionalDragDistanceY,
-                        directionalDragVelocityY,
-                        false,
-                    )
-                    DragAxis.HORIZONTAL -> onHorizontalPhotoDrag?.invoke(directionalDragDistanceX, false)
-                    DragAxis.NONE -> Unit
-                }
-            }
-            MotionEvent.ACTION_UP -> {
-                if (!directionalDragBlocked && isAtFitScale()) {
-                    updateDirectionalVelocity(event)
-                    directionalDragDistanceX = directionalDragStartX - event.rawX
-                    directionalDragDistanceY = directionalDragStartY - event.rawY
-                }
-                when (directionalDragAxis) {
-                    DragAxis.VERTICAL -> onVerticalDetailsDrag?.invoke(
-                        directionalDragDistanceY,
-                        directionalDragVelocityY,
-                        true,
-                    )
-                    DragAxis.HORIZONTAL -> onHorizontalPhotoDrag?.invoke(directionalDragDistanceX, true)
-                    DragAxis.NONE -> Unit
-                }
-                resetDirectionalDrag()
-            }
-            MotionEvent.ACTION_CANCEL -> {
-                if (directionalDragAxis == DragAxis.VERTICAL) {
-                    onVerticalDetailsDrag?.invoke(0f, 0f, true)
-                } else if (directionalDragAxis == DragAxis.HORIZONTAL) {
-                    onHorizontalPhotoDrag?.invoke(0f, true)
-                }
-                resetDirectionalDrag()
-            }
+            MotionEvent.ACTION_POINTER_DOWN -> touchBlocked = true
         }
-    }
-
-    private fun lockDirectionalDragAxis() {
-        if (directionalDragAxis != DragAxis.NONE) return
-        val horizontalDistance = abs(directionalDragDistanceX)
-        val verticalDistance = abs(directionalDragDistanceY)
-        if (max(horizontalDistance, verticalDistance) < directionalDragSlop) return
-        directionalDragAxis = when {
-            verticalDistance > horizontalDistance * AXIS_DOMINANCE -> DragAxis.VERTICAL
-            horizontalDistance > verticalDistance * AXIS_DOMINANCE -> DragAxis.HORIZONTAL
-            else -> DragAxis.NONE
-        }
-    }
-
-    private fun updateDirectionalVelocity(event: MotionEvent) {
-        val elapsedMillis = event.eventTime - directionalDragLastEventTime
-        if (elapsedMillis <= 0L) return
-        val instantaneousVelocity = (directionalDragLastRawY - event.rawY) * 1_000f / elapsedMillis
-        directionalDragVelocityY = if (
-            directionalDragVelocityY == 0f || elapsedMillis > MAX_VELOCITY_SAMPLE_GAP_MILLIS
-        ) {
-            instantaneousVelocity
-        } else {
-            directionalDragVelocityY * VELOCITY_HISTORY_WEIGHT +
-                instantaneousVelocity * (1f - VELOCITY_HISTORY_WEIGHT)
-        }
-        directionalDragLastRawY = event.rawY
-        directionalDragLastEventTime = event.eventTime
-    }
-
-    private fun resetDirectionalDrag() {
-        directionalDragDistanceX = 0f
-        directionalDragDistanceY = 0f
-        directionalDragVelocityY = 0f
-        directionalDragAxis = DragAxis.NONE
-        directionalDragBlocked = false
-    }
-
-    private enum class DragAxis {
-        NONE,
-        HORIZONTAL,
-        VERTICAL,
     }
 
     private fun resetTransform() {
@@ -605,8 +502,5 @@ class FullResolutionPhotoView @JvmOverloads constructor(
         const val DOUBLE_TAP_ZOOM = 3f
         const val DOUBLE_TAP_ZOOM_DURATION_MILLIS = 360L
         const val MAX_BASE_PIXELS = 4_000_000L
-        const val AXIS_DOMINANCE = 1.15f
-        const val VELOCITY_HISTORY_WEIGHT = 0.55f
-        const val MAX_VELOCITY_SAMPLE_GAP_MILLIS = 80L
     }
 }

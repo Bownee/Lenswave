@@ -7,29 +7,17 @@
     </plurals>
     <string name="photo_details">Details</string>
     <string name="open_in_maps">Open in Maps</string>
-    <string name="opening_proton_sign_in">Opening secure Proton sign-in…</string>
     <string name="lenswave_auth_title">Connect Proton Photos</string>
     <string name="lenswave_auth_subtitle">Sign in to browse your cloud photo library. Lenswave is an independent third-party app and is not affiliated with Proton.</string>
-    <string name="proton_photo_description">Proton photo %1$d of %2$d, %3$s</string>
-    <string name="thumbnail_unavailable">Thumbnail unavailable</string>
     <string name="photo">Photo</string>
     <string name="photo_thumbnail_unavailable">%1$s. Thumbnail unavailable.</string>
     <string name="back">Back</string>
-    <string name="previous_photo">Previous</string>
-    <string name="next_photo">Next</string>
-    <string name="zoom_out">Zoom out</string>
-    <string name="zoom_in">Zoom in</string>
-    <string name="reset_zoom">Reset zoom</string>
     <string name="delete">Delete</string>
     <string name="delete_forever">Delete forever</string>
     <string name="photo_image_description">%1$s photo</string>
     <string name="zoom_percent">Zoom %1$d%%</string>
-    <string name="adjustment_state">%1$s, %2$s</string>
     <string name="settings">Settings</string>
     <string name="retry">Retry</string>
-    <string name="space_proton">Proton Photos</string>
-    <string name="status_separator"> · </string>
-    <string name="status_with_detail">%1$s · %2$s</string>
     <string name="proton_not_connected">Proton not connected</string>
     <string name="connect_proton">Connect Proton</string>
     <string name="connect_proton_photos">Connect Proton Photos</string>
@@ -50,9 +38,9 @@
     <string name="albums">Albums</string>
     <string name="trash">Trash</string>
     <string name="no_proton_photos">No Proton photos</string>
-    <string name="no_media_in_filter">No %1$s</string>
-    <string name="proton_filtered_media_appear_here">Matching Proton media will appear here.</string>
-    <string name="could_not_load_proton_filter">Could not load %1$s</string>
+    <string name="no_media_with_tag">No %1$s</string>
+    <string name="proton_tagged_media_appear_here">Matching Proton media will appear here.</string>
+    <string name="could_not_load_proton_tag">Could not load %1$s</string>
     <string name="proton_photos_appear_here">Photos uploaded to Proton will appear here.</string>
     <string name="could_not_refresh">Could not refresh</string>
     <string name="could_not_load_proton_photos">Could not load Proton photos</string>
@@ -82,9 +70,7 @@
     <string name="delete_all">Delete all</string>
     <string name="continue_action">Continue</string>
     <string name="cancel_selection">Cancel selection</string>
-    <string name="close">Close</string>
     <string name="disconnect">Disconnect</string>
-    <string name="proton_third_party_notice">This is a third-party application not officially supported by Proton.</string>
     <string name="selected">Selected</string>
     <string name="not_selected">Not selected</string>
     <string name="cancel">Cancel</string>
@@ -110,8 +96,6 @@
     <string name="move_to_trash">Move to Trash</string>
     <string name="could_not_move_to_proton_trash">Could not move photo to Proton Trash</string>
     <string name="could_not_permanently_delete_photo">Could not permanently delete this photo</string>
-    <string name="downloading_full_resolution">Downloading full-resolution photo…</string>
-    <string name="could_not_refresh_detail">Could not refresh: %1$s</string>
     <string name="loading_metadata">Loading metadata</string>
     <string name="downloading_thumbnails_progress">Thumbnails ready: %1$d/%2$d</string>
     <string name="thumbnail_download_channel_name">Thumbnail downloads</string>
@@ -119,8 +103,6 @@
     <string name="thumbnail_download_notification_title">Downloading Proton thumbnails</string>
     <string name="thumbnail_download_notification_detail">Downloading in the background</string>
     <string name="thumbnail_download_notification_progress">Stored: %1$d · Remaining: %2$d</string>
-    <string name="thumbnail_still_downloading">This thumbnail is still downloading</string>
-    <string name="photo_download_failed">Photo download failed</string>
     <string name="proton_trash">Proton Trash</string>
     <string name="could_not_permanently_delete_photos">Could not permanently delete photos</string>
     <string name="could_not_move_photos_to_proton_trash">Could not move photos to Proton Trash</string>
@@ -160,9 +142,6 @@
         <item quantity="one">%1$d photo could not be moved</item>
         <item quantity="other">%1$d photos could not be moved</item>
     </plurals>
-    <string name="proton_sign_in_cancelled">Proton sign-in was cancelled</string>
-    <string name="completing_proton_sign_in">Completing Proton sign-in…</string>
-    <string name="connect_to_load_timeline">Connect to load your photo timeline</string>
     <string name="privacy_and_data">Privacy and data</string>
     <string name="privacy_disconnected_message">Lenswave disables Proton Core observability. Lenswave periodically contacts GitHub at startup to check for updates.</string>
     <string name="privacy_connected_message">Lenswave disables Proton Core observability. Proton account telemetry is controlled by the setting below and applies to your Proton account. Lenswave periodically contacts GitHub at startup to check for updates.</string>
@@ -174,4 +153,29 @@
     <string name="untitled_album">Untitled album</string>
     <string name="shared_album_details">%1$s · Shared</string>
     <string name="album_accessibility">%1$s, %2$s</string>
+
+    <!-- Photo details sheet -->
+    <string name="metadata_file_name">File name</string>
+    <string name="metadata_captured">Captured</string>
+    <string name="metadata_dimensions">Dimensions</string>
+    <string name="metadata_dimensions_value">%1$d × %2$d px</string>
+    <string name="metadata_file_size">File size</string>
+    <string name="metadata_format">Format</string>
+    <string name="metadata_camera">Camera</string>
+    <string name="metadata_lens">Lens</string>
+    <string name="metadata_aperture">Aperture</string>
+    <string name="metadata_aperture_value">f/%1$s</string>
+    <string name="metadata_exposure">Exposure</string>
+    <string name="metadata_exposure_value">%1$s s</string>
+    <string name="metadata_iso">ISO</string>
+    <string name="metadata_focal_length">Focal length</string>
+    <string name="metadata_focal_length_value">%1$s mm</string>
+    <string name="metadata_description">Description</string>
+    <string name="metadata_artist">Artist</string>
+    <string name="metadata_copyright">Copyright</string>
+    <string name="metadata_coordinates">Coordinates</string>
+    <string name="metadata_gps_altitude">GPS altitude</string>
+    <string name="metadata_gps_altitude_value">%1$.1f m</string>
+    <string name="metadata_gps_direction">GPS direction</string>
+    <string name="metadata_gps_direction_value">%1$s°</string>
 </resources>

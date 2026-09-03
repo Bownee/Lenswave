@@ -325,7 +325,6 @@ class GalleryUiStateFactoryTest {
                         ProtonGalleryPhoto("pending", 1, hasThumbnail = false),
                     ),
                     hasLoaded = true,
-                    downloadedThumbnailCount = 1,
                 ),
             ),
         )
@@ -416,7 +415,6 @@ class GalleryUiStateFactoryTest {
                         ProtonGalleryPhoto("pending", 41, hasThumbnail = false),
                     ),
                     hasLoaded = true,
-                    downloadedThumbnailCount = 1,
                     thumbnailWorkStatus = ProtonThumbnailWorkStatus.Running(1, 25),
                 ),
             ),

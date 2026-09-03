@@ -54,14 +54,14 @@ internal class ProtonThumbnailQueue @Inject constructor(
             val entries = entries(userId)
             val replacedSources = pendingCandidatesBySource.keys
             val retainedAlbumSources = retainedAlbumNodeUids?.mapTo(mutableSetOf()) { nodeUid ->
-                "album:$nodeUid"
+                "$ALBUM_PHOTOS_SOURCE:$nodeUid"
             }
             entries.replaceAll { _, entry ->
                 entry.copy(
                     sourceCaptureTimes = entry.sourceCaptureTimes.filterKeys { source ->
                         source !in replacedSources &&
                             (retainedAlbumSources == null ||
-                                !source.startsWith("album:") ||
+                                !source.startsWith("$ALBUM_PHOTOS_SOURCE:") ||
                                 source in retainedAlbumSources)
                     },
                 )
@@ -158,9 +158,6 @@ internal class ProtonThumbnailQueue @Inject constructor(
         entries(userId).size
     }
 
-    suspend fun retainAlbumSources(userId: String, albumNodeUids: Collection<String>) {
-        replaceSources(userId, emptyMap(), albumNodeUids)
-    }
 
     suspend fun forget(userId: String) {
         mutex.withLock {
@@ -203,11 +200,14 @@ internal class ProtonThumbnailQueue @Inject constructor(
         return (BASE_RETRY_MILLIS * multiplier).coerceAtMost(MAX_RETRY_MILLIS)
     }
 
-    private companion object {
-        const val BASE_RETRY_MILLIS = 30_000L
-        const val MAX_RETRY_MILLIS = 15L * 60L * 1_000L
-        const val MAX_RETRY_SHIFT = 5
-        val NEWEST_FIRST = compareByDescending(ProtonThumbnailQueueEntry::captureTimeEpochSeconds)
+    companion object {
+        /** Queue source prefix for the photos of one album; the album node uid follows the colon. */
+        const val ALBUM_PHOTOS_SOURCE = "album"
+
+        private const val BASE_RETRY_MILLIS = 30_000L
+        private const val MAX_RETRY_MILLIS = 15L * 60L * 1_000L
+        private const val MAX_RETRY_SHIFT = 5
+        private val NEWEST_FIRST = compareByDescending(ProtonThumbnailQueueEntry::captureTimeEpochSeconds)
             .thenBy(ProtonThumbnailQueueEntry::nodeUid)
     }
 }

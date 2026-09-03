@@ -10,7 +10,6 @@ import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSourceException
 import androidx.media3.datasource.DataSpec
 import com.bownee.lenswave.proton.ProtonOriginalStream
-import java.io.IOException
 import java.io.RandomAccessFile
 import kotlin.math.min
 
