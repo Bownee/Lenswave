@@ -265,7 +265,7 @@ internal class ProtonPhotoCache @Inject constructor(
 
     override fun readOriginal(userId: String, nodeUid: String): File? {
         val file = originalFile(userId, nodeUid)
-        if (!file.isFile || file.length() <= 0L || isExpired(file, ORIGINAL_TTL_MILLIS)) {
+        if (!file.isFile || file.length() <= 0L) {
             file.delete()
             return null
         }
@@ -311,19 +311,14 @@ internal class ProtonPhotoCache @Inject constructor(
     }
 
     override fun onOriginalStored(userId: String, target: File) {
+        // Encrypted originals are kept without a size or age limit; reconciliation removes the
+        // ones whose photos no longer exist, and disconnecting erases them all.
         target.setLastModified(clock.nowMillis())
-        trimDirectory(
-            originalDirectory(userId),
-            ORIGINAL_CACHE_LIMIT_BYTES,
-            ORIGINAL_TTL_MILLIS,
-            retainedFile = target,
-        )
     }
 
     override fun trimUser(userId: String) {
-        trimDirectory(originalDirectory(userId), ORIGINAL_CACHE_LIMIT_BYTES, ORIGINAL_TTL_MILLIS)
         thumbnails.maintain(userId)
-        trimDirectory(decryptedDirectory(userId), DECRYPTED_CACHE_LIMIT_BYTES, DECRYPTED_TTL_MILLIS)
+        expireFiles(decryptedDirectory(userId), DECRYPTED_TTL_MILLIS)
     }
 
     override fun reconcilePhotos(
@@ -509,34 +504,15 @@ internal class ProtonPhotoCache @Inject constructor(
     private fun isExpired(file: File, ttlMillis: Long): Boolean =
         file.lastModified() <= 0L || clock.nowMillis() - file.lastModified() > ttlMillis
 
-    private fun trimDirectory(
-        directory: File,
-        maxBytes: Long,
-        ttlMillis: Long,
-        retainedFile: File? = null,
-    ) {
+    private fun expireFiles(directory: File, ttlMillis: Long) {
         directory.listFiles()
-            ?.filter(File::isFile)
-            ?.filter { file -> file != retainedFile && isExpired(file, ttlMillis) }
+            ?.filter { file -> file.isFile && isExpired(file, ttlMillis) }
             ?.forEach(File::delete)
-        val remaining = directory.listFiles()?.filter(File::isFile)
-            ?.sortedBy(File::lastModified)
-            .orEmpty()
-        var totalBytes = remaining.sumOf(File::length)
-        for (file in remaining) {
-            if (totalBytes <= maxBytes) break
-            if (file == retainedFile) continue
-            val length = file.length()
-            if (file.delete()) totalBytes -= length
-        }
     }
 
     private fun safeName(value: String): String = AtomicFileStore.safeName(value)
 
     private companion object {
-        const val ORIGINAL_CACHE_LIMIT_BYTES = 256L * 1024L * 1024L
-        const val DECRYPTED_CACHE_LIMIT_BYTES = 64L * 1024L * 1024L
-        const val ORIGINAL_TTL_MILLIS = 60L * 60L * 1_000L
         const val DECRYPTED_TTL_MILLIS = 30L * 60L * 1_000L
         const val STALE_PART_TTL_MILLIS = 24L * 60L * 60L * 1_000L
     }
