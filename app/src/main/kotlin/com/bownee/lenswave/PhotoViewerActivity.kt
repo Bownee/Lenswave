@@ -61,6 +61,7 @@ import java.time.ZoneId
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 
@@ -312,6 +313,7 @@ class PhotoViewerActivity : FragmentActivity() {
         thumbnailPreview.translationX = photoView.translationX
         // Shown at full opacity straight away: fading it up from black reads as a brightness dip.
         thumbnailPreview.alpha = 1f
+        photoDetailsScroll.post(::synchronizeDetailsSheetWithImage)
     }
 
     private fun showPhoto(uri: Uri) {
@@ -607,6 +609,7 @@ class PhotoViewerActivity : FragmentActivity() {
         thumbnailPreview.visibility = View.VISIBLE
         photoView.alpha = 0f
         hidePeek()
+        photoDetailsScroll.post(::synchronizeDetailsSheetWithImage)
     }
 
     private fun navigatePhoto(offset: Int) {
@@ -1197,7 +1200,19 @@ class PhotoViewerActivity : FragmentActivity() {
     private fun fittedMediaBottom(): Float? = if (request.mediaKind == MediaKind.VIDEO) {
         playerView.bottom.takeIf { it > playerView.top }?.toFloat()
     } else {
+        // Before the full image arrives the thumbnail stands in, so the sheet attaches to it
+        // instead of the bottom of the media frame and does not jump once the photo loads.
         photoView.fittedImageBottom()?.plus(photoView.top)
+            ?: thumbnailPreview.takeIf { it.isVisible }?.fittedDrawableBottom()
+    }
+
+    private fun ImageView.fittedDrawableBottom(): Float? {
+        val drawable = drawable ?: return null
+        val imageWidth = drawable.intrinsicWidth
+        val imageHeight = drawable.intrinsicHeight
+        if (width <= 0 || height <= 0 || imageWidth <= 0 || imageHeight <= 0) return null
+        val fittedScale = min(width.toFloat() / imageWidth, height.toFloat() / imageHeight)
+        return top + (height + imageHeight * fittedScale) / 2f
     }
 
     private fun animateDismissedMedia(view: View, targetY: Float, duration: Long) {
@@ -1382,7 +1397,7 @@ class PhotoViewerActivity : FragmentActivity() {
                 media.layoutParams = this
             }
         }
-        if (photoReady) photoDetailsScroll.post(::synchronizeDetailsSheetWithImage)
+        if (photoReady || thumbnailPreview.isVisible) photoDetailsScroll.post(::synchronizeDetailsSheetWithImage)
     }
 
     private fun clearThumbnailPreview() {
