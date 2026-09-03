@@ -38,7 +38,6 @@ import com.bownee.lenswave.gallery.GalleryAsset
 import com.bownee.lenswave.gallery.MediaKind
 import com.bownee.lenswave.gallery.PhotoDeletionDecision
 import com.bownee.lenswave.gallery.PhotoDeletionExecutor
-import com.bownee.lenswave.gallery.PhotoDeletionOperation
 import com.bownee.lenswave.gallery.PhotoDeletionPolicy
 import com.bownee.lenswave.metadata.PhotoMetadataReader
 import com.bownee.lenswave.proton.ProtonOriginalDownloadProgress
@@ -143,7 +142,6 @@ class PhotoViewerActivity : FragmentActivity() {
     private fun buildInterface() {
         screen = PhotoViewerScreen(
             context = this,
-            requestIsTrashed = request.isTrashed,
             callbacks = PhotoViewerScreen.Actions(
                 gesturesEnabled = {
                     this::screen.isInitialized &&
@@ -238,11 +236,10 @@ class PhotoViewerActivity : FragmentActivity() {
         )
     }
 
-    /** The single place the current request changes, so the intent and labels never lag it. */
+    /** The single place the current request changes, so the intent never lags it. */
     private fun setCurrentRequest(value: PhotoRequest) {
         request = value
         request.writeTo(intent)
-        screen.setDeleteLabel(request.isTrashed)
     }
 
     private fun updatePhotoDetailsLayout(availableHeight: Int) {
@@ -678,9 +675,8 @@ class PhotoViewerActivity : FragmentActivity() {
     }
 
     private fun updateFavoriteButton(enabled: Boolean = photoReady) {
-        val supported = !request.isTrashed
-        favoriteButton.visibility = if (supported) View.VISIBLE else View.GONE
-        favoriteButton.isEnabled = supported && enabled && !favoriteInProgress
+        favoriteButton.visibility = View.VISIBLE
+        favoriteButton.isEnabled = enabled && !favoriteInProgress
         favoriteButton.alpha = if (favoriteButton.isEnabled) 1f else 0.45f
         UiStyle.applyFavoriteIcon(favoriteButton, request.isFavorite)
     }
@@ -777,14 +773,8 @@ class PhotoViewerActivity : FragmentActivity() {
     }
 
     private fun deletePhoto() {
-        val decision = PhotoDeletionPolicy.decide(
-            targets = listOf(request.toPhotoTarget()),
-            permanently = request.isTrashed,
-        ) as? PhotoDeletionDecision.Allowed ?: return
-        when (decision.plan.operation) {
-            PhotoDeletionOperation.DELETE_PERMANENTLY -> confirmDeleteProtonPhotoPermanently()
-            PhotoDeletionOperation.MOVE_TO_TRASH -> confirmTrashProtonPhoto()
-        }
+        if (PhotoDeletionPolicy.decide(listOf(request.toPhotoTarget())) !is PhotoDeletionDecision.Allowed) return
+        confirmTrashProtonPhoto()
     }
 
     private fun confirmTrashProtonPhoto() {
@@ -818,49 +808,6 @@ class PhotoViewerActivity : FragmentActivity() {
                 deletionInProgress = false
                 setActionsEnabled(true)
                 Toast.makeText(this@PhotoViewerActivity, R.string.could_not_move_to_proton_trash, Toast.LENGTH_LONG).show()
-            }
-        }
-    }
-
-    private fun confirmDeleteProtonPhotoPermanently() {
-        AlertDialog.Builder(this)
-            .setTitle(R.string.delete_photo_permanently_question)
-            .setMessage(R.string.delete_proton_trash_message)
-            .setNegativeButton(R.string.cancel, null)
-            .setPositiveButton(R.string.delete_forever) { _, _ -> deleteProtonPhotoPermanently() }
-            .show()
-    }
-
-    private fun deleteProtonPhotoPermanently() {
-        if (deletionInProgress) return
-        val userId = UserId(request.userId)
-        val nodeUid = request.nodeUid
-        deletionInProgress = true
-        setActionsEnabled(false)
-        lifecycleScope.launch {
-            try {
-                val result = photoDeletionExecutor.deleteProtonPermanently(userId, listOf(nodeUid))
-                if (result.successfulCount == 1) {
-                    finishDeleted()
-                } else {
-                    deletionInProgress = false
-                    setActionsEnabled(true)
-                    Toast.makeText(
-                        this@PhotoViewerActivity,
-                        getString(R.string.could_not_permanently_delete_photo),
-                        Toast.LENGTH_LONG,
-                    ).show()
-                }
-            } catch (error: CancellationException) {
-                throw error
-            } catch (_: Throwable) {
-                deletionInProgress = false
-                setActionsEnabled(true)
-                Toast.makeText(
-                    this@PhotoViewerActivity,
-                    getString(R.string.could_not_permanently_delete_photo),
-                    Toast.LENGTH_LONG,
-                ).show()
             }
         }
     }
@@ -941,7 +888,6 @@ class PhotoViewerActivity : FragmentActivity() {
         const val EXTRA_CAPTURED_AT = "com.bownee.lenswave.extra.CAPTURED_AT"
         const val EXTRA_DISPLAY_NAME = "com.bownee.lenswave.extra.DISPLAY_NAME"
         const val EXTRA_STABLE_ID = "com.bownee.lenswave.extra.STABLE_ID"
-        const val EXTRA_IS_TRASHED = "com.bownee.lenswave.extra.IS_TRASHED"
         const val EXTRA_MEDIA_KIND = "com.bownee.lenswave.extra.MEDIA_KIND"
         const val EXTRA_IS_FAVORITE = "com.bownee.lenswave.extra.IS_FAVORITE"
         const val EXTRA_PHOTO_DELETED = "com.bownee.lenswave.extra.PHOTO_DELETED"

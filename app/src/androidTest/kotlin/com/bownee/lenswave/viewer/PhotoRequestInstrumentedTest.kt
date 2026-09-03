@@ -16,7 +16,6 @@ class PhotoRequestInstrumentedTest {
             userId = "user",
             capturedAt = 34L,
             displayName = "cloud.jpg",
-            isTrashed = true,
         )
 
         assertEquals(request, PhotoRequest.from(request.writeTo(Intent())))
@@ -29,7 +28,6 @@ class PhotoRequestInstrumentedTest {
             userId = "user",
             capturedAt = 56L,
             displayName = "clip.mp4",
-            isTrashed = false,
             mediaKind = MediaKind.VIDEO,
             isFavorite = true,
         )

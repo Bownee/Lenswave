@@ -161,7 +161,7 @@ class ProtonThumbnailQueueTest {
     @Test
     fun pendingQueueSurvivesCreatingANewQueueInstance() = runBlocking {
         val store = FakeStore()
-        ProtonThumbnailQueue(store, FakeClock()).replaceSource(USER_ID, "trash", candidates("photo"))
+        ProtonThumbnailQueue(store, FakeClock()).replaceSource(USER_ID, "timeline", candidates("photo"))
 
         val restored = ProtonThumbnailQueue(store, FakeClock())
 
@@ -194,11 +194,10 @@ class ProtonThumbnailQueueTest {
     }
 
     @Test
-    fun replacingAlbumCoversPreservesTimelineAndTrashWork() = runBlocking {
+    fun replacingAlbumCoversPreservesTimelineWork() = runBlocking {
         val store = FakeStore()
         val queue = ProtonThumbnailQueue(store, FakeClock())
         queue.replaceSource(USER_ID, "timeline", candidates("timeline-photo"))
-        queue.replaceSource(USER_ID, "trash", candidates("trash-photo"))
         queue.replaceSource(USER_ID, "album-covers", candidates("old-cover"))
 
         queue.replaceSources(
@@ -208,7 +207,7 @@ class ProtonThumbnailQueueTest {
         )
 
         assertEquals(
-            setOf("timeline-photo", "trash-photo", "new-cover"),
+            setOf("timeline-photo", "new-cover"),
             store.entries.getValue(USER_ID).map { it.nodeUid }.toSet(),
         )
     }

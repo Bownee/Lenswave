@@ -13,7 +13,6 @@
     <string name="photo_thumbnail_unavailable">%1$s. Thumbnail unavailable.</string>
     <string name="back">Back</string>
     <string name="delete">Delete</string>
-    <string name="delete_forever">Delete forever</string>
     <string name="photo_image_description">%1$s photo</string>
     <string name="zoom_percent">Zoom %1$d%%</string>
     <string name="settings">Settings</string>
@@ -35,7 +34,6 @@
     <string name="proton_tag_panoramas">Panoramas</string>
     <string name="proton_tag_raw">RAW</string>
     <string name="albums">Albums</string>
-    <string name="trash">Trash</string>
     <string name="no_proton_photos">No Proton photos</string>
     <string name="no_media_with_tag">No %1$s</string>
     <string name="proton_tagged_media_appear_here">Matching Proton media will appear here.</string>
@@ -51,22 +49,14 @@
     <string name="add_to_favorites">Add to favorites</string>
     <string name="remove_from_favorites">Remove from favorites</string>
     <string name="could_not_update_favorite">Could not update the favorite</string>
-    <string name="could_not_load_proton_trash">Could not load Proton Trash</string>
     <string name="could_not_load_album">Could not load this album</string>
     <string name="check_connection_refresh">Check your connection and use Refresh to try again.</string>
     <string name="album_empty">Album is empty</string>
     <string name="album_photos_appear_here">Photos added to %1$s will appear here.</string>
-    <string name="trash_empty">Trash is empty</string>
-    <string name="proton_trash_empty_message">Photos moved to Proton Trash will appear here.</string>
     <plurals name="photo_count">
         <item quantity="one">%1$d photo</item>
         <item quantity="other">%1$d photos</item>
     </plurals>
-    <plurals name="album_count">
-        <item quantity="one">%1$d album</item>
-        <item quantity="other">%1$d albums</item>
-    </plurals>
-    <string name="delete_all">Delete all</string>
     <string name="continue_action">Continue</string>
     <string name="cancel_selection">Cancel selection</string>
     <string name="disconnect">Disconnect</string>
@@ -88,13 +78,10 @@
     <string name="error">Error</string>
     <string name="could_not_read_metadata">Could not read metadata</string>
     <string name="no_maps_app">No maps app is available</string>
-    <string name="delete_photo_permanently_question">Delete photo permanently?</string>
-    <string name="delete_proton_trash_message">This removes the photo from Proton Trash and cannot be undone.</string>
     <string name="move_to_proton_trash_question">Move photo to Proton Trash?</string>
     <string name="recover_from_proton_trash">You can recover it later from Proton Trash.</string>
     <string name="move_to_trash">Move to Trash</string>
     <string name="could_not_move_to_proton_trash">Could not move photo to Proton Trash</string>
-    <string name="could_not_permanently_delete_photo">Could not permanently delete this photo</string>
     <string name="loading_metadata">Loading metadata</string>
     <string name="downloading_thumbnails_progress">Thumbnails ready: %1$d/%2$d</string>
     <string name="thumbnail_download_channel_name">Thumbnail downloads</string>
@@ -102,29 +89,7 @@
     <string name="thumbnail_download_notification_title">Downloading Proton thumbnails</string>
     <string name="thumbnail_download_notification_detail">Downloading in the background</string>
     <string name="thumbnail_download_notification_progress">Stored: %1$d · Remaining: %2$d</string>
-    <string name="proton_trash">Proton Trash</string>
-    <string name="could_not_permanently_delete_photos">Could not permanently delete photos</string>
     <string name="could_not_move_photos_to_proton_trash">Could not move photos to Proton Trash</string>
-    <plurals name="delete_count_permanently">
-        <item quantity="one">Delete %1$d photo permanently?</item>
-        <item quantity="other">Delete %1$d photos permanently?</item>
-    </plurals>
-    <plurals name="delete_all_permanently">
-        <item quantity="one">Delete the photo permanently?</item>
-        <item quantity="other">Delete all %1$d photos permanently?</item>
-    </plurals>
-    <plurals name="remove_from_trash_message">
-        <item quantity="one">This removes the photo from %1$s and cannot be undone.</item>
-        <item quantity="other">This removes these photos from %1$s and cannot be undone.</item>
-    </plurals>
-    <plurals name="permanently_deleted_count">
-        <item quantity="one">Permanently deleted %1$d photo</item>
-        <item quantity="other">Permanently deleted %1$d photos</item>
-    </plurals>
-    <plurals name="could_not_delete_count">
-        <item quantity="one">%1$d photo could not be deleted</item>
-        <item quantity="other">%1$d photos could not be deleted</item>
-    </plurals>
     <plurals name="move_to_proton_trash_count">
         <item quantity="one">Move %1$d photo to Proton Trash?</item>
         <item quantity="other">Move %1$d photos to Proton Trash?</item>

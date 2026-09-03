@@ -12,7 +12,6 @@ data class PhotoMutationResult(val successfulCount: Int, val failedCount: Int)
 
 interface PhotoDeletionExecutor {
     suspend fun trashProton(userId: UserId, nodeUids: Collection<String>): PhotoMutationResult
-    suspend fun deleteProtonPermanently(userId: UserId, nodeUids: Collection<String>): PhotoMutationResult
 }
 
 @Singleton
@@ -25,14 +24,6 @@ internal class ProtonPhotoDeletionExecutor @Inject constructor(
     ): PhotoMutationResult {
         val result = protonRepository.trashPhotos(userId, nodeUids)
         return PhotoMutationResult(result.trashedCount, result.failedCount)
-    }
-
-    override suspend fun deleteProtonPermanently(
-        userId: UserId,
-        nodeUids: Collection<String>,
-    ): PhotoMutationResult {
-        val result = protonRepository.deletePhotosPermanently(userId, nodeUids)
-        return PhotoMutationResult(result.deletedCount, result.failedCount)
     }
 }
 

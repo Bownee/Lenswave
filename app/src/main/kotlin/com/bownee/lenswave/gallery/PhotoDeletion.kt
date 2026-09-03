@@ -2,13 +2,11 @@ package com.bownee.lenswave.gallery
 
 enum class PhotoDeletionOperation {
     MOVE_TO_TRASH,
-    DELETE_PERMANENTLY,
 }
 
 data class PhotoTarget(
     val stableId: String,
     val nodeUid: String,
-    val isTrashed: Boolean,
 )
 
 data class PhotoDeletionPlan(
@@ -16,7 +14,7 @@ data class PhotoDeletionPlan(
     val targets: List<PhotoTarget>,
 )
 
-fun GalleryAsset.toPhotoTarget(): PhotoTarget = PhotoTarget(stableId, nodeUid, isTrashed)
+fun GalleryAsset.toPhotoTarget(): PhotoTarget = PhotoTarget(stableId, nodeUid)
 
 sealed interface PhotoDeletionDecision {
     data class Allowed(val plan: PhotoDeletionPlan) : PhotoDeletionDecision
@@ -24,18 +22,11 @@ sealed interface PhotoDeletionDecision {
 }
 
 object PhotoDeletionPolicy {
-    fun decide(
-        targets: List<PhotoTarget>,
-        permanently: Boolean = targets.any(PhotoTarget::isTrashed),
-    ): PhotoDeletionDecision {
+    fun decide(targets: List<PhotoTarget>): PhotoDeletionDecision {
         if (targets.isEmpty()) return PhotoDeletionDecision.Empty
         return PhotoDeletionDecision.Allowed(
             PhotoDeletionPlan(
-                operation = if (permanently) {
-                    PhotoDeletionOperation.DELETE_PERMANENTLY
-                } else {
-                    PhotoDeletionOperation.MOVE_TO_TRASH
-                },
+                operation = PhotoDeletionOperation.MOVE_TO_TRASH,
                 targets = targets,
             ),
         )

@@ -19,6 +19,4 @@ sealed interface GalleryDestination {
     data class AlbumPhotos(
         val album: ProtonAlbumReference,
     ) : GalleryDestination
-
-    data object Trash : GalleryDestination
 }

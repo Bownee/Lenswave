@@ -32,8 +32,7 @@ internal enum class LenswaveOperation(val tag: String) {
     TAG_SYNC_RAW("tag-sync-raw"),
     THUMBNAIL_DOWNLOAD("thumbnail-download"),
     THUMBNAIL_WORKER("thumbnail-worker"),
-    TIMELINE_SYNC("timeline-sync"),
-    TRASH_SYNC("trash-sync");
+    TIMELINE_SYNC("timeline-sync");
 
     companion object {
         fun tagSync(tag: ProtonMediaTag): LenswaveOperation = when (tag) {

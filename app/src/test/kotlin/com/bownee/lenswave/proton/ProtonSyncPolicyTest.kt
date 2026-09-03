@@ -39,7 +39,7 @@ class ProtonSyncPolicyTest {
 
         assertTrue(
             ProtonSyncPolicy.shouldEnumerate(
-                ProtonSyncSource.TRASH,
+                ProtonSyncSource.ALBUM_PHOTOS,
                 lastSuccessfulSyncMillis = now,
                 nowMillis = now,
                 forceRemote = false,

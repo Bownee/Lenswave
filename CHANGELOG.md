@@ -15,13 +15,18 @@ All notable changes to Lenswave. The format follows [Keep a Changelog](https://k
 ### Changed
 - Proton-only: device photos, the editor and the picker were removed.
 - New navigation: a pinned Photos | Albums switch with media-type filter chips under it, albums
-  and Trash on the Albums tab, settings top right, no bottom bar. New visual design and icons.
+  on the Albums tab, settings top right, no bottom bar. New visual design and icons.
 - The drag handle appears on every photo grid while scrolling, with an equal gap above and below.
 - Full-size photos and videos open from the encrypted cache without re-downloading; the cache
   has no size limit and is cleared on disconnect.
 - Swiping between photos shows the neighbouring photo during the gesture.
 - Build, CI and release tooling were reworked (version catalog, strict checksums, shared CI
   workflow, test reports and lint SARIF in pull requests).
+- The gallery header no longer shows the photo or album count.
+
+### Removed
+- The Trash page and permanent deletion. Delete still moves photos to Proton Trash, where they
+  can be recovered or removed for good.
 
 ## [0.19.10]
 

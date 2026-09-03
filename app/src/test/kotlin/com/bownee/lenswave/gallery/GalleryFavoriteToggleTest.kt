@@ -7,7 +7,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.test.runTest
 import me.proton.core.domain.entity.UserId
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Test
 
 class GalleryFavoriteToggleTest {
@@ -39,7 +38,7 @@ class GalleryFavoriteToggleTest {
             ProtonFavoriteResult(updatedCount = nodeUids.size)
         }
 
-        toggle.toggle(userId, photo)!!.join()
+        toggle.toggle(userId, photo).join()
 
         assertEquals(Triple(userId, listOf("node"), true), requested)
         assertEquals(listOf("begin:proton:node:true", "finish:proton:node:true"), events)
@@ -53,7 +52,7 @@ class GalleryFavoriteToggleTest {
             ProtonFavoriteResult(updatedCount = nodeUids.size)
         }
 
-        toggle.toggle(userId, photo.copy(tags = setOf(ProtonMediaTag.FAVORITES)))!!.join()
+        toggle.toggle(userId, photo.copy(tags = setOf(ProtonMediaTag.FAVORITES))).join()
 
         assertEquals(false, requestedFavorite)
     }
@@ -62,7 +61,7 @@ class GalleryFavoriteToggleTest {
     fun `partial update reports an error and rolls back`() = runTest {
         val toggle = toggle(this) { _, _, _ -> ProtonFavoriteResult(updatedCount = 0, failedCount = 1) }
 
-        toggle.toggle(userId, photo)!!.join()
+        toggle.toggle(userId, photo).join()
 
         assertEquals(listOf("begin:proton:node:true", "error", "finish:proton:node:false"), events)
     }
@@ -71,7 +70,7 @@ class GalleryFavoriteToggleTest {
     fun `failed request reports an error and rolls back`() = runTest {
         val toggle = toggle(this) { _, _, _ -> throw IllegalStateException("offline") }
 
-        toggle.toggle(userId, photo)!!.join()
+        toggle.toggle(userId, photo).join()
 
         assertEquals(listOf("begin:proton:node:true", "error", "finish:proton:node:false"), events)
     }
@@ -80,16 +79,8 @@ class GalleryFavoriteToggleTest {
     fun `cancellation rolls back without reporting an error`() = runTest {
         val toggle = toggle(this) { _, _, _ -> throw CancellationException("cancelled") }
 
-        toggle.toggle(userId, photo)!!.join()
+        toggle.toggle(userId, photo).join()
 
         assertEquals(listOf("begin:proton:node:true", "finish:proton:node:false"), events)
-    }
-
-    @Test
-    fun `trashed photos cannot be favourited`() = runTest {
-        val toggle = toggle(this) { _, _, _ -> error("must not be called") }
-
-        assertNull(toggle.toggle(userId, photo.copy(isTrashed = true)))
-        assertEquals(emptyList<String>(), events)
     }
 }

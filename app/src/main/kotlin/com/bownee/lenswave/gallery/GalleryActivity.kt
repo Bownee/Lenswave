@@ -182,7 +182,6 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
                 onSelectionChanged = ::showSelection,
                 onBack = ::navigateUp,
                 onSettings = ::showSettingsMenu,
-                onDeleteAllTrash = ::confirmDeleteAllTrashPhotos,
                 onTabSelected = ::selectTab,
                 onFilterSelected = ::selectFilter,
                 onDeleteSelection = ::deleteSelectedPhotos,
@@ -238,11 +237,6 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
             )
         } ?: screen.showContent()
         screen.renderHeader(statusText = state.statusText)
-        screen.renderTrashActions(
-            showDeleteAll = state.showDeleteAll,
-            refreshing = state.isRefreshing,
-            selecting = adapter.selectedPhotos().isNotEmpty(),
-        )
         updateNavigationControls()
         if (destinationChanged) {
             adapter.clearSelection()
@@ -300,14 +294,9 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
         }
     }
 
-    /** Drops any selection and hides "Delete all" so neither outlives the page being left. */
+    /** Drops any selection so it does not outlive the page being left. */
     private fun clearSelectionForNavigation() {
         adapter.clearSelection()
-        screen.renderTrashActions(
-            showDeleteAll = false,
-            refreshing = currentUiState.isRefreshing,
-            selecting = false,
-        )
     }
 
     private fun connectProton() {
@@ -326,17 +315,7 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
     }
 
     private fun showSelection(selected: List<GalleryAsset>) {
-        screen.renderSelection(
-            selectedCount = selected.size,
-            viewingTrash = currentUiState.isTrash,
-        )
-        if (currentUiState.isTrash) {
-            screen.renderTrashActions(
-                showDeleteAll = currentUiState.showDeleteAll && currentUiState.visibleAssets.isNotEmpty(),
-                refreshing = currentUiState.isRefreshing,
-                selecting = selected.isNotEmpty(),
-            )
-        }
+        screen.renderSelection(selectedCount = selected.size)
         updateNavigationControls()
     }
 
@@ -349,11 +328,7 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
     }
 
     private fun deleteSelectedPhotos() {
-        deletionCoordinator.delete(adapter.selectedPhotos(), permanently = currentUiState.isTrash)
-    }
-
-    private fun confirmDeleteAllTrashPhotos() {
-        deletionCoordinator.deleteAllFromTrash(currentUiState.visibleAssets)
+        deletionCoordinator.delete(adapter.selectedPhotos())
     }
 
     private fun updateNavigationControls() {

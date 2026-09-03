@@ -16,7 +16,6 @@ class AccessibilityContractInstrumentedTest {
             scenario.onActivity { activity ->
                 val screen = PhotoViewerScreen(
                     context = activity,
-                    requestIsTrashed = false,
                     callbacks = PhotoViewerScreen.Actions(
                         gesturesEnabled = { true },
                         gestureStartAllowed = { _, _ -> true },

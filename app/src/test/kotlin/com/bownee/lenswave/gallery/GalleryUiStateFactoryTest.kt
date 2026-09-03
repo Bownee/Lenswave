@@ -11,8 +11,6 @@ import com.bownee.lenswave.proton.ProtonMediaTag
 import com.bownee.lenswave.proton.ProtonTagState
 import com.bownee.lenswave.proton.ProtonThumbnailWorkIssue
 import com.bownee.lenswave.proton.ProtonThumbnailWorkStatus
-import com.bownee.lenswave.proton.ProtonTrashState
-import com.bownee.lenswave.proton.ProtonTrashPhoto
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -66,35 +64,6 @@ class GalleryUiStateFactoryTest {
     }
 
     @Test
-    fun `Proton trash does not claim to be empty before metadata loads`() {
-        val state = factory.create(
-            GalleryUiInputs(
-                destination = GalleryDestination.Trash,
-                protonAccountStatus = ProtonAccountStatus.CONNECTED,
-                protonTrash = ProtonTrashState(syncing = true),
-            ),
-        )
-
-        assertNull(state.emptyState)
-        assertTrue(state.statusText.contains(R.string.loading_metadata.toString()))
-        assertFalse(state.isRefreshing)
-        assertFalse(state.showDeleteAll)
-    }
-
-    @Test
-    fun `loaded empty Proton trash shows its empty state`() {
-        val state = factory.create(
-            GalleryUiInputs(
-                destination = GalleryDestination.Trash,
-                protonAccountStatus = ProtonAccountStatus.CONNECTED,
-                protonTrash = ProtonTrashState(hasLoaded = true),
-            ),
-        )
-
-        assertNotNull(state.emptyState)
-    }
-
-    @Test
     fun `library reports album metadata loading without an empty state`() {
         val state = factory.create(
             GalleryUiInputs(
@@ -120,22 +89,34 @@ class GalleryUiStateFactoryTest {
         )
 
         assertNull(state.emptyState)
-        assertEquals(listOf("trash"), state.librarySectionKeys())
+        assertEquals(emptyList<String>(), state.librarySectionKeys())
     }
 
     @Test
-    fun `library lists trash and no media types when connected`() {
-        val state = factory.create(
+    fun `loaded pages show no count once every thumbnail is ready`() {
+        val timeline = factory.create(
+            GalleryUiInputs(
+                destination = GalleryDestination.Timeline,
+                protonAccountStatus = ProtonAccountStatus.CONNECTED,
+                protonGallery = ProtonGalleryState(
+                    photos = listOf(ProtonGalleryPhoto("ready", 1, hasThumbnail = true)),
+                    hasLoaded = true,
+                ),
+            ),
+        )
+        val library = factory.create(
             GalleryUiInputs(
                 destination = GalleryDestination.Library,
                 protonAccountStatus = ProtonAccountStatus.CONNECTED,
-                protonAlbums = ProtonAlbumsState(hasLoaded = true),
+                protonAlbums = ProtonAlbumsState(
+                    albums = listOf(ProtonAlbum("ready", "Ready", 1, "cover", 1, 2, true, false)),
+                    hasLoaded = true,
+                ),
             ),
         )
 
-        val sections = (state.content as GalleryContent.Library).sections.associateBy { it.key }
-        assertFalse(sections.containsKey("media-types"))
-        assertEquals(listOf(GalleryDestination.Trash), sections.getValue("trash").openedDestinations())
+        assertEquals("", timeline.statusText)
+        assertEquals("", library.statusText)
     }
 
     @Test
@@ -179,7 +160,6 @@ class GalleryUiStateFactoryTest {
             GalleryDestination.Tag(ProtonMediaTag.VIDEOS) to R.string.proton_tag_videos.toString(),
             GalleryDestination.Library to R.string.albums.toString(),
             GalleryDestination.AlbumPhotos(album) to "Trip",
-            GalleryDestination.Trash to R.string.trash.toString(),
         )
 
         titles.forEach { (destination, expected) ->
@@ -188,28 +168,13 @@ class GalleryUiStateFactoryTest {
     }
 
     @Test
-    fun `trash does not show albums metadata activity`() {
-        val state = factory.create(
-            GalleryUiInputs(
-                destination = GalleryDestination.Trash,
-                protonAccountStatus = ProtonAccountStatus.CONNECTED,
-                protonAlbums = ProtonAlbumsState(syncing = true),
-                protonTrash = ProtonTrashState(hasLoaded = true),
-            ),
-        )
-
-        assertFalse(state.statusText.contains(R.string.loading_metadata.toString()))
-        assertNotNull(state.emptyState)
-    }
-
-    @Test
-    fun `timeline does not show trash metadata activity`() {
+    fun `timeline does not show albums metadata activity`() {
         val state = factory.create(
             GalleryUiInputs(
                 destination = GalleryDestination.Timeline,
                 protonAccountStatus = ProtonAccountStatus.CONNECTED,
                 protonGallery = ProtonGalleryState(hasLoaded = true),
-                protonTrash = ProtonTrashState(syncing = true),
+                protonAlbums = ProtonAlbumsState(syncing = true),
             ),
         )
 
@@ -243,20 +208,6 @@ class GalleryUiStateFactoryTest {
 
         assertFalse(state.statusText.contains(R.string.loading_metadata.toString()))
         assertNull(state.emptyState)
-    }
-
-    @Test
-    fun `cached trash background refresh is visually silent`() {
-        val state = factory.create(
-            GalleryUiInputs(
-                destination = GalleryDestination.Trash,
-                protonAccountStatus = ProtonAccountStatus.CONNECTED,
-                protonTrash = ProtonTrashState(hasLoaded = true, syncing = true),
-            ),
-        )
-
-        assertFalse(state.statusText.contains(R.string.loading_metadata.toString()))
-        assertNotNull(state.emptyState)
     }
 
     @Test
@@ -350,23 +301,6 @@ class GalleryUiStateFactoryTest {
     }
 
     @Test
-    fun `trash metadata is visible before its thumbnail loads`() {
-        val state = factory.create(
-            GalleryUiInputs(
-                destination = GalleryDestination.Trash,
-                protonAccountStatus = ProtonAccountStatus.CONNECTED,
-                protonTrash = ProtonTrashState(
-                    photos = listOf(ProtonTrashPhoto("photo", 2, hasThumbnail = false)),
-                    hasLoaded = true,
-                ),
-            ),
-        )
-
-        assertEquals("proton-trash:photo", state.visibleAssets.single().stableId)
-        assertNull(state.emptyState)
-    }
-
-    @Test
     fun `Proton timeline maps remote photos into gallery assets`() {
         val state = factory.create(
             GalleryUiInputs(
@@ -407,29 +341,7 @@ class GalleryUiStateFactoryTest {
     }
 
     @Test
-    fun `trash is published in the same order as other photo pages`() {
-        val state = factory.create(
-            GalleryUiInputs(
-                destination = GalleryDestination.Trash,
-                protonAccountStatus = ProtonAccountStatus.CONNECTED,
-                protonTrash = ProtonTrashState(
-                    photos = listOf(
-                        ProtonTrashPhoto("older", 1, hasThumbnail = true),
-                        ProtonTrashPhoto("newer", 2, hasThumbnail = true),
-                    ),
-                    hasLoaded = true,
-                ),
-            ),
-        )
-
-        assertEquals(
-            listOf("proton-trash:newer", "proton-trash:older"),
-            state.visibleAssets.map(GalleryAsset::stableId),
-        )
-    }
-
-    @Test
-    fun `background worker with no pending thumbnails uses the normal count`() {
+    fun `background worker with no pending thumbnails reports nothing`() {
         val state = factory.create(
             GalleryUiInputs(
                 destination = GalleryDestination.Timeline,
@@ -443,7 +355,7 @@ class GalleryUiStateFactoryTest {
 
         assertFalse(state.isRefreshing)
         assertNotNull(state.emptyState)
-        assertFalse(state.statusText.contains(R.string.downloading_thumbnails_progress.toString()))
+        assertEquals("", state.statusText)
     }
 
     @Test
@@ -482,30 +394,6 @@ class GalleryUiStateFactoryTest {
                     albums = listOf(
                         ProtonAlbum("ready", "Ready", 1, "cover-1", 1, 2, true, false),
                         ProtonAlbum("pending", "Pending", 1, "cover-2", 1, 2, false, false),
-                    ),
-                    hasLoaded = true,
-                ),
-            ),
-        )
-
-        assertTrue(state.statusText.contains("${R.string.downloading_thumbnails_progress}(1, 2)"))
-    }
-
-    @Test
-    fun `trash reports trash thumbnail progress rather than timeline progress`() {
-        val state = factory.create(
-            GalleryUiInputs(
-                destination = GalleryDestination.Trash,
-                protonAccountStatus = ProtonAccountStatus.CONNECTED,
-                protonGallery = ProtonGalleryState(
-                    photos = listOf(ProtonGalleryPhoto("timeline", 1, hasThumbnail = false)),
-                    hasLoaded = true,
-                    thumbnailWorkStatus = ProtonThumbnailWorkStatus.Running(1, 25),
-                ),
-                protonTrash = ProtonTrashState(
-                    photos = listOf(
-                        ProtonTrashPhoto("ready", 2, hasThumbnail = true),
-                        ProtonTrashPhoto("pending", 1, hasThumbnail = false),
                     ),
                     hasLoaded = true,
                 ),
@@ -612,9 +500,4 @@ class GalleryUiStateFactoryTest {
 
     private fun GalleryUiState.librarySectionKeys(): List<String> =
         (content as GalleryContent.Library).sections.map { it.key }
-
-    private fun LibrarySection.openedDestinations(): List<GalleryDestination> = items
-        .filterIsInstance<LibraryItem.Entry>()
-        .map { (it.action as LibraryAction.Open).destination }
-
 }

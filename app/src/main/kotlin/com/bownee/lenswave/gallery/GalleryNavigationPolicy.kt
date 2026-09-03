@@ -7,7 +7,7 @@ enum class GalleryTab {
 
 /**
  * How destinations map onto the two top-level tabs. The Photos tab shows the timeline or one
- * media-type filter of it; the Albums tab lists albums and Trash and opens them as sub-pages.
+ * media-type filter of it; the Albums tab lists albums and opens them as sub-pages.
  */
 object GalleryNavigationPolicy {
     fun tab(destination: GalleryDestination): GalleryTab = when (destination) {
@@ -29,13 +29,7 @@ object GalleryNavigationPolicy {
     }
 
     /** Sub-pages of the Albums tab replace the tab switch with a back button and a title. */
-    fun showsBack(destination: GalleryDestination): Boolean = when (destination) {
-        is GalleryDestination.AlbumPhotos,
-        GalleryDestination.Trash,
-        -> true
-
-        else -> false
-    }
+    fun showsBack(destination: GalleryDestination): Boolean = destination is GalleryDestination.AlbumPhotos
 
     /** Media-type filter chips belong to the Photos tab only. */
     fun showsFilters(destination: GalleryDestination): Boolean = tab(destination) == GalleryTab.PHOTOS

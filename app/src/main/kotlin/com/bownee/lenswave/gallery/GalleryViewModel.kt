@@ -11,7 +11,6 @@ import com.bownee.lenswave.proton.ProtonAccountSessionState
 import com.bownee.lenswave.proton.ProtonAlbum
 import com.bownee.lenswave.proton.ProtonGalleryState
 import com.bownee.lenswave.proton.ProtonThumbnailScheduler
-import com.bownee.lenswave.proton.ProtonTrashState
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -51,7 +50,6 @@ class GalleryViewModel @Inject internal constructor(
     private var protonGalleryState = ProtonGalleryState()
     private var protonAlbumsState = ProtonAlbumsState()
     private var protonAlbumPhotosState = ProtonAlbumPhotosState()
-    private var protonTrashState = ProtonTrashState()
     private var manualRefreshGeneration = 0
 
     val uiState: StateFlow<GalleryUiState> = mutableUiState.asStateFlow()
@@ -160,12 +158,6 @@ class GalleryViewModel @Inject internal constructor(
                 publishUiState()
             }
         }
-        viewModelScope.launch {
-            protonRepository.trashState.collectLatest { state ->
-                protonTrashState = state
-                publishUiState()
-            }
-        }
     }
 
     private suspend fun handleAccountSession(state: ProtonAccountSessionState) {
@@ -203,11 +195,9 @@ class GalleryViewModel @Inject internal constructor(
     private fun requestMissingProtonMetadata(userId: UserId): Boolean {
         val timeline = protonRepository.state.value
         val albums = protonRepository.albumsState.value
-        val trash = protonRepository.trashState.value
         val loadTimeline = timeline.userId != userId.id || !timeline.hasLoaded
         val loadAlbums = albums.userId != userId.id || !albums.hasLoaded
-        val loadTrash = trash.userId != userId.id || !trash.hasLoaded
-        if (!loadTimeline && !loadAlbums && !loadTrash) return false
+        if (!loadTimeline && !loadAlbums) return false
 
         viewModelScope.launch {
             coroutineScope {
@@ -216,9 +206,6 @@ class GalleryViewModel @Inject internal constructor(
                 }
                 if (loadAlbums) launch(Dispatchers.IO) {
                     protonRepository.syncAlbumsMetadata(userId)
-                }
-                if (loadTrash) launch(Dispatchers.IO) {
-                    protonRepository.syncTrashMetadata(userId)
                 }
             }
             (destination as? GalleryDestination.Tag)?.let { selected ->
@@ -264,11 +251,6 @@ class GalleryViewModel @Inject internal constructor(
                 }
                 protonThumbnailScheduler.enqueue(userId)
             }
-            GalleryDestination.Trash -> withContext(Dispatchers.IO) {
-                refreshProtonSection(userId) {
-                    protonRepository.syncTrashMetadata(userId, forceRemote)
-                }
-            }
         }
     }
 
@@ -284,7 +266,6 @@ class GalleryViewModel @Inject internal constructor(
                 protonGallery = protonGalleryState,
                 protonAlbums = protonAlbumsState,
                 protonAlbumPhotos = protonAlbumPhotosState,
-                protonTrash = protonTrashState,
                 currentUserId = currentUserId,
                 protonAccountStatus = ProtonAccountStatus.resolve(
                     initialized = accountSessionInitialized,

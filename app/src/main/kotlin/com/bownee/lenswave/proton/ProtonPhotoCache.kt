@@ -21,7 +21,6 @@ internal class ProtonPhotoCache @Inject constructor(
     ProtonAccountCacheCleaner,
     ProtonTimelineCache,
     ProtonAlbumCache,
-    ProtonTrashCache,
     ProtonMediaCache,
     ProtonSessionCache,
     ProtonThumbnailQueueStore {
@@ -129,57 +128,6 @@ internal class ProtonPhotoCache @Inject constructor(
 
     override fun writeAlbumPhotos(userId: String, albumUid: String, photos: List<ProtonGalleryPhoto>) {
         writePhotoIndex(userId, albumPhotosIndexFile(userId, albumUid), photos)
-    }
-
-    override fun readTrash(userId: String): List<ProtonTrashPhoto> {
-        val index = trashIndexFile(userId)
-        if (!index.isFile) return emptyList()
-        return runCatching {
-            val array = JSONArray(readText(userId, index))
-            buildList {
-                for (position in 0 until array.length()) {
-                    val value = array.getJSONObject(position)
-                    val nodeUid = value.getString("nodeUid")
-                    add(
-                        ProtonTrashPhoto(
-                            nodeUid = nodeUid,
-                            trashedAtEpochSeconds = value.getLong("trashedAt"),
-                            hasThumbnail = thumbnailExists(userId, nodeUid),
-                            displayName = value.optString("displayName"),
-                            captureTimeEpochSeconds = value.optLong(
-                                "captureTime",
-                                Long.MIN_VALUE,
-                            ),
-                            mediaKind = runCatching {
-                                com.bownee.lenswave.gallery.MediaKind.valueOf(
-                                    value.optString("mediaKind", "IMAGE"),
-                                )
-                            }.getOrDefault(com.bownee.lenswave.gallery.MediaKind.IMAGE),
-                        )
-                    )
-                }
-            }
-        }.getOrElse {
-            index.delete()
-            emptyList()
-        }
-    }
-
-    override fun hasTrashSnapshot(userId: String): Boolean = hasValidArray(userId, trashIndexFile(userId))
-
-    override fun writeTrash(userId: String, photos: List<ProtonTrashPhoto>) {
-        val array = JSONArray()
-        photos.forEach { photo ->
-            array.put(
-                JSONObject()
-                    .put("nodeUid", photo.nodeUid)
-                    .put("trashedAt", photo.trashedAtEpochSeconds)
-                    .put("displayName", photo.displayName)
-                    .put("captureTime", photo.captureTimeEpochSeconds)
-                    .put("mediaKind", photo.mediaKind.name)
-            )
-        }
-        writeAtomically(userId, trashIndexFile(userId), array.toString(), "Could not commit Proton Trash index")
     }
 
     override fun readLastSuccessfulSync(userId: String, source: String): Long =
@@ -435,8 +383,6 @@ internal class ProtonPhotoCache @Inject constructor(
 
     private fun albumsIndexFile(userId: String): File = File(userDirectory(userId), "albums.json")
 
-    private fun trashIndexFile(userId: String): File = File(userDirectory(userId), "trash.json")
-
     private fun albumPhotosIndexFile(userId: String, albumUid: String): File =
         File(albumPhotosDirectory(userId), "${safeName(albumUid)}.json")
 
@@ -490,7 +436,6 @@ internal class ProtonPhotoCache @Inject constructor(
         albumPhotosDirectory(userId).listFiles()
             ?.filter { it.extension == "json" }
             ?.forEach { file -> readPhotoIndex(userId, file).mapTo(this, ProtonGalleryPhoto::nodeUid) }
-        readTrash(userId).mapTo(this, ProtonTrashPhoto::nodeUid)
     }
 
     private fun writeAtomically(userId: String, target: File, contents: String, failureMessage: String) {

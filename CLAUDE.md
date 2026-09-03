@@ -16,7 +16,7 @@ dependency changed; see CONTRIBUTING.md.
 
 ## Layout
 
-- `gallery/` — timeline, filters, albums, trash: `GalleryActivity` + `GalleryScreen` are wiring;
+- `gallery/` — timeline, filters, albums: `GalleryActivity` + `GalleryScreen` are wiring;
   state comes from `GalleryViewModel` through `GalleryUiStateFactory`; navigation is
   `GalleryDestination` + `GalleryNavigationPolicy`.
 - `viewer/` — full-screen photo/video viewer split into `Viewer*` controllers (media transform,

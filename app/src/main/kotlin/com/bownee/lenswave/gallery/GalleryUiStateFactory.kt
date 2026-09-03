@@ -7,7 +7,6 @@ import com.bownee.lenswave.proton.ProtonGalleryState
 import com.bownee.lenswave.proton.ProtonGalleryPhoto
 import com.bownee.lenswave.proton.ProtonMediaTag
 import com.bownee.lenswave.proton.ProtonTagState
-import com.bownee.lenswave.proton.ProtonTrashState
 import me.proton.core.domain.entity.UserId
 
 internal enum class ProtonAccountStatus {
@@ -35,7 +34,6 @@ internal data class GalleryUiInputs(
     val protonGallery: ProtonGalleryState = ProtonGalleryState(),
     val protonAlbums: ProtonAlbumsState = ProtonAlbumsState(),
     val protonAlbumPhotos: ProtonAlbumPhotosState = ProtonAlbumPhotosState(),
-    val protonTrash: ProtonTrashState = ProtonTrashState(),
     val currentUserId: UserId? = null,
     val protonAccountStatus: ProtonAccountStatus = ProtonAccountStatus.DISCONNECTED,
     val isRefreshing: Boolean = false,
@@ -47,7 +45,6 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
         is GalleryDestination.Tag -> tag(inputs, destination)
         GalleryDestination.Library -> library(inputs)
         is GalleryDestination.AlbumPhotos -> album(inputs, destination)
-        GalleryDestination.Trash -> trash(inputs)
     }
 
     private fun timeline(inputs: GalleryUiInputs): GalleryUiState {
@@ -62,7 +59,7 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
             inputs.protonGallery.refreshFailed -> text.string(R.string.could_not_refresh)
             else -> protonLoadingDetail(
                 ProtonThumbnailProgressCalculator.timeline(inputs.protonGallery.photos),
-            ) ?: photoCountStatus(assets.size)
+            ).orEmpty()
         }
         val emptyState = when {
             assets.isNotEmpty() -> null
@@ -92,7 +89,7 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
             state.refreshFailed -> text.string(R.string.could_not_refresh)
             else -> protonLoadingDetail(
                 ProtonThumbnailProgressCalculator.timeline(state.photos),
-            ) ?: photoCountStatus(assets.size)
+            ).orEmpty()
         }
         val label = text.string(destination.tag.labelRes)
         val emptyState = when {
@@ -140,20 +137,6 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
                             items = albums.albums.map(LibraryItem::Album),
                         ),
                     )
-                    add(
-                        LibrarySection(
-                            key = "trash",
-                            title = "",
-                            items = listOf(
-                                entry(
-                                    key = "trash",
-                                    label = text.string(R.string.trash),
-                                    iconRes = R.drawable.ic_delete,
-                                    action = LibraryAction.Open(GalleryDestination.Trash),
-                                ),
-                            ),
-                        ),
-                    )
                 }
             }
         }
@@ -166,7 +149,7 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
                 albums.refreshFailed -> text.string(R.string.could_not_refresh)
                 else -> protonLoadingDetail(
                     ProtonThumbnailProgressCalculator.albumCovers(albums.albums),
-                ) ?: albumCountStatus(albums.albums.size)
+                ).orEmpty()
             }
         }
         return base(
@@ -198,7 +181,7 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
             albumState.refreshFailed -> text.string(R.string.could_not_refresh)
             else -> protonLoadingDetail(
                 ProtonThumbnailProgressCalculator.timeline(albumState.photos),
-            ) ?: photoCountStatus(assets.size)
+            ).orEmpty()
         }
         val emptyState = when {
             assets.isNotEmpty() || !albumState.hasLoaded -> null
@@ -212,41 +195,6 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
             )
         }
         return base(inputs, GalleryContent.Photos(assets), statusDetail, emptyState)
-    }
-
-    private fun trash(inputs: GalleryUiInputs): GalleryUiState {
-        protonUnavailable(inputs)?.let { return it }
-        val state = inputs.protonTrash
-        val videoNodeUids = inputs.protonGallery.tagNodeUids(ProtonMediaTag.VIDEOS)
-        val favoriteNodeUids = inputs.protonGallery.tagNodeUids(ProtonMediaTag.FAVORITES)
-        val assets = ProtonTrashGallery.createPhotos(state.photos, videoNodeUids, favoriteNodeUids)
-        val statusDetail = when {
-            inputs.shouldShowMetadataLoading(state.syncing, state.hasLoaded) ->
-                text.string(R.string.loading_metadata)
-            state.refreshFailed -> text.string(R.string.could_not_refresh)
-            else -> protonLoadingDetail(
-                ProtonThumbnailProgressCalculator.trash(state.photos),
-            ) ?: photoCountStatus(assets.size)
-        }
-        val emptyState = when {
-            assets.isNotEmpty() -> null
-            state.refreshFailed -> GalleryEmptyState(
-                text.string(R.string.could_not_load_proton_trash),
-                text.string(R.string.check_connection_refresh),
-            )
-            !state.hasLoaded -> null
-            else -> GalleryEmptyState(
-                text.string(R.string.trash_empty),
-                text.string(R.string.proton_trash_empty_message),
-            )
-        }
-        return base(
-            inputs = inputs,
-            content = GalleryContent.Photos(assets),
-            statusText = statusDetail,
-            emptyState = emptyState,
-            showDeleteAll = assets.isNotEmpty() && !state.syncing,
-        )
     }
 
     private fun protonUnavailable(inputs: GalleryUiInputs): GalleryUiState? = when (inputs.protonAccountStatus) {
@@ -276,7 +224,6 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
         content: GalleryContent = GalleryContent.Photos(emptyList()),
         statusText: String = "",
         emptyState: GalleryEmptyState? = null,
-        showDeleteAll: Boolean = false,
     ) = GalleryUiState(
         destination = inputs.destination,
         title = title(inputs.destination),
@@ -286,7 +233,6 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
         currentUserId = inputs.currentUserId,
         isProtonConnected = inputs.currentUserId != null,
         isRefreshing = inputs.isRefreshing,
-        showDeleteAll = showDeleteAll,
     )
 
     /** Photo pages are published newest first so every consumer sees the same order as the grid. */
@@ -300,7 +246,6 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
         GalleryDestination.Library -> text.string(R.string.albums)
         is GalleryDestination.Tag -> text.string(destination.tag.labelRes)
         is GalleryDestination.AlbumPhotos -> destination.album.name
-        GalleryDestination.Trash -> text.string(R.string.trash)
     }
 
     private fun GalleryUiInputs.shouldShowMetadataLoading(
@@ -317,12 +262,6 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
         )
     }
 
-    private fun photoCountStatus(count: Int): String =
-        text.quantity(R.plurals.photo_count, count, count)
-
-    private fun albumCountStatus(count: Int): String =
-        text.quantity(R.plurals.album_count, count, count)
-
     private fun ProtonGalleryPhoto.toGalleryAsset(tagIndex: Map<String, Set<ProtonMediaTag>>): GalleryAsset {
         val tags = tagIndex[nodeUid].orEmpty()
         return toGalleryAsset(
@@ -330,9 +269,6 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
             tags = tags,
         )
     }
-
-    private fun ProtonGalleryState.tagNodeUids(tag: ProtonMediaTag): Set<String> =
-        tags[tag]?.photos.orEmpty().mapTo(mutableSetOf(), ProtonGalleryPhoto::nodeUid)
 
     private fun ProtonGalleryState.tagIndex(): Map<String, Set<ProtonMediaTag>> = buildMap {
         tags.forEach { (tag, state) ->

@@ -22,7 +22,6 @@ internal object GalleryNavigationCodec {
             GalleryDestination.Library -> DESTINATION_LIBRARY
             is GalleryDestination.Tag -> DESTINATION_TAG
             is GalleryDestination.AlbumPhotos -> DESTINATION_ALBUM
-            GalleryDestination.Trash -> DESTINATION_TRASH
         },
         albumUid = (destination as? GalleryDestination.AlbumPhotos)?.album?.nodeUid,
         albumName = (destination as? GalleryDestination.AlbumPhotos)?.album?.name,
@@ -31,7 +30,11 @@ internal object GalleryNavigationCodec {
 
     fun decode(stored: StoredGalleryNavigation): GalleryDestination? = when (stored.destination) {
         DESTINATION_TIMELINE, LEGACY_DESTINATION_COMBINED -> GalleryDestination.Timeline
-        DESTINATION_LIBRARY, LEGACY_DESTINATION_PROTON_ALBUMS, LEGACY_DESTINATION_DEVICE -> GalleryDestination.Library
+        DESTINATION_LIBRARY,
+        LEGACY_DESTINATION_PROTON_ALBUMS,
+        LEGACY_DESTINATION_DEVICE,
+        LEGACY_DESTINATION_TRASH,
+        -> GalleryDestination.Library
         DESTINATION_TAG -> stored.tag
             ?.let { runCatching { ProtonMediaTag.valueOf(it) }.getOrNull() }
             ?.let(GalleryDestination::Tag)
@@ -44,7 +47,6 @@ internal object GalleryNavigationCodec {
                 ),
             )
         } ?: GalleryDestination.Library
-        DESTINATION_TRASH -> GalleryDestination.Trash
         else -> null
     }
 
@@ -52,10 +54,10 @@ internal object GalleryNavigationCodec {
     private const val DESTINATION_LIBRARY = "library"
     private const val DESTINATION_TAG = "proton-tag"
     private const val DESTINATION_ALBUM = "proton-album"
-    private const val DESTINATION_TRASH = "trash"
     private const val LEGACY_DESTINATION_COMBINED = "combined"
     private const val LEGACY_DESTINATION_PROTON_ALBUMS = "proton-albums"
     private const val LEGACY_DESTINATION_DEVICE = "device"
+    private const val LEGACY_DESTINATION_TRASH = "trash"
 }
 
 internal interface GalleryNavigationStore {

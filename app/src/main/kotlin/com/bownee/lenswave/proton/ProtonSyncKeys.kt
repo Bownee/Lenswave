@@ -9,7 +9,6 @@ internal object ProtonSyncKeys {
     const val TIMELINE_TAG = "timeline-tag"
     const val ALBUMS = "albums"
     const val ALBUM_PHOTOS = "album-photos"
-    const val TRASH = "trash"
 
     fun timelineTag(tag: ProtonMediaTag): String = "$TIMELINE_TAG:${tag.name.lowercase()}"
 
@@ -19,7 +18,6 @@ internal object ProtonSyncKeys {
     object QueueSource {
         const val TIMELINE = "timeline"
         const val ALBUM_COVERS = "album-covers"
-        const val TRASH = "trash"
 
         /** Prefix for the photos of one album; the album node uid follows the colon. */
         const val ALBUM_PHOTOS = "album"

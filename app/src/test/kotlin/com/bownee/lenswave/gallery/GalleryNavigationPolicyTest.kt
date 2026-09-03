@@ -11,10 +11,10 @@ import org.junit.Test
 class GalleryNavigationPolicyTest {
     private val filter = GalleryDestination.Tag(ProtonMediaTag.VIDEOS)
     private val album = GalleryDestination.AlbumPhotos(ProtonAlbumReference("album", "Album"))
-    private val subPages = listOf(album, GalleryDestination.Trash)
+    private val subPages = listOf(album)
 
     @Test
-    fun `the timeline and its filters are the Photos tab, albums and trash the Albums tab`() {
+    fun `the timeline and its filters are the Photos tab, albums the Albums tab`() {
         assertEquals(GalleryTab.PHOTOS, GalleryNavigationPolicy.tab(GalleryDestination.Timeline))
         assertEquals(GalleryTab.PHOTOS, GalleryNavigationPolicy.tab(filter))
         assertEquals(GalleryTab.ALBUMS, GalleryNavigationPolicy.tab(GalleryDestination.Library))

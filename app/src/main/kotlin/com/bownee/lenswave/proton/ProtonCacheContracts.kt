@@ -35,14 +35,6 @@ interface ProtonAlbumCache {
     fun thumbnailExists(userId: String, nodeUid: String): Boolean
 }
 
-interface ProtonTrashCache {
-    fun readTrash(userId: String): List<ProtonTrashPhoto>
-    fun hasTrashSnapshot(userId: String): Boolean
-    fun writeTrash(userId: String, photos: List<ProtonTrashPhoto>)
-    fun thumbnailExists(userId: String, nodeUid: String): Boolean
-    fun removePhotos(userId: String, nodeUids: Collection<String>)
-}
-
 interface ProtonMediaCache {
     fun loadThumbnail(userId: String, nodeUid: String): Bitmap?
     fun writeThumbnail(userId: String, nodeUid: String, bytes: ByteArray)
@@ -57,7 +49,6 @@ interface ProtonMediaCache {
 interface ProtonSessionCache {
     fun clearUser(userId: String)
     fun trimUser(userId: String)
-    fun writeLastSuccessfulSync(userId: String, source: String, timestampMillis: Long)
 }
 
 internal interface ProtonThumbnailQueueStore {
@@ -70,7 +61,6 @@ internal interface ProtonThumbnailQueueStore {
 internal abstract class ProtonCacheModule {
     @Binds abstract fun bindTimelineCache(implementation: ProtonPhotoCache): ProtonTimelineCache
     @Binds abstract fun bindAlbumCache(implementation: ProtonPhotoCache): ProtonAlbumCache
-    @Binds abstract fun bindTrashCache(implementation: ProtonPhotoCache): ProtonTrashCache
     @Binds abstract fun bindMediaCache(implementation: ProtonPhotoCache): ProtonMediaCache
     @Binds abstract fun bindSessionCache(implementation: ProtonPhotoCache): ProtonSessionCache
     @Binds abstract fun bindThumbnailQueueStore(

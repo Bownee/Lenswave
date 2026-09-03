@@ -16,11 +16,7 @@ data class GalleryAsset(
     val displayName: String = "",
     val mediaKind: MediaKind = MediaKind.IMAGE,
     val tags: Set<ProtonMediaTag> = emptySet(),
-    val isTrashed: Boolean = false,
 ) {
-    val canFavorite: Boolean
-        get() = !isTrashed
-
     val isFavorite: Boolean
         get() = ProtonMediaTag.FAVORITES in tags
 

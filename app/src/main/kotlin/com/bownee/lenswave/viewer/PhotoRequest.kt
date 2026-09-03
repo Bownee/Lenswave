@@ -13,11 +13,10 @@ data class PhotoRequest(
     val userId: String,
     val capturedAt: Long,
     val displayName: String,
-    val isTrashed: Boolean,
     val mediaKind: MediaKind = MediaKind.IMAGE,
     val isFavorite: Boolean = false,
 ) {
-    fun toPhotoTarget(): PhotoTarget = PhotoTarget(stableId, nodeUid, isTrashed)
+    fun toPhotoTarget(): PhotoTarget = PhotoTarget(stableId, nodeUid)
 
     fun withFavorite(favorite: Boolean): PhotoRequest = copy(isFavorite = favorite)
 
@@ -27,7 +26,6 @@ data class PhotoRequest(
         putExtra(PhotoViewerActivity.EXTRA_CAPTURED_AT, capturedAt)
         putExtra(PhotoViewerActivity.EXTRA_DISPLAY_NAME, displayName)
         putExtra(PhotoViewerActivity.EXTRA_STABLE_ID, stableId)
-        putExtra(PhotoViewerActivity.EXTRA_IS_TRASHED, isTrashed)
         putExtra(PhotoViewerActivity.EXTRA_MEDIA_KIND, mediaKind.name)
         putExtra(PhotoViewerActivity.EXTRA_IS_FAVORITE, isFavorite)
     }
@@ -43,7 +41,6 @@ data class PhotoRequest(
             userId = userId,
             capturedAt = photo.capturedAtEpochMillis,
             displayName = photo.displayName,
-            isTrashed = photo.isTrashed,
             mediaKind = photo.mediaKind,
             isFavorite = photo.isFavorite,
         )
@@ -54,7 +51,6 @@ data class PhotoRequest(
             userId = requireNotNull(intent.getStringExtra(PhotoViewerActivity.EXTRA_USER_ID)),
             capturedAt = intent.getLongExtra(PhotoViewerActivity.EXTRA_CAPTURED_AT, 0L),
             displayName = intent.getStringExtra(PhotoViewerActivity.EXTRA_DISPLAY_NAME).orEmpty(),
-            isTrashed = intent.getBooleanExtra(PhotoViewerActivity.EXTRA_IS_TRASHED, false),
             mediaKind = intent.getStringExtra(PhotoViewerActivity.EXTRA_MEDIA_KIND)
                 ?.let { runCatching { MediaKind.valueOf(it) }.getOrNull() }
                 ?: MediaKind.IMAGE,

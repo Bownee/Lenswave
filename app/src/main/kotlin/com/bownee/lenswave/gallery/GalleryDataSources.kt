@@ -4,14 +4,12 @@ import android.graphics.Bitmap
 import com.bownee.lenswave.proton.ProtonAlbumReference
 import com.bownee.lenswave.proton.ProtonAlbumPhotosState
 import com.bownee.lenswave.proton.ProtonAlbumsState
-import com.bownee.lenswave.proton.ProtonDeleteResult
 import com.bownee.lenswave.proton.ProtonFavoriteResult
 import com.bownee.lenswave.proton.ProtonGalleryState
 import com.bownee.lenswave.proton.ProtonOriginalStream
 import com.bownee.lenswave.proton.ProtonPhotoGateway
 import com.bownee.lenswave.proton.ProtonMediaTag
 import com.bownee.lenswave.proton.ProtonTrashResult
-import com.bownee.lenswave.proton.ProtonTrashState
 import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
@@ -24,12 +22,10 @@ interface ProtonGalleryReader {
     val state: StateFlow<ProtonGalleryState>
     val albumsState: StateFlow<ProtonAlbumsState>
     val albumPhotosState: StateFlow<ProtonAlbumPhotosState>
-    val trashState: StateFlow<ProtonTrashState>
 
     suspend fun syncTimelineMetadata(userId: UserId, forceRemote: Boolean = false)
     suspend fun syncTagMetadata(userId: UserId, tag: ProtonMediaTag, forceRemote: Boolean = false)
     suspend fun syncAlbumsMetadata(userId: UserId, forceRemote: Boolean = false)
-    suspend fun syncTrashMetadata(userId: UserId, forceRemote: Boolean = false)
     suspend fun loadCachedAlbum(userId: UserId, album: ProtonAlbumReference)
     suspend fun syncAlbumPhotoMetadata(
         userId: UserId,
@@ -75,11 +71,6 @@ interface ProtonPhotoMutations {
     ): ProtonFavoriteResult
 
     suspend fun trashPhotos(userId: UserId, nodeUids: Collection<String>): ProtonTrashResult
-
-    suspend fun deletePhotosPermanently(
-        userId: UserId,
-        nodeUids: Collection<String>,
-    ): ProtonDeleteResult
 }
 
 @Module

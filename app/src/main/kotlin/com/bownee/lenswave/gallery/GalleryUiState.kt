@@ -51,11 +51,7 @@ data class GalleryUiState(
     val currentUserId: UserId? = null,
     val isProtonConnected: Boolean = false,
     val isRefreshing: Boolean = false,
-    val showDeleteAll: Boolean = false,
 ) {
     val visibleAssets: List<GalleryAsset>
         get() = (content as? GalleryContent.Photos)?.assets.orEmpty()
-
-    val isTrash: Boolean
-        get() = destination is GalleryDestination.Trash
 }

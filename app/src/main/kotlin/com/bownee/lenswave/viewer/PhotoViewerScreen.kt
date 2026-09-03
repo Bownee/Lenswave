@@ -25,7 +25,6 @@ import com.bownee.lenswave.metadata.PhotoMetadataItem
 @androidx.annotation.OptIn(markerClass = [UnstableApi::class])
 internal class PhotoViewerScreen(
     private val context: Context,
-    requestIsTrashed: Boolean,
     callbacks: Actions,
 ) {
     val root = PhotoViewerGestureLayout(context).apply {
@@ -183,9 +182,9 @@ internal class PhotoViewerScreen(
             sizeDp = 52,
         ).apply {
             isEnabled = false
+            ViewCompat.setTooltipText(this, contentDescription)
             setOnClickListener { callbacks.onDelete() }
         }
-        setDeleteLabel(requestIsTrashed)
         val buttons = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
@@ -216,13 +215,6 @@ internal class PhotoViewerScreen(
                 callbacks.onLayoutChanged(root.height)
             }
         }
-    }
-
-    /** Names the delete button for what it will do; trashed photos are deleted for good. */
-    fun setDeleteLabel(trashed: Boolean) {
-        deleteButton.contentDescription =
-            context.getString(if (trashed) R.string.delete_forever else R.string.delete)
-        ViewCompat.setTooltipText(deleteButton, deleteButton.contentDescription)
     }
 
     /** Appends one metadata row to the details sheet; rows with a location open the map on tap. */

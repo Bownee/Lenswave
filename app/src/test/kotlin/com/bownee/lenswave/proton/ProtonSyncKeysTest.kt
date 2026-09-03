@@ -34,10 +34,8 @@ class ProtonSyncKeysTest {
         assertEquals("timeline-tag", ProtonSyncKeys.TIMELINE_TAG)
         assertEquals("albums", ProtonSyncKeys.ALBUMS)
         assertEquals("album-photos", ProtonSyncKeys.ALBUM_PHOTOS)
-        assertEquals("trash", ProtonSyncKeys.TRASH)
         assertEquals("timeline", ProtonSyncKeys.QueueSource.TIMELINE)
         assertEquals("album-covers", ProtonSyncKeys.QueueSource.ALBUM_COVERS)
-        assertEquals("trash", ProtonSyncKeys.QueueSource.TRASH)
         assertEquals("album", ProtonSyncKeys.QueueSource.ALBUM_PHOTOS)
     }
 }

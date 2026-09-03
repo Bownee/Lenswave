@@ -25,7 +25,7 @@ import me.proton.drive.sdk.entity.PhotoTagsUpdate
 
 /**
  * Application gateway for Proton Photos capabilities. Focused repositories own synchronization,
- * albums, trash, and downloads; this class enforces the active-session boundary around them.
+ * albums, and downloads; this class enforces the active-session boundary around them.
  *
  * Consumers inject one of the narrow interfaces it implements rather than the class itself;
  * the background thumbnail worker reaches its slice through [thumbnailWork].
@@ -34,7 +34,6 @@ import me.proton.drive.sdk.entity.PhotoTagsUpdate
 class ProtonPhotoGateway @Inject internal constructor(
     private val timeline: ProtonTimelineRepository,
     private val albums: ProtonAlbumRepository,
-    private val trash: ProtonTrashRepository,
     private val downloads: ProtonDownloadRepository,
     private val thumbnailQueue: ProtonThumbnailQueue,
     private val clientProvider: ProtonPhotosClientProvider,
@@ -48,7 +47,6 @@ class ProtonPhotoGateway @Inject internal constructor(
     override val state: StateFlow<ProtonGalleryState> = timeline.state
     override val albumsState: StateFlow<ProtonAlbumsState> = albums.albumsState
     override val albumPhotosState: StateFlow<ProtonAlbumPhotosState> = albums.albumPhotosState
-    override val trashState: StateFlow<ProtonTrashState> = trash.state
 
     /** Background thumbnail work; kept off the public class surface, see [ProtonThumbnailWorkGateway]. */
     internal val thumbnailWork: ProtonThumbnailWorkGateway = ThumbnailWork()
@@ -62,14 +60,11 @@ class ProtonPhotoGateway @Inject internal constructor(
             }
             timeline.reset()
             albums.reset()
-            trash.reset()
             cache.trimUser(userId.id)
             timeline.loadCached(userId)
             albums.loadCached(userId)
-            trash.loadCached(userId)
             reconcileTimelineThumbnailQueue(userId)
             reconcileAlbumCoverThumbnailQueue(userId)
-            reconcileTrashThumbnailQueue(userId)
         } }
     }
 
@@ -93,12 +88,6 @@ class ProtonPhotoGateway @Inject internal constructor(
         withContext(Dispatchers.IO) { sessionGuard.withActiveSession(userId) {
             albums.syncMetadata(userId, forceRemote)
             reconcileAlbumCoverThumbnailQueue(userId)
-        } }
-
-    override suspend fun syncTrashMetadata(userId: UserId, forceRemote: Boolean) =
-        withContext(Dispatchers.IO) { sessionGuard.withActiveSession(userId) {
-            trash.syncMetadata(userId, forceRemote)
-            reconcileTrashThumbnailQueue(userId)
         } }
 
     override suspend fun loadCachedAlbum(userId: UserId, album: ProtonAlbumReference) {
@@ -166,7 +155,6 @@ class ProtonPhotoGateway @Inject internal constructor(
             if (successful.isNotEmpty()) {
                 timeline.removePhotos(userId, successful)
                 albums.removePhotos(userId, successful)
-                cache.writeLastSuccessfulSync(userId.id, ProtonSyncKeys.TRASH, 0L)
             }
             ProtonTrashResult(
                 trashedCount = successful.size,
@@ -202,13 +190,6 @@ class ProtonPhotoGateway @Inject internal constructor(
         }
     }
 
-    override suspend fun deletePhotosPermanently(
-        userId: UserId,
-        nodeUids: Collection<String>,
-    ): ProtonDeleteResult = withContext(Dispatchers.IO) {
-        sessionGuard.withActiveSession(userId) { trash.deletePermanently(userId, nodeUids) }
-    }
-
     override suspend fun disconnect(userId: UserId) {
         withContext(Dispatchers.IO) { sessionGuard.disconnect(userId) { wasActive ->
             clientProvider.disconnect(userId)
@@ -218,7 +199,6 @@ class ProtonPhotoGateway @Inject internal constructor(
             if (wasActive) {
                 timeline.reset()
                 albums.reset()
-                trash.reset()
             }
         } }
     }
@@ -311,7 +291,6 @@ class ProtonPhotoGateway @Inject internal constructor(
         timeline.markThumbnailsUnavailable(userId, nodeUids)
         albums.markCoverThumbnailsUnavailable(userId, nodeUids)
         albums.markAlbumPhotoThumbnailsUnavailable(userId, nodeUids)
-        trash.markThumbnailsUnavailable(userId, nodeUids)
         thumbnailQueue.retryNow(
             userId.id,
             ProtonThumbnailCandidate(nodeUid, thumbnailCaptureTime(nodeUid)),
@@ -326,19 +305,16 @@ class ProtonPhotoGateway @Inject internal constructor(
         if (entries.isEmpty()) return
         val timelineNodeUids = mutableSetOf<String>()
         val albumCoverNodeUids = mutableSetOf<String>()
-        val trashNodeUids = mutableSetOf<String>()
         val albumPhotoNodeUids = mutableSetOf<String>()
         entries.forEach { entry ->
             if (ProtonSyncKeys.QueueSource.TIMELINE in entry.sources) timelineNodeUids += entry.nodeUid
             if (ProtonSyncKeys.QueueSource.ALBUM_COVERS in entry.sources) albumCoverNodeUids += entry.nodeUid
-            if (ProtonSyncKeys.QueueSource.TRASH in entry.sources) trashNodeUids += entry.nodeUid
             if (entry.sources.any(ProtonSyncKeys.QueueSource::isAlbumPhotos)) {
                 albumPhotoNodeUids += entry.nodeUid
             }
         }
         timeline.markThumbnailsAvailable(userId, timelineNodeUids)
         albums.markCoverThumbnailsAvailable(userId, albumCoverNodeUids)
-        trash.markThumbnailsAvailable(userId, trashNodeUids)
         albums.markAlbumPhotoThumbnailsAvailable(userId, albumPhotoNodeUids)
     }
 
@@ -373,18 +349,6 @@ class ProtonPhotoGateway @Inject internal constructor(
         }
     }
 
-    private suspend fun reconcileTrashThumbnailQueue(userId: UserId) {
-        trash.state.value.takeIf { it.userId == userId.id && it.hasLoaded }?.let { state ->
-            thumbnailQueue.replaceSource(
-                userId.id,
-                ProtonSyncKeys.QueueSource.TRASH,
-                state.photos.filterNot(ProtonTrashPhoto::hasThumbnail).map { photo ->
-                    ProtonThumbnailCandidate(photo.nodeUid, photo.captureTimeEpochSeconds)
-                },
-            )
-        }
-    }
-
     private suspend fun reconcileAlbumThumbnailQueue(userId: UserId, album: ProtonAlbumReference) {
         albums.albumPhotosState.value.takeIf {
             it.userId == userId.id && it.albumUid == album.nodeUid && it.hasLoaded
@@ -404,8 +368,6 @@ class ProtonPhotoGateway @Inject internal constructor(
             ?.captureTimeEpochSeconds,
         albums.albumPhotosState.value.photos.firstOrNull { photo -> photo.nodeUid == nodeUid }
             ?.captureTimeEpochSeconds,
-        trash.state.value.photos.firstOrNull { photo -> photo.nodeUid == nodeUid }
-            ?.captureTimeEpochSeconds,
     ).maxOrNull() ?: UNKNOWN_CAPTURE_TIME
 
     private fun thumbnailSources(nodeUid: String): Set<String> = buildSet {
@@ -414,9 +376,6 @@ class ProtonPhotoGateway @Inject internal constructor(
         }
         if (albums.albumsState.value.albums.any { album -> album.coverPhotoNodeUid == nodeUid }) {
             add(ProtonSyncKeys.QueueSource.ALBUM_COVERS)
-        }
-        if (trash.state.value.photos.any { photo -> photo.nodeUid == nodeUid }) {
-            add(ProtonSyncKeys.QueueSource.TRASH)
         }
         albums.albumPhotosState.value.let { state ->
             if (state.photos.any { photo -> photo.nodeUid == nodeUid }) {

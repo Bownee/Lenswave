@@ -2,7 +2,6 @@ package com.bownee.lenswave.gallery
 
 import com.bownee.lenswave.proton.ProtonAlbum
 import com.bownee.lenswave.proton.ProtonGalleryPhoto
-import com.bownee.lenswave.proton.ProtonTrashPhoto
 
 internal data class ProtonThumbnailProgress(
     val downloaded: Int,
@@ -20,10 +19,5 @@ internal object ProtonThumbnailProgressCalculator {
             album.coverPhotoNodeUid != null && album.hasCoverThumbnail
         },
         total = albums.count { album -> album.coverPhotoNodeUid != null },
-    )
-
-    fun trash(photos: List<ProtonTrashPhoto>) = ProtonThumbnailProgress(
-        downloaded = photos.count(ProtonTrashPhoto::hasThumbnail),
-        total = photos.size,
     )
 }

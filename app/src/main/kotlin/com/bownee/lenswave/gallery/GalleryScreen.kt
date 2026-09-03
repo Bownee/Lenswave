@@ -61,8 +61,8 @@ internal class GalleryScreen(
     private val filterChips: Map<GalleryDestination, FilterChip>
     private val galleryHeader: LinearLayout
     private val galleryFooter: View
+    private val statusRow: LinearLayout
     private val status: TextView
-    private val trashDeleteAllButton: Button
     private val emptyPanel: LinearLayout
     private val emptyTitle: TextView
     private val emptyMessage: TextView
@@ -102,8 +102,8 @@ internal class GalleryScreen(
 
         val listHeader = buildListHeader()
         galleryHeader = listHeader.container
+        statusRow = listHeader.statusRow
         status = listHeader.status
-        trashDeleteAllButton = listHeader.trashDeleteAllButton
         emptyPanel = listHeader.empty.container
         emptyTitle = listHeader.empty.title
         emptyMessage = listHeader.empty.message
@@ -199,18 +199,10 @@ internal class GalleryScreen(
         }
     }
 
+    /** The status row only takes up space while there is something to say. */
     fun renderHeader(statusText: String) {
         status.text = statusText
-    }
-
-    /**
-     * The single owner of the "Delete all" button's state: shown only while the trash offers it
-     * and nothing is selected, and disabled while a refresh is in flight.
-     */
-    fun renderTrashActions(showDeleteAll: Boolean, refreshing: Boolean, selecting: Boolean) {
-        trashDeleteAllButton.visibility = if (showDeleteAll && !selecting) View.VISIBLE else View.GONE
-        trashDeleteAllButton.isEnabled = !refreshing
-        trashDeleteAllButton.alpha = if (refreshing) 0.5f else 1f
+        statusRow.visibility = if (statusText.isBlank()) View.GONE else View.VISIBLE
     }
 
     /** Sizes the list footer that keeps the last rows clear of the floating selection bar. */
@@ -279,14 +271,13 @@ internal class GalleryScreen(
         emptyAction.setOnClickListener(if (onAction == null) null else View.OnClickListener { onAction() })
     }
 
-    fun renderSelection(selectedCount: Int, viewingTrash: Boolean) {
+    fun renderSelection(selectedCount: Int) {
         val selecting = selectedCount > 0
         selectionCount.text = activity.resources.getQuantityString(
             R.plurals.selected_photo_count,
             selectedCount,
             selectedCount,
         )
-        selectionDeleteButton.setText(if (viewingTrash) R.string.delete_forever else R.string.delete)
         selectionBar.visibility = if (selecting) View.VISIBLE else View.GONE
     }
 
@@ -410,6 +401,7 @@ internal class GalleryScreen(
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             minimumHeight = activity.dp(28)
+            visibility = View.GONE
         }
         val status = UiStyle.label(activity, sizeSp = 13.5f, color = UiStyle.muted).apply {
             maxLines = 1
@@ -417,21 +409,6 @@ internal class GalleryScreen(
             accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
         }
         statusRow.addView(status, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        val deleteAll = UiStyle.pillButton(
-            activity,
-            activity.getString(R.string.delete_all),
-            R.drawable.ic_delete,
-            destructive = true,
-        ).apply {
-            visibility = View.GONE
-            setOnClickListener { actions.onDeleteAllTrash() }
-        }
-        statusRow.addView(
-            deleteAll,
-            LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, activity.dp(40)).apply {
-                marginEnd = activity.dp(16)
-            },
-        )
         container.addView(statusRow, UiStyle.matchWrap().apply { bottomMargin = activity.dp(4) })
 
         val empty = buildEmptyPanel()
@@ -439,7 +416,7 @@ internal class GalleryScreen(
             topMargin = activity.dp(14)
             bottomMargin = activity.dp(12)
         })
-        return ListHeader(container, status, deleteAll, empty)
+        return ListHeader(container, statusRow, status, empty)
     }
 
     private fun buildEmptyPanel(): EmptyPanel {
@@ -588,7 +565,6 @@ internal class GalleryScreen(
         val onSelectionChanged: (List<GalleryAsset>) -> Unit,
         val onBack: () -> Unit,
         val onSettings: () -> Unit,
-        val onDeleteAllTrash: () -> Unit,
         val onTabSelected: (GalleryTab) -> Unit,
         val onFilterSelected: (GalleryDestination) -> Unit,
         val onDeleteSelection: () -> Unit,
@@ -616,8 +592,8 @@ internal class GalleryScreen(
 
     private data class ListHeader(
         val container: LinearLayout,
+        val statusRow: LinearLayout,
         val status: TextView,
-        val trashDeleteAllButton: Button,
         val empty: EmptyPanel,
     )
 

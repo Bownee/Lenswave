@@ -6,7 +6,6 @@ internal enum class ProtonSyncSource(val maximumAgeMillis: Long) {
     TIMELINE(Duration.ofMinutes(15).toMillis()),
     ALBUMS(Duration.ofMinutes(30).toMillis()),
     ALBUM_PHOTOS(Duration.ofMinutes(15).toMillis()),
-    TRASH(Duration.ofMinutes(5).toMillis()),
 }
 
 internal object ProtonSyncPolicy {

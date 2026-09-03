@@ -12,15 +12,15 @@ class GalleryScrollPositionStoreTest {
         val store = GalleryScrollPositionStore()
         val timeline = GalleryDestination.Timeline
         val albums = GalleryDestination.Library
-        val trash = GalleryDestination.Trash
+        val favorites = GalleryDestination.Tag(ProtonMediaTag.FAVORITES)
 
         store.save(timeline, GalleryScrollPosition(42, -17))
         store.save(albums, GalleryScrollPosition(8, -3))
-        store.save(trash, GalleryScrollPosition(19, 4))
+        store.save(favorites, GalleryScrollPosition(19, 4))
 
         assertEquals(GalleryScrollPosition(42, -17), store.positionFor(timeline))
         assertEquals(GalleryScrollPosition(8, -3), store.positionFor(albums))
-        assertEquals(GalleryScrollPosition(19, 4), store.positionFor(trash))
+        assertEquals(GalleryScrollPosition(19, 4), store.positionFor(favorites))
         assertNull(store.positionFor(GalleryDestination.Tag(ProtonMediaTag.VIDEOS)))
     }
 

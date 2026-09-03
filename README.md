@@ -1,7 +1,7 @@
 # Lenswave
 
 Lenswave is an Android viewer for Proton Photos. Browse your cloud timeline, filter by media type,
-open albums and Trash, and manage favourites and deletions from your phone. Full-size photos and
+open albums, and manage favourites and deletions from your phone. Full-size photos and
 videos are kept in an encrypted on-device cache so they open instantly the second time.
 
 Lenswave is an independent project and is not affiliated with Proton. The Proton integration uses
@@ -31,7 +31,7 @@ and [SECURITY.md](SECURITY.md) for how to report a vulnerability.
 
 | Package | Role |
 | --- | --- |
-| `gallery/` | Timeline, media filters, albums and Trash; state built by `GalleryUiStateFactory` |
+| `gallery/` | Timeline, media filters and albums; state built by `GalleryUiStateFactory` |
 | `viewer/` | Full-screen photo and video viewer with swipe, zoom, dismiss and details sheet |
 | `proton/` | Proton session boundary, sync repositories, encrypted caches, thumbnail worker |
 | `storage/` | Android Keystore-backed encrypted files and the database passphrase |

@@ -19,9 +19,8 @@ internal class GalleryFavoriteToggle(
     private val onFinish: (stableId: String, succeeded: Boolean) -> Unit,
     private val onError: () -> Unit,
 ) {
-    /** Returns the request job, or null when the photo cannot be favourited. */
-    fun toggle(userId: UserId, photo: GalleryAsset): Job? {
-        if (!photo.canFavorite) return null
+    /** Returns the request job. */
+    fun toggle(userId: UserId, photo: GalleryAsset): Job {
         val nodeUids = listOf(photo.nodeUid)
         val favorite = !photo.isFavorite
         onBegin(photo.stableId, favorite)

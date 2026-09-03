@@ -18,6 +18,11 @@ data class ProtonFavoriteResult(
     val failedCount: Int = 0,
 )
 
+data class ProtonTrashResult(
+    val trashedCount: Int = 0,
+    val failedCount: Int = 0,
+)
+
 enum class ProtonThumbnailWorkIssue {
     TIMEOUT,
     INCOMPLETE,
