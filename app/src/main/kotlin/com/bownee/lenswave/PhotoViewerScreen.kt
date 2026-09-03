@@ -77,13 +77,6 @@ internal class PhotoViewerScreen(
             visibility = View.GONE
             ViewCompat.setAccessibilityHeading(this, true)
         }
-        photoDetailsSurface.addView(
-            mediaTitle,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).apply { bottomMargin = context.dp(12) },
-        )
 
         mediaFrame.layoutParams = LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
@@ -98,6 +91,15 @@ internal class PhotoViewerScreen(
             ),
         )
         root.addView(photoDetailsScroll, matchParentFrame())
+        // The title floats over the media so the photo can centre on the full viewport.
+        root.addView(
+            mediaTitle,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP,
+            ),
+        )
 
         mediaFrame.addView(thumbnailPreview, photoLayoutParams())
         mediaFrame.addView(photoView, photoLayoutParams())

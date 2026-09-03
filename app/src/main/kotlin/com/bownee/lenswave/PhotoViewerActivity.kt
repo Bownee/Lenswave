@@ -938,6 +938,7 @@ class PhotoViewerActivity : FragmentActivity() {
         detailsSheet.visibility = if (progress > 0f || detailsShown) View.VISIBLE else View.INVISIBLE
         if (progress < 1f) actions.visibility = View.VISIBLE
         actions.alpha = 1f - progress
+        mediaTitle.alpha = 1f - progress
         if (progress >= 1f && detailsShown) actions.visibility = View.INVISIBLE
     }
 
@@ -1256,16 +1257,17 @@ class PhotoViewerActivity : FragmentActivity() {
     }
 
     private fun updateMediaBounds() {
-        val bottomInset = PhotoViewerMediaLayoutPolicy.bottomInset(
+        val inset = PhotoViewerMediaLayoutPolicy.verticalInset(
             viewportHeight = mediaFrame.height,
+            titleBottom = if (mediaTitle.isVisible) mediaTitle.bottom else 0,
             actionsTop = actions.top + photoDetailsScroll.scrollY - mediaFrame.top,
             gap = dp(MEDIA_ACTION_GAP_DP),
         )
-        if (bottomInset <= 0) return
+        if (inset <= 0) return
         listOf(photoView, thumbnailPreview, playerView, loadingPanel).forEach { media ->
             (media.layoutParams as FrameLayout.LayoutParams).apply {
-                topMargin = 0
-                bottomMargin = bottomInset
+                topMargin = inset
+                bottomMargin = inset
                 media.layoutParams = this
             }
         }
