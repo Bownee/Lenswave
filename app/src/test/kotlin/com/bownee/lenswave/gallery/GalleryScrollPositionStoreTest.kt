@@ -10,7 +10,7 @@ class GalleryScrollPositionStoreTest {
     fun destinationsKeepIndependentScrollPositions() {
         val store = GalleryScrollPositionStore()
         val timeline = GalleryDestination.ProtonTimeline
-        val albums = GalleryDestination.ProtonAlbums
+        val albums = GalleryDestination.Library
         val trash = GalleryDestination.Trash(PhotoSource.PROTON)
 
         store.save(timeline, GalleryScrollPosition(42, -17))

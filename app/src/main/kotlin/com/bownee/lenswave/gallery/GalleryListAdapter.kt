@@ -29,6 +29,7 @@ class GalleryListAdapter(
     private val onPhotoClicked: (GalleryAsset) -> Unit,
     private val onFavoriteClicked: (GalleryAsset) -> Unit,
     private val onAlbumClicked: (ProtonAlbum) -> Unit,
+    private val onLibraryAction: (LibraryAction) -> Unit,
     private val onSelectionChanged: (List<GalleryAsset>) -> Unit,
     private val currentDestination: () -> GalleryDestination,
 ) : BaseAdapter() {
@@ -49,8 +50,8 @@ class GalleryListAdapter(
         notifySelectionChanged()
     }
 
-    fun submitAlbums(albums: List<ProtonAlbum>) {
-        rows = GalleryGrouping.createAlbumRows(albums)
+    fun submitLibrary(sections: List<LibrarySection>) {
+        rows = GalleryGrouping.createLibraryRows(sections)
         favoriteState.clear()
         selected.clear()
         notifyDataSetChanged()
@@ -106,28 +107,33 @@ class GalleryListAdapter(
 
     override fun getItemId(position: Int): Long = when (val row = rows[position]) {
         is GalleryRow.DateHeader -> row.key.hashCode().toLong()
+        is GalleryRow.SectionHeading -> row.key.hashCode().toLong()
         is GalleryRow.Photos -> row.items.first().stableId.hashCode().toLong()
         is GalleryRow.Albums -> row.items.first().nodeUid.hashCode().toLong()
+        is GalleryRow.Entries -> row.items.first().key.hashCode().toLong()
     }
 
-    override fun getViewTypeCount(): Int = 3
+    override fun getViewTypeCount(): Int = 4
 
     override fun getItemViewType(position: Int): Int = when (rows[position]) {
-        is GalleryRow.DateHeader -> TYPE_HEADER
+        is GalleryRow.DateHeader, is GalleryRow.SectionHeading -> TYPE_HEADER
         is GalleryRow.Photos -> TYPE_PHOTOS
         is GalleryRow.Albums -> TYPE_ALBUMS
+        is GalleryRow.Entries -> TYPE_ENTRIES
     }
 
     override fun isEnabled(position: Int): Boolean = false
 
     override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View =
         when (val row = rows[position]) {
-            is GalleryRow.DateHeader -> headerView(row, convertView)
+            is GalleryRow.DateHeader -> headerView(row.label, convertView)
+            is GalleryRow.SectionHeading -> headerView(row.label, convertView)
             is GalleryRow.Photos -> photosView(row, convertView)
             is GalleryRow.Albums -> albumsView(row, convertView)
+            is GalleryRow.Entries -> entriesView(row, convertView)
         }
 
-    private fun headerView(row: GalleryRow.DateHeader, convertView: View?): View {
+    private fun headerView(text: String, convertView: View?): View {
         val label = (convertView as? TextView) ?: TextView(context).apply {
             setTextColor(UiStyle.text)
             textSize = 18f
@@ -136,9 +142,47 @@ class GalleryListAdapter(
             setPadding(context.dp(12), context.dp(18), context.dp(12), context.dp(8))
             layoutParams = AbsListView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, context.dp(58))
         }
-        label.text = row.label
+        label.text = text
         ViewCompat.setAccessibilityHeading(label, true)
         return label
+    }
+
+    private fun entriesView(row: GalleryRow.Entries, convertView: View?): View {
+        val container = (convertView as? LinearLayout) ?: createEntryRow()
+        for (column in 0 until ENTRY_COLUMN_COUNT) {
+            val cell = container.getChildAt(column) as EntryCell
+            val entry = row.items.getOrNull(column)
+            if (entry == null) {
+                cell.visibility = View.INVISIBLE
+                cell.setOnClickListener(null)
+                continue
+            }
+            cell.visibility = View.VISIBLE
+            cell.icon.setImageResource(entry.iconRes)
+            cell.label.text = entry.label
+            cell.contentDescription = entry.label
+            cell.setOnClickListener { onLibraryAction(entry.action) }
+        }
+        return container
+    }
+
+    private fun createEntryRow() = LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(context.dp(12), 0, context.dp(12), 0)
+        layoutParams = AbsListView.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            context.dp(ENTRY_HEIGHT_DP + ENTRY_GAP_DP),
+        )
+        repeat(ENTRY_COLUMN_COUNT) { column ->
+            addView(
+                EntryCell(context),
+                LinearLayout.LayoutParams(0, context.dp(ENTRY_HEIGHT_DP), 1f).apply {
+                    if (column > 0) marginStart = context.dp(ENTRY_GAP_DP / 2)
+                    if (column < ENTRY_COLUMN_COUNT - 1) marginEnd = context.dp(ENTRY_GAP_DP / 2)
+                },
+            )
+        }
     }
 
     private fun photosView(row: GalleryRow.Photos, convertView: View?): View {
@@ -449,12 +493,40 @@ class GalleryListAdapter(
         }
     }
 
+    private class EntryCell(context: Context) : LinearLayout(context) {
+        val icon = ImageView(context).apply {
+            imageTintList = ColorStateList.valueOf(UiStyle.text)
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        val label = TextView(context).apply {
+            setTextColor(UiStyle.text)
+            textSize = 14f
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+        }
+
+        init {
+            orientation = HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            isClickable = true
+            isFocusable = true
+            background = UiStyle.rounded(context, UiStyle.surface, 14)
+            setPadding(context.dp(14), 0, context.dp(14), 0)
+            addView(icon, LayoutParams(context.dp(22), context.dp(22)).apply { marginEnd = context.dp(12) })
+            addView(label, LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        }
+    }
+
     private companion object {
         const val TYPE_HEADER = 0
         const val TYPE_PHOTOS = 1
         const val TYPE_ALBUMS = 2
+        const val TYPE_ENTRIES = 3
         const val COLUMN_COUNT = 3
         const val ALBUM_COLUMN_COUNT = 2
+        const val ENTRY_COLUMN_COUNT = 2
+        const val ENTRY_HEIGHT_DP = 52
+        const val ENTRY_GAP_DP = 8
         const val ALBUM_COVER_ASPECT = 0.72f
         const val PHOTO_GAP_PX = 2
         const val ALBUM_GAP_PX = 4

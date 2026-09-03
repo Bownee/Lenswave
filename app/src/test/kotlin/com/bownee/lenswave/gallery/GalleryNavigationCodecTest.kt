@@ -11,17 +11,18 @@ class GalleryNavigationCodecTest {
     fun `all gallery screens survive a persistence round trip`() {
         val destinations = listOf(
             GalleryDestination.Combined,
+            GalleryDestination.Device(),
             GalleryDestination.Device(DeviceCollection.SCREENSHOTS),
             GalleryDestination.ProtonTimeline,
             GalleryDestination.ProtonTag(ProtonMediaTag.FAVORITES),
-            GalleryDestination.ProtonAlbums,
+            GalleryDestination.Library,
             GalleryDestination.ProtonAlbumPhotos(ProtonAlbumReference("album-id", "Favorites")),
             GalleryDestination.Trash(PhotoSource.DEVICE),
             GalleryDestination.Trash(PhotoSource.PROTON),
         )
 
         destinations.forEach { destination ->
-            val state = GalleryNavigationState(destination, DeviceCollection.SCREENSHOTS)
+            val state = GalleryNavigationState(destination, GallerySource.PROTON)
 
             assertEquals(state, GalleryNavigationCodec.decode(GalleryNavigationCodec.encode(state)))
         }
@@ -34,22 +35,24 @@ class GalleryNavigationCodecTest {
     }
 
     @Test
-    fun `incomplete nested screens fall back to a usable parent screen`() {
+    fun `incomplete nested screens fall back to the Library`() {
+        listOf("proton-album", "proton-tag", "trash", "proton-albums").forEach { stored ->
+            assertEquals(
+                GalleryNavigationState(GalleryDestination.Library),
+                GalleryNavigationCodec.decode(StoredGalleryNavigation(destination = stored)),
+            )
+        }
+    }
+
+    @Test
+    fun `missing source is inferred from a timeline and otherwise defaults to all`() {
         assertEquals(
-            GalleryNavigationState(GalleryDestination.ProtonAlbums),
-            GalleryNavigationCodec.decode(StoredGalleryNavigation(destination = "proton-album")),
+            GalleryNavigationState(GalleryDestination.Device(), GallerySource.DEVICE),
+            GalleryNavigationCodec.decode(StoredGalleryNavigation(destination = "device")),
         )
         assertEquals(
-            GalleryNavigationState(
-                GalleryDestination.Device(DeviceCollection.DOWNLOADS),
-                DeviceCollection.DOWNLOADS,
-            ),
-            GalleryNavigationCodec.decode(
-                StoredGalleryNavigation(
-                    destination = "trash",
-                    deviceCollection = DeviceCollection.DOWNLOADS.name,
-                ),
-            ),
+            GalleryNavigationState(GalleryDestination.Library, GallerySource.ALL),
+            GalleryNavigationCodec.decode(StoredGalleryNavigation(destination = "library", source = "bogus")),
         )
     }
 }

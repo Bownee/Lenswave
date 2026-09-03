@@ -54,13 +54,31 @@ class GalleryGroupingTest {
     }
 
     @Test
-    fun chunksAlbumsIntoTwoColumnRows() {
-        val albums = (1..3).map { index -> album("album-$index") }
+    fun libraryRowsHeadEachSectionAndChunkItemsIntoTwoColumns() {
+        val albums = (1..3).map { index -> LibraryItem.Album(album("album-$index")) }
+        val entries = (1..3).map { index ->
+            LibraryItem.Entry(
+                key = "entry-$index",
+                label = "Entry $index",
+                iconRes = 0,
+                action = LibraryAction.Open(GalleryDestination.Library),
+            )
+        }
 
-        val rows = GalleryGrouping.createAlbumRows(albums)
+        val rows = GalleryGrouping.createLibraryRows(
+            listOf(
+                LibrarySection("albums", "Albums", albums),
+                LibrarySection("device", "Device", entries),
+            ),
+        )
 
-        assertEquals(listOf("album-1", "album-2"), (rows[0] as GalleryRow.Albums).items.map { it.nodeUid })
-        assertEquals(listOf("album-3"), (rows[1] as GalleryRow.Albums).items.map { it.nodeUid })
+        assertEquals(GalleryRow.SectionHeading("albums", "Albums"), rows[0])
+        assertEquals(listOf("album-1", "album-2"), (rows[1] as GalleryRow.Albums).items.map { it.nodeUid })
+        assertEquals(listOf("album-3"), (rows[2] as GalleryRow.Albums).items.map { it.nodeUid })
+        assertEquals(GalleryRow.SectionHeading("device", "Device"), rows[3])
+        assertEquals(listOf("entry-1", "entry-2"), (rows[4] as GalleryRow.Entries).items.map { it.key })
+        assertEquals(listOf("entry-3"), (rows[5] as GalleryRow.Entries).items.map { it.key })
+        assertEquals(6, rows.size)
     }
 
     private fun photo(id: String, timestamp: Long) = GalleryAsset.device(

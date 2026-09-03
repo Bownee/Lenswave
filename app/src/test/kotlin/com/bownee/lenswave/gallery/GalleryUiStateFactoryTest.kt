@@ -128,10 +128,10 @@ class GalleryUiStateFactoryTest {
     }
 
     @Test
-    fun `Proton albums do not claim to be empty before metadata loads`() {
+    fun `library reports album metadata loading without an empty state`() {
         val state = factory.create(
             GalleryUiInputs(
-                destination = GalleryDestination.ProtonAlbums,
+                destination = GalleryDestination.Library,
                 protonAccountStatus = ProtonAccountStatus.CONNECTED,
                 protonAlbums = ProtonAlbumsState(syncing = true),
             ),
@@ -143,23 +143,91 @@ class GalleryUiStateFactoryTest {
     }
 
     @Test
-    fun `loaded empty Proton albums show their empty state`() {
+    fun `library omits the albums section when there are no albums`() {
         val state = factory.create(
             GalleryUiInputs(
-                destination = GalleryDestination.ProtonAlbums,
+                destination = GalleryDestination.Library,
                 protonAccountStatus = ProtonAccountStatus.CONNECTED,
                 protonAlbums = ProtonAlbumsState(hasLoaded = true),
             ),
         )
 
-        assertNotNull(state.emptyState)
+        assertNull(state.emptyState)
+        assertEquals(listOf("media-types", "device", "trash"), state.librarySectionKeys())
     }
 
     @Test
-    fun `albums do not show timeline metadata activity`() {
+    fun `library lists Proton media types, device folders and trash when connected`() {
         val state = factory.create(
             GalleryUiInputs(
-                destination = GalleryDestination.ProtonAlbums,
+                destination = GalleryDestination.Library,
+                hasDeviceAccess = true,
+                protonAccountStatus = ProtonAccountStatus.CONNECTED,
+                protonAlbums = ProtonAlbumsState(hasLoaded = true),
+            ),
+        )
+
+        val sections = (state.content as GalleryContent.Library).sections.associateBy { it.key }
+        assertEquals(
+            ProtonMediaTag.entries.map { GalleryDestination.ProtonTag(it) },
+            sections.getValue("media-types").openedDestinations(),
+        )
+        assertEquals(
+            DeviceCollection.entries.filter { it != DeviceCollection.ALL }.map { GalleryDestination.Device(it) },
+            sections.getValue("device").openedDestinations(),
+        )
+        assertEquals(
+            listOf(GalleryDestination.Trash(PhotoSource.PROTON)),
+            sections.getValue("trash").openedDestinations(),
+        )
+    }
+
+    @Test
+    fun `library offers connect and access prompts when nothing is available`() {
+        val state = factory.create(
+            GalleryUiInputs(
+                destination = GalleryDestination.Library,
+                hasDeviceAccess = false,
+                supportsDeviceTrash = false,
+                protonAccountStatus = ProtonAccountStatus.DISCONNECTED,
+            ),
+        )
+
+        assertEquals(listOf("proton", "device"), state.librarySectionKeys())
+        val actions = (state.content as GalleryContent.Library).sections
+            .flatMap { it.items }
+            .filterIsInstance<LibraryItem.Entry>()
+            .map { it.action }
+        assertEquals(
+            listOf(
+                LibraryAction.Request(GalleryEmptyAction.CONNECT_PROTON),
+                LibraryAction.Request(GalleryEmptyAction.REQUEST_DEVICE_ACCESS),
+            ),
+            actions,
+        )
+        assertTrue(state.statusText.contains(R.string.proton_not_connected.toString()))
+    }
+
+    @Test
+    fun `library opens device trash when Proton is disconnected`() {
+        val state = factory.create(
+            GalleryUiInputs(
+                destination = GalleryDestination.Library,
+                hasDeviceAccess = true,
+                supportsDeviceTrash = true,
+                protonAccountStatus = ProtonAccountStatus.DISCONNECTED,
+            ),
+        )
+
+        val trash = (state.content as GalleryContent.Library).sections.single { it.key == "trash" }
+        assertEquals(listOf(GalleryDestination.Trash(PhotoSource.DEVICE)), trash.openedDestinations())
+    }
+
+    @Test
+    fun `library does not show timeline metadata activity`() {
+        val state = factory.create(
+            GalleryUiInputs(
+                destination = GalleryDestination.Library,
                 protonAccountStatus = ProtonAccountStatus.CONNECTED,
                 protonGallery = ProtonGalleryState(syncing = true),
                 protonAlbums = ProtonAlbumsState(hasLoaded = true),
@@ -167,7 +235,25 @@ class GalleryUiStateFactoryTest {
         )
 
         assertFalse(state.statusText.contains(R.string.loading_metadata.toString()))
-        assertNotNull(state.emptyState)
+        assertNull(state.emptyState)
+    }
+
+    @Test
+    fun `every destination carries a title`() {
+        val album = ProtonAlbumReference("album", "Trip")
+        val titles = listOf(
+            GalleryDestination.Combined to R.string.photos.toString(),
+            GalleryDestination.Device() to R.string.photos.toString(),
+            GalleryDestination.Device(DeviceCollection.SCREENSHOTS) to R.string.collection_screenshots.toString(),
+            GalleryDestination.ProtonTag(ProtonMediaTag.VIDEOS) to R.string.proton_tag_videos.toString(),
+            GalleryDestination.Library to R.string.library.toString(),
+            GalleryDestination.ProtonAlbumPhotos(album) to "Trip",
+            GalleryDestination.Trash(PhotoSource.DEVICE) to R.string.trash.toString(),
+        )
+
+        titles.forEach { (destination, expected) ->
+            assertTrue(factory.create(GalleryUiInputs(destination = destination)).title.startsWith(expected))
+        }
     }
 
     @Test
@@ -218,14 +304,14 @@ class GalleryUiStateFactoryTest {
     fun `cached albums background refresh is visually silent`() {
         val state = factory.create(
             GalleryUiInputs(
-                destination = GalleryDestination.ProtonAlbums,
+                destination = GalleryDestination.Library,
                 protonAccountStatus = ProtonAccountStatus.CONNECTED,
                 protonAlbums = ProtonAlbumsState(hasLoaded = true, syncing = true),
             ),
         )
 
         assertFalse(state.statusText.contains(R.string.loading_metadata.toString()))
-        assertNotNull(state.emptyState)
+        assertNull(state.emptyState)
     }
 
     @Test
@@ -256,13 +342,14 @@ class GalleryUiStateFactoryTest {
         )
         val state = factory.create(
             GalleryUiInputs(
-                destination = GalleryDestination.ProtonAlbums,
+                destination = GalleryDestination.Library,
                 protonAccountStatus = ProtonAccountStatus.CONNECTED,
                 protonAlbums = ProtonAlbumsState(albums = listOf(album), hasLoaded = true),
             ),
         )
 
-        assertEquals(listOf(album), (state.content as GalleryContent.Albums).albums)
+        val albums = (state.content as GalleryContent.Library).sections.single { it.key == "albums" }
+        assertEquals(listOf(LibraryItem.Album(album)), albums.items)
         assertNull(state.emptyState)
     }
 
@@ -448,7 +535,7 @@ class GalleryUiStateFactoryTest {
     fun `albums report album cover progress rather than timeline progress`() {
         val state = factory.create(
             GalleryUiInputs(
-                destination = GalleryDestination.ProtonAlbums,
+                destination = GalleryDestination.Library,
                 protonAccountStatus = ProtonAccountStatus.CONNECTED,
                 protonGallery = ProtonGalleryState(
                     photos = listOf(ProtonGalleryPhoto("timeline", 1, hasThumbnail = false)),
@@ -586,6 +673,13 @@ class GalleryUiStateFactoryTest {
         assertEquals(MediaKind.VIDEO, asset.mediaKind)
         assertTrue(asset.isFavorite)
     }
+
+    private fun GalleryUiState.librarySectionKeys(): List<String> =
+        (content as GalleryContent.Library).sections.map { it.key }
+
+    private fun LibrarySection.openedDestinations(): List<GalleryDestination> = items
+        .filterIsInstance<LibraryItem.Entry>()
+        .map { (it.action as LibraryAction.Open).destination }
 
     private fun deviceAsset(
         id: String,

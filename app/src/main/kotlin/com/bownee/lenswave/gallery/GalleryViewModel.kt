@@ -61,8 +61,7 @@ class GalleryViewModel @Inject internal constructor(
     private var hasChosenStartupDestination = restoredNavigation != null
     private var deviceAccessLevel = DeviceAccessLevel.NONE
     private val hasDeviceAccess get() = deviceAccessLevel != DeviceAccessLevel.NONE
-    private var selectedDeviceCollection = restoredNavigation?.selectedDeviceCollection
-        ?: DeviceCollection.CAMERA
+    private var timelineSource = restoredNavigation?.source ?: GallerySource.ALL
     private var devicePhotos = GallerySourceSnapshot<GalleryAsset>()
     private var deviceTrash = GallerySourceSnapshot<GalleryAsset>()
     private var protonGalleryState = ProtonGalleryState()
@@ -107,8 +106,8 @@ class GalleryViewModel @Inject internal constructor(
         if (previousDestination == GalleryDestination.Combined && newDestination != GalleryDestination.Combined) {
             resetCombinedMatching()
         }
-        if (newDestination is GalleryDestination.Device) {
-            selectedDeviceCollection = newDestination.collection
+        if (GalleryNavigationPolicy.tab(newDestination) == GalleryTab.PHOTOS) {
+            GalleryNavigationPolicy.selectedSource(newDestination)?.let { timelineSource = it }
         }
         saveDestination()
         publishUiState()
@@ -135,9 +134,20 @@ class GalleryViewModel @Inject internal constructor(
         }
     }
 
-    fun closeAlbum() {
-        if (destination !is GalleryDestination.ProtonAlbumPhotos) return
-        selectDestination(GalleryDestination.ProtonAlbums)
+    fun openPhotosTab() {
+        selectDestination(GalleryNavigationPolicy.timeline(timelineSource))
+    }
+
+    fun openLibrary() {
+        selectDestination(GalleryDestination.Library)
+    }
+
+    fun selectSource(source: GallerySource) {
+        selectDestination(GalleryNavigationPolicy.withSource(destination, source))
+    }
+
+    fun navigateUp() {
+        GalleryNavigationPolicy.parent(destination)?.let(::selectDestination)
     }
 
     fun requestRefresh(manual: Boolean = true) {
@@ -172,8 +182,8 @@ class GalleryViewModel @Inject internal constructor(
         viewModelScope.launch {
             resetCombinedMatchingAndJoin()
             accountManager.removeAccount(userId)
-            destination = GalleryDestination.Device()
-            selectedDeviceCollection = DeviceCollection.CAMERA
+            destination = GalleryNavigationPolicy.withoutProton(destination)
+            timelineSource = GallerySource.DEVICE
             saveDestination()
             publishUiState()
             requestRefresh(manual = false)
@@ -236,15 +246,23 @@ class GalleryViewModel @Inject internal constructor(
         }
         if (!hasChosenStartupDestination) {
             hasChosenStartupDestination = true
-            destination = if (readyAccount == null) {
-                GalleryDestination.Device()
+            timelineSource = if (readyAccount == null) GallerySource.DEVICE else GallerySource.ALL
+            destination = GalleryNavigationPolicy.timeline(timelineSource)
+            saveDestination()
+        } else if (readyAccount == null) {
+            val fallback = GalleryNavigationPolicy.withoutProton(destination)
+            val fallbackSource = if (
+                GalleryNavigationPolicy.requiresProton(GalleryNavigationPolicy.timeline(timelineSource))
+            ) {
+                GallerySource.DEVICE
             } else {
-                GalleryDestination.Combined
+                timelineSource
             }
-            saveDestination()
-        } else if (readyAccount == null && destination.space != GallerySpace.DEVICE) {
-            destination = GalleryDestination.Device(selectedDeviceCollection)
-            saveDestination()
+            if (fallback != destination || fallbackSource != timelineSource) {
+                destination = fallback
+                timelineSource = fallbackSource
+                saveDestination()
+            }
         }
         publishUiState()
         if (userChanged && nextUserId != null) {
@@ -320,7 +338,7 @@ class GalleryViewModel @Inject internal constructor(
                     }
                 }
             }
-            GalleryDestination.ProtonAlbums -> currentUserId?.let { userId ->
+            GalleryDestination.Library -> currentUserId?.let { userId ->
                 withContext(Dispatchers.IO) {
                     refreshProtonSection(userId) {
                         protonRepository.syncAlbumsMetadata(userId, forceRemote)
@@ -359,7 +377,7 @@ class GalleryViewModel @Inject internal constructor(
         GalleryDestination.Combined,
         GalleryDestination.ProtonTimeline,
         is GalleryDestination.ProtonTag,
-        GalleryDestination.ProtonAlbums,
+        GalleryDestination.Library,
         is GalleryDestination.ProtonAlbumPhotos
         -> true
         is GalleryDestination.Trash -> source == PhotoSource.PROTON
@@ -530,7 +548,6 @@ class GalleryViewModel @Inject internal constructor(
                 destination = destination,
                 hasDeviceAccess = hasDeviceAccess,
                 supportsDeviceTrash = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R,
-                selectedDeviceCollection = selectedDeviceCollection,
                 devicePhotos = devicePhotos,
                 deviceTrash = deviceTrash,
                 protonGallery = protonGalleryState,
@@ -552,19 +569,24 @@ class GalleryViewModel @Inject internal constructor(
     }
 
     private fun saveDestination() {
-        val navigation = GalleryNavigationState(destination, selectedDeviceCollection)
+        val navigation = GalleryNavigationState(destination, timelineSource)
         val stored = GalleryNavigationCodec.encode(navigation)
         savedStateHandle[STATE_DESTINATION] = stored.destination
+        savedStateHandle[STATE_SOURCE] = stored.source
         savedStateHandle[STATE_DEVICE_COLLECTION] = stored.deviceCollection
         savedStateHandle[STATE_TRASH_SOURCE] = stored.trashSource
         savedStateHandle[STATE_ALBUM_UID] = stored.albumUid
         savedStateHandle[STATE_ALBUM_NAME] = stored.albumName
         savedStateHandle[STATE_PROTON_TAG] = stored.protonTag
-        navigationStore.write(navigation)
+        // A cold start reopens the tab root, never a deep collection or album.
+        navigationStore.write(
+            navigation.copy(destination = GalleryNavigationPolicy.root(destination)),
+        )
     }
 
     private companion object {
         const val STATE_DESTINATION = "gallery.destination"
+        const val STATE_SOURCE = "gallery.source"
         const val STATE_DEVICE_COLLECTION = "gallery.device-collection"
         const val STATE_TRASH_SOURCE = "gallery.trash-source"
         const val STATE_ALBUM_UID = "gallery.album-uid"
@@ -575,6 +597,7 @@ class GalleryViewModel @Inject internal constructor(
             GalleryNavigationCodec.decode(
                 StoredGalleryNavigation(
                     destination = state[STATE_DESTINATION],
+                    source = state[STATE_SOURCE],
                     deviceCollection = state[STATE_DEVICE_COLLECTION],
                     trashSource = state[STATE_TRASH_SOURCE],
                     albumUid = state[STATE_ALBUM_UID],

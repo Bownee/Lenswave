@@ -1,74 +1,103 @@
 package com.bownee.lenswave.gallery
 
-import com.bownee.lenswave.proton.ProtonMediaTag
+import androidx.annotation.StringRes
+import com.bownee.lenswave.R
 
-internal enum class GallerySection {
+enum class GalleryTab {
     PHOTOS,
-    ALBUMS,
-    TRASH,
+    LIBRARY,
 }
 
-internal enum class GallerySourceFilter {
-    ALL,
-    PROTON,
-    DEVICE,
+/** The segmented source switch shown above a timeline or Trash. */
+enum class GallerySource(@param:StringRes val labelRes: Int) {
+    ALL(R.string.source_all),
+    PROTON(R.string.source_proton),
+    DEVICE(R.string.source_device),
 }
 
-internal data class GalleryPhotoFilters(
-    val source: GallerySourceFilter,
-    val protonTag: ProtonMediaTag? = null,
-    val deviceCollection: DeviceCollection = DeviceCollection.ALL,
-)
+object GalleryNavigationPolicy {
+    fun tab(destination: GalleryDestination): GalleryTab = when (destination) {
+        GalleryDestination.Combined,
+        GalleryDestination.ProtonTimeline,
+        -> GalleryTab.PHOTOS
 
-internal object GalleryNavigationPolicy {
-    fun section(destination: GalleryDestination): GallerySection = when (destination) {
-        GalleryDestination.ProtonAlbums,
+        is GalleryDestination.Device -> if (destination.collection == DeviceCollection.ALL) {
+            GalleryTab.PHOTOS
+        } else {
+            GalleryTab.LIBRARY
+        }
+
+        else -> GalleryTab.LIBRARY
+    }
+
+    fun timeline(source: GallerySource): GalleryDestination = when (source) {
+        GallerySource.ALL -> GalleryDestination.Combined
+        GallerySource.PROTON -> GalleryDestination.ProtonTimeline
+        GallerySource.DEVICE -> GalleryDestination.Device()
+    }
+
+    /** Sources the destination can switch between in place; empty when it offers none. */
+    fun sources(destination: GalleryDestination, supportsDeviceTrash: Boolean): List<GallerySource> = when {
+        tab(destination) == GalleryTab.PHOTOS -> GallerySource.entries
+        destination is GalleryDestination.Trash -> listOfNotNull(
+            GallerySource.PROTON,
+            GallerySource.DEVICE.takeIf { supportsDeviceTrash },
+        )
+        else -> emptyList()
+    }
+
+    fun selectedSource(destination: GalleryDestination): GallerySource? = when (destination) {
+        GalleryDestination.Combined -> GallerySource.ALL
+        GalleryDestination.ProtonTimeline -> GallerySource.PROTON
+        is GalleryDestination.Device -> GallerySource.DEVICE.takeIf {
+            destination.collection == DeviceCollection.ALL
+        }
+        is GalleryDestination.Trash -> when (destination.source) {
+            PhotoSource.PROTON -> GallerySource.PROTON
+            PhotoSource.DEVICE -> GallerySource.DEVICE
+        }
+        else -> null
+    }
+
+    fun withSource(destination: GalleryDestination, source: GallerySource): GalleryDestination =
+        if (destination is GalleryDestination.Trash) {
+            GalleryDestination.Trash(
+                if (source == GallerySource.DEVICE) PhotoSource.DEVICE else PhotoSource.PROTON,
+            )
+        } else {
+            timeline(source)
+        }
+
+    /** The screen Back returns to, or null when the destination is a tab root. */
+    fun parent(destination: GalleryDestination): GalleryDestination? = when {
+        destination == GalleryDestination.Library -> null
+        tab(destination) == GalleryTab.LIBRARY -> GalleryDestination.Library
+        else -> null
+    }
+
+    /** The tab root remembered across app restarts instead of a deep collection. */
+    fun root(destination: GalleryDestination): GalleryDestination = when (tab(destination)) {
+        GalleryTab.PHOTOS -> destination
+        GalleryTab.LIBRARY -> GalleryDestination.Library
+    }
+
+    fun requiresProton(destination: GalleryDestination): Boolean = when (destination) {
+        GalleryDestination.Combined,
+        GalleryDestination.ProtonTimeline,
+        is GalleryDestination.ProtonTag,
         is GalleryDestination.ProtonAlbumPhotos,
-        -> GallerySection.ALBUMS
+        -> true
 
-        is GalleryDestination.Trash -> GallerySection.TRASH
-        else -> GallerySection.PHOTOS
+        is GalleryDestination.Trash -> destination.source == PhotoSource.PROTON
+        GalleryDestination.Library,
+        is GalleryDestination.Device,
+        -> false
     }
 
-    fun photoFilters(
-        destination: GalleryDestination,
-        selectedDeviceCollection: DeviceCollection,
-    ): GalleryPhotoFilters = when (destination) {
-        GalleryDestination.Combined -> GalleryPhotoFilters(
-            source = GallerySourceFilter.ALL,
-            deviceCollection = selectedDeviceCollection,
-        )
-        is GalleryDestination.Device -> GalleryPhotoFilters(
-            source = GallerySourceFilter.DEVICE,
-            deviceCollection = destination.collection,
-        )
-
-        GalleryDestination.ProtonTimeline -> GalleryPhotoFilters(
-            source = GallerySourceFilter.PROTON,
-            deviceCollection = selectedDeviceCollection,
-        )
-        is GalleryDestination.ProtonTag -> GalleryPhotoFilters(
-            source = GallerySourceFilter.PROTON,
-            protonTag = destination.tag,
-            deviceCollection = selectedDeviceCollection,
-        )
-
-        else -> GalleryPhotoFilters(
-            source = if (destination.space == GallerySpace.DEVICE) {
-                GallerySourceFilter.DEVICE
-            } else {
-                GallerySourceFilter.PROTON
-            },
-            deviceCollection = selectedDeviceCollection,
-        )
-    }
-
-    fun photoDestination(filters: GalleryPhotoFilters): GalleryDestination = when (filters.source) {
-        GallerySourceFilter.ALL -> GalleryDestination.Combined
-        GallerySourceFilter.PROTON -> filters.protonTag
-            ?.let(GalleryDestination::ProtonTag)
-            ?: GalleryDestination.ProtonTimeline
-
-        GallerySourceFilter.DEVICE -> GalleryDestination.Device(filters.deviceCollection)
+    /** Where a destination lands once Proton is no longer connected. */
+    fun withoutProton(destination: GalleryDestination): GalleryDestination = when {
+        !requiresProton(destination) -> destination
+        tab(destination) == GalleryTab.PHOTOS -> GalleryDestination.Device()
+        else -> GalleryDestination.Library
     }
 }

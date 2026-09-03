@@ -3,6 +3,7 @@ package com.bownee.lenswave
 import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.InsetDrawable
 import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
@@ -14,17 +15,20 @@ import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.graphics.drawable.toDrawable
+import androidx.core.view.ViewCompat
 import androidx.core.widget.TextViewCompat
 import com.bownee.lenswave.gallery.GalleryAsset
 import com.bownee.lenswave.gallery.GalleryDestination
 import com.bownee.lenswave.gallery.GalleryListAdapter
 import com.bownee.lenswave.gallery.GalleryListView
 import com.bownee.lenswave.gallery.GalleryScrollPosition
+import com.bownee.lenswave.gallery.GallerySource
+import com.bownee.lenswave.gallery.GalleryTab
 import com.bownee.lenswave.gallery.GalleryThumbnailLoader
+import com.bownee.lenswave.gallery.LibraryAction
 import com.bownee.lenswave.proton.ProtonAlbum
 import com.bownee.lenswave.proton.ProtonPhotoGateway
 import kotlinx.coroutines.CoroutineScope
-import androidx.core.view.ViewCompat
 import me.proton.core.domain.entity.UserId
 
 internal class GalleryScreen(
@@ -36,10 +40,9 @@ internal class GalleryScreen(
     private val actions: Actions,
 ) {
     val root = FrameLayout(activity).apply { setBackgroundColor(UiStyle.background) }
-    val pageTitle: TextView
-    val filterRow: LinearLayout
-    val sourceFilterButton: Button
-    val mediaFilterButton: Button
+    private val pageTitle: TextView
+    private val sourceControl: LinearLayout
+    private val sourceButtons: Map<GallerySource, Button>
     private val status: TextView
     val list: GalleryListView
     val galleryHeader: LinearLayout
@@ -50,17 +53,16 @@ internal class GalleryScreen(
     private val emptyAction: Button
     val adapter: GalleryListAdapter
     val stickyDate: TextView
-    val sourceBar: LinearLayout
+    val tabBar: LinearLayout
     val selectionBar: LinearLayout
     private val selectionCount: TextView
     private val selectionDeleteButton: Button
     val settingsButton: ImageButton
     val refreshButton: ImageButton
-    val albumBackButton: ImageButton
+    private val backButton: ImageButton
     val trashDeleteAllButton: Button
-    val photosSectionButton: Button
-    val albumsSectionButton: Button
-    val trashSectionButton: Button
+    private val photosTabButton: Button
+    private val libraryTabButton: Button
 
     private var pendingStickyDatePosition: Int? = null
     private var stickyDateUpdatePosted = false
@@ -74,13 +76,12 @@ internal class GalleryScreen(
         val header = buildGalleryHeader()
         galleryHeader = header.container
         pageTitle = header.pageTitle
-        filterRow = header.filterRow
-        sourceFilterButton = header.sourceFilterButton
-        mediaFilterButton = header.mediaFilterButton
+        sourceControl = header.sourceControl
+        sourceButtons = header.sourceButtons
         status = header.status
         settingsButton = header.settingsButton
         refreshButton = header.refreshButton
-        albumBackButton = header.albumBackButton
+        backButton = header.backButton
         trashDeleteAllButton = header.trashDeleteAllButton
         emptyPanel = header.emptyPanel
         emptyTitle = header.emptyTitle
@@ -98,6 +99,7 @@ internal class GalleryScreen(
             onPhotoClicked = actions.onPhotoClicked,
             onFavoriteClicked = actions.onFavoriteClicked,
             onAlbumClicked = actions.onAlbumClicked,
+            onLibraryAction = actions.onLibraryAction,
             onSelectionChanged = actions.onSelectionChanged,
             currentDestination = currentDestination,
         )
@@ -141,12 +143,11 @@ internal class GalleryScreen(
             ),
         )
 
-        val source = buildSourceBar()
-        sourceBar = source.container
-        photosSectionButton = source.photos
-        albumsSectionButton = source.albums
-        trashSectionButton = source.trash
-        root.addView(sourceBar, bottomOverlayParams())
+        val tabs = buildTabBar()
+        tabBar = tabs.container
+        photosTabButton = tabs.photos
+        libraryTabButton = tabs.library
+        root.addView(tabBar, bottomOverlayParams())
 
         val selection = buildSelectionBar()
         selectionBar = selection.container.apply { visibility = View.GONE }
@@ -193,6 +194,28 @@ internal class GalleryScreen(
         trashDeleteAllButton.visibility = if (showDeleteAll) View.VISIBLE else View.GONE
         trashDeleteAllButton.isEnabled = !refreshing
         trashDeleteAllButton.alpha = if (refreshing) 0.5f else 1f
+    }
+
+    /**
+     * Renders the title row, the source switch, and the tab bar. [sources] lists the segments
+     * the current screen offers; fewer than two hides the switch.
+     */
+    fun renderNavigation(
+        title: String,
+        tab: GalleryTab,
+        showBack: Boolean,
+        sources: List<GallerySource>,
+        selectedSource: GallerySource?,
+    ) {
+        if (title.isNotEmpty()) pageTitle.text = title
+        backButton.visibility = if (showBack) View.VISIBLE else View.GONE
+        sourceControl.visibility = if (sources.size > 1) View.VISIBLE else View.GONE
+        sourceButtons.forEach { (source, button) ->
+            button.visibility = if (source in sources) View.VISIBLE else View.GONE
+            styleChoice(button, source == selectedSource)
+        }
+        styleChoice(photosTabButton, tab == GalleryTab.PHOTOS)
+        styleChoice(libraryTabButton, tab == GalleryTab.LIBRARY)
     }
 
     fun showContent() {
@@ -287,18 +310,18 @@ internal class GalleryScreen(
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        val albumBack = ImageButton(activity).apply {
+        val back = ImageButton(activity).apply {
             setImageResource(R.drawable.ic_back)
             imageTintList = ColorStateList.valueOf(UiStyle.text)
             background = Color.TRANSPARENT.toDrawable()
-            contentDescription = activity.getString(R.string.back_to_albums)
+            contentDescription = activity.getString(R.string.back)
             setPadding(activity.dp(10), activity.dp(10), activity.dp(10), activity.dp(10))
             visibility = View.GONE
             setOnClickListener {
-                if (adapter.selectedPhotos().isNotEmpty()) adapter.clearSelection() else actions.onAlbumBack()
+                if (adapter.selectedPhotos().isNotEmpty()) adapter.clearSelection() else actions.onBack()
             }
         }
-        titleRow.addView(albumBack, LinearLayout.LayoutParams(activity.dp(48), activity.dp(48)).apply {
+        titleRow.addView(back, LinearLayout.LayoutParams(activity.dp(48), activity.dp(48)).apply {
             marginEnd = activity.dp(4)
         })
         val title = text(activity.getString(R.string.photos), 30f, UiStyle.text).apply {
@@ -330,27 +353,19 @@ internal class GalleryScreen(
         titleRow.addView(settings, LinearLayout.LayoutParams(activity.dp(48), activity.dp(48)))
         container.addView(titleRow, matchWrap())
 
-        val sourceFilter = filterButton(activity.getString(R.string.filter_all_sources)).apply {
-            setOnClickListener { actions.onFilters() }
+        val sourceButtons = GallerySource.entries.associateWith { source ->
+            choiceButton(activity.getString(source.labelRes)).apply {
+                setOnClickListener { actions.onSourceSelected(source) }
+            }
         }
-        val mediaFilter = filterButton(activity.getString(R.string.proton_filter_all)).apply {
-            setOnClickListener { actions.onFilters() }
+        val sourceControl = choiceGroup().apply {
+            sourceButtons.values.forEachIndexed { index, button ->
+                addView(button, LinearLayout.LayoutParams(0, activity.dp(40), 1f).apply {
+                    if (index > 0) marginStart = activity.dp(3)
+                })
+            }
         }
-        val filterRow = LinearLayout(activity).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            addView(
-                sourceFilter,
-                LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, activity.dp(40)),
-            )
-            addView(
-                mediaFilter,
-                LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, activity.dp(40)).apply {
-                    marginStart = activity.dp(8)
-                },
-            )
-        }
-        container.addView(filterRow, matchWrap().apply { topMargin = activity.dp(8) })
+        container.addView(sourceControl, matchWrap().apply { topMargin = activity.dp(8) })
 
         val statusRow = LinearLayout(activity).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -388,13 +403,12 @@ internal class GalleryScreen(
         return Header(
             container,
             title,
-            filterRow,
-            sourceFilter,
-            mediaFilter,
+            sourceControl,
+            sourceButtons,
             status,
             settings,
             refresh,
-            albumBack,
+            back,
             deleteAll,
             empty,
         )
@@ -422,35 +436,20 @@ internal class GalleryScreen(
         return EmptyPanel(container, title, message, action)
     }
 
-    private fun buildSourceBar(): SourceBar {
-        val photos = sectionButton(activity.getString(R.string.photos)).apply {
-            setOnClickListener { actions.onPhotosSection() }
+    private fun buildTabBar(): TabBar {
+        val photos = choiceButton(activity.getString(R.string.photos)).apply {
+            setOnClickListener { actions.onPhotosTab() }
         }
-        val albums = sectionButton(activity.getString(R.string.albums)).apply {
-            setOnClickListener { actions.onAlbumsSection() }
+        val library = choiceButton(activity.getString(R.string.library)).apply {
+            setOnClickListener { actions.onLibraryTab() }
         }
-        val trash = sectionButton(activity.getString(R.string.trash)).apply {
-            setOnClickListener { actions.onTrashSection() }
-        }
-        val container = LinearLayout(activity).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(activity.dp(3), activity.dp(3), activity.dp(3), activity.dp(3))
-            background = UiStyle.rounded(
-                activity,
-                UiStyle.navigationSurface,
-                20,
-                UiStyle.navigationBorder,
-            )
+        val container = choiceGroup().apply {
             addView(photos, LinearLayout.LayoutParams(0, activity.dp(48), 1f))
-            addView(albums, LinearLayout.LayoutParams(0, activity.dp(48), 1f).apply {
-                marginStart = activity.dp(3)
-            })
-            addView(trash, LinearLayout.LayoutParams(0, activity.dp(48), 1f).apply {
+            addView(library, LinearLayout.LayoutParams(0, activity.dp(48), 1f).apply {
                 marginStart = activity.dp(3)
             })
         }
-        return SourceBar(container, photos, albums, trash)
+        return TabBar(container, photos, library)
     }
 
     private fun buildSelectionBar(): SelectionBar {
@@ -481,7 +480,19 @@ internal class GalleryScreen(
         return SelectionBar(container, count, delete)
     }
 
-    private fun sectionButton(label: String) = Button(activity).apply {
+    private fun choiceGroup() = LinearLayout(activity).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(activity.dp(3), activity.dp(3), activity.dp(3), activity.dp(3))
+        background = UiStyle.rounded(
+            activity,
+            UiStyle.navigationSurface,
+            20,
+            UiStyle.navigationBorder,
+        )
+    }
+
+    private fun choiceButton(label: String) = Button(activity).apply {
         text = label
         textSize = 13f
         setTextColor(UiStyle.muted)
@@ -489,19 +500,33 @@ internal class GalleryScreen(
         gravity = Gravity.CENTER
         minWidth = 0
         minimumWidth = 0
+        minHeight = 0
+        minimumHeight = 0
         setPadding(activity.dp(8), 0, activity.dp(8), 0)
         background = Color.TRANSPARENT.toDrawable()
     }
 
-    private fun filterButton(label: String) = Button(activity).apply {
-        text = activity.getString(R.string.source_dropdown_label, label)
-        textSize = 13f
-        setTextColor(UiStyle.text)
-        isAllCaps = false
-        minWidth = 0
-        minimumWidth = 0
-        setPadding(activity.dp(14), 0, activity.dp(14), 0)
-        background = UiStyle.rounded(activity, UiStyle.surface, 14, UiStyle.border)
+    private fun styleChoice(button: Button, selected: Boolean) {
+        button.isSelected = selected
+        button.isActivated = selected
+        ViewCompat.setStateDescription(
+            button,
+            activity.getString(if (selected) R.string.selected else R.string.not_selected),
+        )
+        button.setTextColor(if (selected) UiStyle.text else UiStyle.navigationMuted)
+        button.background = if (selected) {
+            InsetDrawable(
+                UiStyle.rounded(
+                    activity,
+                    UiStyle.navigationSelected,
+                    15,
+                    UiStyle.navigationBorder,
+                ),
+                activity.dp(3),
+            )
+        } else {
+            Color.TRANSPARENT.toDrawable()
+        }
     }
 
     private fun iconLabelButton(label: String, icon: Int, destructive: Boolean = false) =
@@ -552,15 +577,15 @@ internal class GalleryScreen(
         val onPhotoClicked: (GalleryAsset) -> Unit,
         val onFavoriteClicked: (GalleryAsset) -> Unit,
         val onAlbumClicked: (ProtonAlbum) -> Unit,
+        val onLibraryAction: (LibraryAction) -> Unit,
         val onSelectionChanged: (List<GalleryAsset>) -> Unit,
         val onRefresh: () -> Unit,
-        val onAlbumBack: () -> Unit,
-        val onFilters: () -> Unit,
+        val onBack: () -> Unit,
         val onSettings: () -> Unit,
         val onDeleteAllTrash: () -> Unit,
-        val onPhotosSection: () -> Unit,
-        val onAlbumsSection: () -> Unit,
-        val onTrashSection: () -> Unit,
+        val onPhotosTab: () -> Unit,
+        val onLibraryTab: () -> Unit,
+        val onSourceSelected: (GallerySource) -> Unit,
         val onDeleteSelection: () -> Unit,
     )
 
@@ -574,13 +599,12 @@ internal class GalleryScreen(
     private data class Header(
         val container: LinearLayout,
         val pageTitle: TextView,
-        val filterRow: LinearLayout,
-        val sourceFilterButton: Button,
-        val mediaFilterButton: Button,
+        val sourceControl: LinearLayout,
+        val sourceButtons: Map<GallerySource, Button>,
         val status: TextView,
         val settingsButton: ImageButton,
         val refreshButton: ImageButton,
-        val albumBackButton: ImageButton,
+        val backButton: ImageButton,
         val trashDeleteAllButton: Button,
         val empty: EmptyPanel,
     ) {
@@ -590,11 +614,10 @@ internal class GalleryScreen(
         val emptyAction get() = empty.action
     }
 
-    private data class SourceBar(
+    private data class TabBar(
         val container: LinearLayout,
         val photos: Button,
-        val albums: Button,
-        val trash: Button,
+        val library: Button,
     )
 
     private data class SelectionBar(

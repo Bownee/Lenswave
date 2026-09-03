@@ -9,8 +9,10 @@ import java.util.Locale
 
 sealed interface GalleryRow {
     data class DateHeader(val key: String, val label: String) : GalleryRow
+    data class SectionHeading(val key: String, val label: String) : GalleryRow
     data class Photos(val items: List<GalleryAsset>) : GalleryRow
     data class Albums(val items: List<ProtonAlbum>) : GalleryRow
+    data class Entries(val items: List<LibraryItem.Entry>) : GalleryRow
 }
 
 object GalleryGrouping {
@@ -41,9 +43,24 @@ object GalleryGrouping {
         }
     }
 
-    fun createAlbumRows(albums: List<ProtonAlbum>, columns: Int = 2): List<GalleryRow> {
-        require(columns > 0) { "Columns must be positive" }
-        return albums.chunked(columns).map(GalleryRow::Albums)
+    fun createLibraryRows(
+        sections: List<LibrarySection>,
+        albumColumns: Int = 2,
+        entryColumns: Int = 2,
+    ): List<GalleryRow> {
+        require(albumColumns > 0 && entryColumns > 0) { "Columns must be positive" }
+        return buildList {
+            sections.forEach { section ->
+                add(GalleryRow.SectionHeading(section.key, section.title))
+                section.items.filterIsInstance<LibraryItem.Album>()
+                    .map(LibraryItem.Album::album)
+                    .chunked(albumColumns)
+                    .forEach { add(GalleryRow.Albums(it)) }
+                section.items.filterIsInstance<LibraryItem.Entry>()
+                    .chunked(entryColumns)
+                    .forEach { add(GalleryRow.Entries(it)) }
+            }
+        }
     }
 
     private fun dateOf(photo: GalleryAsset, zoneId: ZoneId): LocalDate? =
