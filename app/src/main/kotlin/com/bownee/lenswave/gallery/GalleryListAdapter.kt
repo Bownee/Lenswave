@@ -350,14 +350,9 @@ class GalleryListAdapter(
             visibility = View.GONE
         }
         val favorite = ImageButton(context).apply {
-            setPadding(context.dp(12))
+            setPadding(context.dp(18))
             imageTintList = ColorStateList.valueOf(Color.WHITE)
-            background = UiStyle.rounded(
-                context,
-                Color.argb(185, 20, 22, 27),
-                16,
-                Color.argb(105, 255, 255, 255),
-            )
+            background = null
             visibility = View.GONE
         }
 
@@ -373,9 +368,9 @@ class GalleryListAdapter(
                 marginEnd = context.dp(7)
             })
             addView(videoBadge, LayoutParams(context.dp(28), context.dp(28), Gravity.CENTER))
-            addView(favorite, LayoutParams(context.dp(48), context.dp(48), Gravity.BOTTOM or Gravity.START).apply {
-                bottomMargin = context.dp(4)
-                marginStart = context.dp(4)
+            addView(favorite, LayoutParams(context.dp(48), context.dp(48), Gravity.TOP or Gravity.END).apply {
+                topMargin = context.dp(1)
+                marginEnd = context.dp(1)
             })
         }
     }
