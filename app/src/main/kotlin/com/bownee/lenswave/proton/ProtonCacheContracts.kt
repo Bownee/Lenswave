@@ -1,5 +1,6 @@
 package com.bownee.lenswave.proton
 
+import android.graphics.Bitmap
 import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
@@ -39,10 +40,9 @@ interface ProtonTrashCache {
 }
 
 interface ProtonMediaCache {
-    fun readThumbnail(userId: String, nodeUid: String): ByteArray?
+    fun loadThumbnail(userId: String, nodeUid: String): Bitmap?
     fun writeThumbnail(userId: String, nodeUid: String, bytes: ByteArray)
     fun removeThumbnail(userId: String, nodeUid: String)
-    fun thumbnailIsDecodable(userId: String, nodeUid: String): Boolean
     fun readOriginal(userId: String, nodeUid: String): File?
     fun createOriginalTarget(userId: String, nodeUid: String): Pair<File, File>
     fun commitOriginal(userId: String, nodeUid: String, plaintext: File, target: File): File

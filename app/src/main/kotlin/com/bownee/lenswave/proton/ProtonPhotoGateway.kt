@@ -1,15 +1,18 @@
 package com.bownee.lenswave.proton
 
-import java.io.File
+import android.graphics.Bitmap
 import com.bownee.lenswave.gallery.ProtonDuplicateSource
 import com.bownee.lenswave.gallery.ProtonGalleryReader
 import com.bownee.lenswave.gallery.ProtonSessionLifecycle
+import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.toList
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import me.proton.core.domain.entity.UserId
 import me.proton.drive.sdk.entity.NodeResultPair
@@ -119,7 +122,10 @@ class ProtonPhotoGateway @Inject internal constructor(
         }
     }
 
-    internal suspend fun downloadNextQueuedThumbnailBatch(userId: UserId): ProtonThumbnailQueueStep =
+    internal suspend fun downloadNextQueuedThumbnailBatch(
+        userId: UserId,
+        onProgress: suspend (remaining: Int) -> Unit,
+    ): ProtonThumbnailQueueStep =
         withContext(Dispatchers.IO) {
             sessionGuard.withActiveSession(userId) {
                 processThumbnailBatch(
@@ -128,9 +134,14 @@ class ProtonPhotoGateway @Inject internal constructor(
                         userId.id,
                         ProtonThumbnailDownloadPolicy.BACKGROUND_CLAIM_SIZE,
                     ),
+                    onProgress,
                 )
             }
         }
+
+    internal suspend fun pendingThumbnailCount(userId: UserId): Int = withContext(Dispatchers.IO) {
+        sessionGuard.withActiveSession(userId) { thumbnailQueue.pendingCount(userId.id) }
+    }
 
     internal suspend fun flushThumbnailQueue(userId: UserId) {
         thumbnailQueue.flush(userId.id)
@@ -146,20 +157,11 @@ class ProtonPhotoGateway @Inject internal constructor(
             sessionGuard.withActiveSession(userId) { downloads.getOriginalFileName(userId, nodeUid) }
         }
 
-    fun readThumbnail(userId: UserId, nodeUid: String): ByteArray? =
-        downloads.readThumbnail(userId, nodeUid)
-
-    internal suspend fun invalidateThumbnail(userId: UserId, nodeUid: String) {
-        withContext(Dispatchers.IO) {
-            sessionGuard.withActiveSession(userId) {
-                val sources = thumbnailSources(nodeUid)
-                downloads.removeThumbnail(userId, nodeUid)
-                val nodeUids = setOf(nodeUid)
-                timeline.markThumbnailsUnavailable(userId, nodeUids)
-                albums.markCoverThumbnailsUnavailable(userId, nodeUids)
-                albums.markAlbumPhotoThumbnailsUnavailable(userId, nodeUids)
-                trash.markThumbnailsUnavailable(userId, nodeUids)
-                thumbnailQueue.retryNow(userId.id, nodeUid, sources)
+    suspend fun loadThumbnail(userId: UserId, nodeUid: String): Bitmap? = withContext(Dispatchers.IO) {
+        sessionGuard.withActiveSession(userId) {
+            downloads.loadThumbnail(userId, nodeUid) ?: run {
+                invalidateThumbnailInActiveSession(userId, nodeUid)
+                null
             }
         }
     }
@@ -223,14 +225,19 @@ class ProtonPhotoGateway @Inject internal constructor(
     private suspend fun processThumbnailBatch(
         userId: UserId,
         entries: List<ProtonThumbnailQueueEntry>,
+        onProgress: suspend (remaining: Int) -> Unit = {},
     ): ProtonThumbnailQueueStep {
         if (entries.isEmpty()) {
             return ProtonThumbnailQueueStep.Idle(thumbnailQueue.hasPending(userId.id))
         }
         val nodeUids = entries.map(ProtonThumbnailQueueEntry::nodeUid)
+        val progressMutex = Mutex()
         return try {
             val result = downloads.downloadThumbnails(userId, nodeUids) { progress ->
-                settleThumbnailProgress(userId, progress)
+                progressMutex.withLock {
+                    settleThumbnailProgress(userId, progress)
+                    onProgress(thumbnailQueue.pendingCount(userId.id))
+                }
             }
             if (result.failures.isEmpty()) {
                 ProtonThumbnailQueueStep.Downloaded
@@ -242,6 +249,7 @@ class ProtonPhotoGateway @Inject internal constructor(
             throw error
         } catch (_: Throwable) {
             thumbnailQueue.settle(userId.id, emptySet(), nodeUids.toSet())
+            onProgress(thumbnailQueue.pendingCount(userId.id))
             ProtonThumbnailQueueStep.Failed
         }
     }
@@ -259,6 +267,17 @@ class ProtonPhotoGateway @Inject internal constructor(
         result.successfulNodeUids.filterNot(completedNodeUids::contains)
             .forEach { nodeUid -> downloads.removeThumbnail(userId, nodeUid) }
         publishThumbnailAvailability(userId, completed)
+    }
+
+    private suspend fun invalidateThumbnailInActiveSession(userId: UserId, nodeUid: String) {
+        val sources = thumbnailSources(nodeUid)
+        downloads.removeThumbnail(userId, nodeUid)
+        val nodeUids = setOf(nodeUid)
+        timeline.markThumbnailsUnavailable(userId, nodeUids)
+        albums.markCoverThumbnailsUnavailable(userId, nodeUids)
+        albums.markAlbumPhotoThumbnailsUnavailable(userId, nodeUids)
+        trash.markThumbnailsUnavailable(userId, nodeUids)
+        thumbnailQueue.retryNow(userId.id, nodeUid, sources)
     }
 
     private fun publishThumbnailAvailability(

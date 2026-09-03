@@ -43,6 +43,11 @@ class ProtonThumbnailWorker(
             if (session.activeUserId != requestedUserId) {
                 return Result.failure()
             }
+            val initialPending = repository.pendingThumbnailCount(requestedUserId)
+            if (initialPending == 0) {
+                repository.flushThumbnailQueue(requestedUserId)
+                return resolve(repository)
+            }
             val networkMonitor = ProtonThumbnailNetworkMonitor(applicationContext)
             if (!networkMonitor.hasValidatedUnmeteredNetwork()) {
                 return resolve(
@@ -52,7 +57,8 @@ class ProtonThumbnailWorker(
                 )
             }
             val foregroundInfoFactory = ProtonThumbnailForegroundInfoFactory(applicationContext)
-            publishForeground(repository, foregroundInfoFactory)
+            val notificationProgress = ProtonThumbnailNotificationProgressTracker(initialPending)
+            publishForeground(foregroundInfoFactory, notificationProgress.current)
             repository.updateThumbnailWorkStatus(
                 ProtonThumbnailWorkStatus.Running(attempt, ProtonThumbnailWorkPolicy.MAX_ATTEMPTS)
             )
@@ -69,14 +75,11 @@ class ProtonThumbnailWorker(
                         runIssue = ProtonThumbnailWorkIssue.INCOMPLETE
                         break
                     }
-                    when (val step = repository.downloadNextQueuedThumbnailBatch(requestedUserId)) {
-                        ProtonThumbnailQueueStep.Downloaded -> {
-                            publishForeground(repository, foregroundInfoFactory)
-                        }
-                        ProtonThumbnailQueueStep.Failed -> {
-                            sawFailure = true
-                            publishForeground(repository, foregroundInfoFactory)
-                        }
+                    when (val step = repository.downloadNextQueuedThumbnailBatch(requestedUserId) { remaining ->
+                        publishForeground(foregroundInfoFactory, notificationProgress.update(remaining))
+                    }) {
+                        ProtonThumbnailQueueStep.Downloaded -> Unit
+                        ProtonThumbnailQueueStep.Failed -> sawFailure = true
                         is ProtonThumbnailQueueStep.Idle -> {
                             completedWithinTime = true
                             runIssue = when {
@@ -90,6 +93,10 @@ class ProtonThumbnailWorker(
                 }
                 runIssue
             }
+            publishForeground(
+                foregroundInfoFactory,
+                notificationProgress.update(repository.pendingThumbnailCount(requestedUserId)),
+            )
             repository.flushThumbnailQueue(requestedUserId)
             resolve(
                 repository,
@@ -108,20 +115,10 @@ class ProtonThumbnailWorker(
     }
 
     private suspend fun publishForeground(
-        repository: ProtonPhotoGateway,
         factory: ProtonThumbnailForegroundInfoFactory,
+        progress: ProtonThumbnailNotificationProgress,
     ) {
-        val state = repository.state.value
-        val total = state.photos.size
-        setForeground(
-            factory.create(
-                workerId = id,
-                progress = ProtonThumbnailNotificationProgress(
-                    downloaded = state.downloadedThumbnailCount.coerceIn(0, total),
-                    total = total,
-                ),
-            ),
-        )
+        setForeground(factory.create(workerId = id, progress = progress))
     }
 
     private fun resolve(

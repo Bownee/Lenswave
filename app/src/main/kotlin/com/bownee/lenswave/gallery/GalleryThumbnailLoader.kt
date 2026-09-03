@@ -2,7 +2,6 @@ package com.bownee.lenswave.gallery
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.util.LruCache
 import android.util.Size
 import androidx.core.net.toUri
@@ -116,17 +115,8 @@ class GalleryThumbnailLoader(
 
     private suspend fun loadProtonThumbnail(nodeUid: String): Bitmap? {
         val userId = protonUserId() ?: return null
-        val bitmap = protonRepository.readThumbnail(userId, nodeUid)?.decodeThumbnail()
-        if (bitmap == null) protonRepository.invalidateThumbnail(userId, nodeUid)
-        return bitmap
+        return protonRepository.loadThumbnail(userId, nodeUid)
     }
-
-    private fun ByteArray.decodeThumbnail(): Bitmap? = BitmapFactory.decodeByteArray(
-        this,
-        0,
-        size,
-        BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.RGB_565 },
-    )
 
     private fun cacheSize(): Int = (Runtime.getRuntime().maxMemory() / 1_024 / 12)
         .coerceIn(8 * 1_024, 48 * 1_024)

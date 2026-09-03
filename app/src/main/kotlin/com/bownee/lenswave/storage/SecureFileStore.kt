@@ -84,7 +84,9 @@ class SecureFileStore @Inject constructor() {
 
     fun deleteKey(scope: String) {
         synchronized(keyStoreLock) {
-            keyStore().deleteEntry(alias(scope))
+            val alias = alias(scope)
+            keyStore.deleteEntry(alias)
+            keyReferences.remove(alias)
         }
     }
 
@@ -118,7 +120,7 @@ class SecureFileStore @Inject constructor() {
 
     private fun key(scope: String): SecretKey = synchronized(keyStoreLock) {
         val alias = alias(scope)
-        (keyStore().getKey(alias, null) as? SecretKey) ?: KeyGenerator
+        keyReferences[alias] ?: ((keyStore.getKey(alias, null) as? SecretKey) ?: KeyGenerator
             .getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
             .apply {
                 init(
@@ -133,15 +135,13 @@ class SecureFileStore @Inject constructor() {
                         .build()
                 )
             }
-            .generateKey()
+            .generateKey()).also { keyReferences[alias] = it }
     }
 
     private fun alias(scope: String): String = ALIAS_PREFIX + MessageDigest
         .getInstance("SHA-256")
         .digest(scope.toByteArray(Charsets.UTF_8))
         .joinToString("") { "%02x".format(it) }
-
-    private fun keyStore(): KeyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
 
     private companion object {
         const val ANDROID_KEYSTORE = "AndroidKeyStore"
@@ -151,5 +151,9 @@ class SecureFileStore @Inject constructor() {
         val MAGIC = byteArrayOf(0x4c, 0x57, 0x45, 0x46)
         const val VERSION: Byte = 1
         val keyStoreLock = Any()
+        val keyStore: KeyStore by lazy {
+            KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+        }
+        val keyReferences = mutableMapOf<String, SecretKey>()
     }
 }

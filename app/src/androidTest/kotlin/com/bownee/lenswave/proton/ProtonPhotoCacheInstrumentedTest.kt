@@ -13,6 +13,8 @@ import java.io.File
 import java.util.UUID
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -23,7 +25,7 @@ class ProtonPhotoCacheInstrumentedTest {
         val context = isolatedContext()
         val userId = "cache-${UUID.randomUUID()}"
         val clock = FakeClock(System.currentTimeMillis())
-        val cache = ProtonPhotoCache(context, SecureFileStore(), clock)
+        val cache = createCache(context, SecureFileStore(), clock)
         val index = File(
             context.filesDir,
             "proton-photo-cache/${AtomicFileStore.safeName(userId)}/index.json",
@@ -64,7 +66,7 @@ class ProtonPhotoCacheInstrumentedTest {
         val context = isolatedContext()
         val userId = "retention-${UUID.randomUUID()}"
         val clock = FakeClock(System.currentTimeMillis())
-        val cache = ProtonPhotoCache(context, SecureFileStore(), clock)
+        val cache = createCache(context, SecureFileStore(), clock)
         val thumbnail = validThumbnail()
         try {
             cache.writeThumbnail(userId, "old", thumbnail)
@@ -89,7 +91,7 @@ class ProtonPhotoCacheInstrumentedTest {
         val userId = "decode-${UUID.randomUUID()}"
         val nodeUid = "truncated"
         val secureFiles = SecureFileStore()
-        val cache = ProtonPhotoCache(context, secureFiles, FakeClock(System.currentTimeMillis()))
+        val cache = createCache(context, secureFiles, FakeClock(System.currentTimeMillis()))
         val truncatedThumbnail = validThumbnail().copyOf(33)
         val thumbnailFile = File(
             context.filesDir,
@@ -108,9 +110,40 @@ class ProtonPhotoCacheInstrumentedTest {
                 "Could not write test thumbnail",
             )
             assertTrue(cache.thumbnailExists(userId, nodeUid))
-            assertFalse(cache.thumbnailIsDecodable(userId, nodeUid))
+            assertNull(cache.loadThumbnail(userId, nodeUid))
             assertFalse(thumbnailFile.exists())
         } finally {
+            cache.clearUser(userId)
+            context.testRoot.deleteRecursively()
+        }
+    }
+
+    @Test fun decodedThumbnailsAreSizedOnceAndSharedAcrossConsumers() {
+        val context = isolatedContext()
+        val userId = "decoded-${UUID.randomUUID()}"
+        val secureFiles = SecureFileStore()
+        val clock = FakeClock(System.currentTimeMillis())
+        val cache = createCache(context, secureFiles, clock)
+        val output = ByteArrayOutputStream()
+        val source = Bitmap.createBitmap(1_200, 600, Bitmap.Config.ARGB_8888)
+        try {
+            assertTrue(source.compress(Bitmap.CompressFormat.PNG, 100, output))
+            cache.writeThumbnail(userId, "large", output.toByteArray())
+
+            val first = cache.loadThumbnail(userId, "large")
+            val second = cache.loadThumbnail(userId, "large")
+
+            assertEquals(480, first?.width)
+            assertEquals(240, first?.height)
+            assertSame(first, second)
+
+            val restoredStore = ProtonThumbnailStore(context, secureFiles, clock)
+            val restored = restoredStore.load(userId, "large")
+            assertEquals(480, restored?.width)
+            assertEquals(240, restored?.height)
+            assertSame(restored, restoredStore.load(userId, "large"))
+        } finally {
+            source.recycle()
             cache.clearUser(userId)
             context.testRoot.deleteRecursively()
         }
@@ -131,6 +164,17 @@ class ProtonPhotoCacheInstrumentedTest {
         val root = File(context.cacheDir, "proton-cache-test-${UUID.randomUUID()}").apply { mkdirs() }
         return IsolatedCacheContext(context, root)
     }
+
+    private fun createCache(
+        context: Context,
+        secureFiles: SecureFileStore,
+        clock: LenswaveClock,
+    ): ProtonPhotoCache = ProtonPhotoCache(
+        context,
+        secureFiles,
+        clock,
+        ProtonThumbnailStore(context, secureFiles, clock),
+    )
 
     private class IsolatedCacheContext(context: Context, val testRoot: File) : ContextWrapper(context) {
         private val testFiles = File(testRoot, "files").apply { mkdirs() }

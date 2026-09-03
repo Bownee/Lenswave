@@ -8,7 +8,6 @@ import android.app.RecoverableSecurityException
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -250,11 +249,10 @@ class PhotoViewerActivity : FragmentActivity() {
     }
 
     private suspend fun showCachedProtonThumbnail(requestedPhoto: PhotoRequest.Proton) {
-        val bitmap = withContext(Dispatchers.IO) {
-            protonRepository.readThumbnail(UserId(requestedPhoto.userId), requestedPhoto.protonNodeUid)?.let { bytes ->
-                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-            }
-        }
+        val bitmap = protonRepository.loadThumbnail(
+            UserId(requestedPhoto.userId),
+            requestedPhoto.protonNodeUid,
+        )
         if (!PhotoPreviewPolicy.canShow(
                 requestedPhoto.source,
                 requestedPhoto.stableId,
@@ -262,7 +260,6 @@ class PhotoViewerActivity : FragmentActivity() {
                 bitmap != null,
             )
         ) {
-            bitmap?.recycle()
             return
         }
 
@@ -1079,7 +1076,6 @@ class PhotoViewerActivity : FragmentActivity() {
         thumbnailPreview.translationY = 0f
         thumbnailPreview.scaleX = 1f
         thumbnailPreview.scaleY = 1f
-        thumbnailBitmap?.takeUnless(Bitmap::isRecycled)?.recycle()
         thumbnailBitmap = null
     }
 

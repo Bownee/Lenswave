@@ -194,7 +194,7 @@
     <string name="thumbnail_download_channel_description">Progress for Proton thumbnail downloads</string>
     <string name="thumbnail_download_notification_title">Downloading Proton thumbnails</string>
     <string name="thumbnail_download_notification_detail">Downloading in the background</string>
-    <string name="thumbnail_download_notification_progress">%1$d of %2$d downloaded</string>
+    <string name="thumbnail_download_notification_progress">%1$d / %2$d</string>
     <string name="no_photos_found">No photos found</string>
     <string name="thumbnail_still_downloading">This thumbnail is still downloading</string>
     <string name="photo_download_failed">Photo download failed</string>

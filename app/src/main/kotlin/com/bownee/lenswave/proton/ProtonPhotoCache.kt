@@ -1,8 +1,6 @@
 package com.bownee.lenswave.proton
 
 import android.content.Context
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import dagger.hilt.android.qualifiers.ApplicationContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -10,7 +8,6 @@ import java.io.File
 import com.bownee.lenswave.LenswaveClock
 import com.bownee.lenswave.storage.AtomicFileStore
 import com.bownee.lenswave.storage.SecureFileStore
-import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -19,6 +16,7 @@ internal class ProtonPhotoCache @Inject constructor(
     @ApplicationContext context: Context,
     private val secureFiles: SecureFileStore,
     private val clock: LenswaveClock,
+    private val thumbnails: ProtonThumbnailStore,
 ) : ProtonSyncMetadataStore,
     ProtonAccountCacheCleaner,
     ProtonTimelineCache,
@@ -33,87 +31,18 @@ internal class ProtonPhotoCache @Inject constructor(
         deleteRecursively()
         mkdirs()
     }
-    private val validatedThumbnails = ConcurrentHashMap.newKeySet<ThumbnailCacheKey>()
-
     /** Metadata hydration only needs availability; authenticated contents are validated when read. */
     override fun thumbnailExists(userId: String, nodeUid: String): Boolean =
-        thumbnailFile(userId, nodeUid).let { file ->
-            (file.isFile && file.length() > 0L).also { exists ->
-                if (!exists) file.delete()
-            }
-        }
+        thumbnails.exists(userId, nodeUid)
 
-    override fun thumbnailIsDecodable(userId: String, nodeUid: String): Boolean {
-        val key = ThumbnailCacheKey(userId, nodeUid)
-        val file = thumbnailFile(userId, nodeUid)
-        if (key in validatedThumbnails && file.isFile && file.length() > 0L) return true
-        validatedThumbnails.remove(key)
-        return validateThumbnailFile(key, file)
-    }
-
-    override fun readThumbnail(userId: String, nodeUid: String): ByteArray? {
-        val key = ThumbnailCacheKey(userId, nodeUid)
-        val file = thumbnailFile(userId, nodeUid)
-        if (!file.isFile || file.length() <= 0L) {
-            validatedThumbnails.remove(key)
-            file.delete()
-            return null
-        }
-        val bytes = runCatching { secureFiles.read(scope(userId), file) }.getOrElse {
-            validatedThumbnails.remove(key)
-            file.delete()
-            return null
-        }
-        if (key !in validatedThumbnails && !isDecodableThumbnail(bytes)) {
-            file.delete()
-            return null
-        }
-        validatedThumbnails += key
-        return bytes
-    }
+    override fun loadThumbnail(userId: String, nodeUid: String) = thumbnails.load(userId, nodeUid)
 
     override fun writeThumbnail(userId: String, nodeUid: String, bytes: ByteArray) {
-        require(isDecodableThumbnail(bytes)) { "Proton returned an invalid thumbnail image" }
-        val target = thumbnailFile(userId, nodeUid)
-        target.parentFile?.mkdirs()
-        secureFiles.write(scope(userId), target, bytes, "Could not commit thumbnail cache file")
-        target.setLastModified(clock.nowMillis())
-        validatedThumbnails += ThumbnailCacheKey(userId, nodeUid)
+        thumbnails.write(userId, nodeUid, bytes)
     }
 
     override fun removeThumbnail(userId: String, nodeUid: String) {
-        validatedThumbnails.remove(ThumbnailCacheKey(userId, nodeUid))
-        thumbnailFile(userId, nodeUid).delete()
-    }
-
-    private fun validateThumbnailFile(key: ThumbnailCacheKey, file: File): Boolean {
-        if (!file.isFile || file.length() <= 0L) {
-            validatedThumbnails.remove(key)
-            file.delete()
-            return false
-        }
-        val valid = runCatching {
-            isDecodableThumbnail(secureFiles.read(scope(key.userId), file))
-        }.getOrDefault(false)
-        if (valid) {
-            validatedThumbnails += key
-        } else {
-            validatedThumbnails.remove(key)
-            file.delete()
-        }
-        return valid
-    }
-
-    private fun isDecodableThumbnail(bytes: ByteArray): Boolean {
-        if (bytes.isEmpty()) return false
-        val bitmap = BitmapFactory.decodeByteArray(
-            bytes,
-            0,
-            bytes.size,
-            BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.RGB_565 },
-        ) ?: return false
-        bitmap.recycle()
-        return true
+        thumbnails.remove(userId, nodeUid)
     }
 
     override fun readIndex(userId: String): List<ProtonGalleryPhoto> {
@@ -359,8 +288,7 @@ internal class ProtonPhotoCache @Inject constructor(
         limitBytes: Long = THUMBNAIL_CACHE_LIMIT_BYTES,
         ttlMillis: Long = THUMBNAIL_TTL_MILLIS,
     ) {
-        trimDirectory(thumbnailDirectory(userId), limitBytes, ttlMillis)
-        pruneValidatedThumbnails(userId)
+        thumbnails.trim(userId, limitBytes, ttlMillis)
     }
 
     override fun reconcilePhotos(
@@ -372,16 +300,12 @@ internal class ProtonPhotoCache @Inject constructor(
         val albumNodeUids = albumReferencedNodeUids(userId)
         changes.removedNodeUids.forEach { nodeUid ->
             if (nodeUid in albumNodeUids) return@forEach
-            thumbnailFile(userId, nodeUid).delete()
+            thumbnails.remove(userId, nodeUid)
             originalFile(userId, nodeUid).delete()
             decryptedOriginalFile(userId, nodeUid).delete()
         }
         val validNames = (remoteNodeUids + albumNodeUids).mapTo(mutableSetOf(), ::safeName)
-        thumbnailDirectory(userId).listFiles()?.forEach { file ->
-            if (isStalePartial(file) || file.extension != "part" && file.nameWithoutExtension !in validNames) {
-                file.delete()
-            }
-        }
+        thumbnails.removeUnreferenced(userId, remoteNodeUids + albumNodeUids)
         originalDirectory(userId).listFiles()?.forEach { file ->
             if (isStalePartial(file) || file.extension != "part" && file.nameWithoutExtension !in validNames) {
                 file.delete()
@@ -392,7 +316,6 @@ internal class ProtonPhotoCache @Inject constructor(
                 file.delete()
             }
         }
-        pruneValidatedThumbnails(userId)
         return changes
     }
 
@@ -420,7 +343,7 @@ internal class ProtonPhotoCache @Inject constructor(
     }
 
     override fun clearUser(userId: String) {
-        forgetValidatedThumbnails(userId)
+        thumbnails.clearMemory(userId)
         val indexDeleted = userDirectory(userId).deleteRecursively()
         val originalsDeleted = originalDirectory(userId).deleteRecursively()
         val decryptedDeleted = decryptedDirectory(userId).deleteRecursively()
@@ -439,26 +362,7 @@ internal class ProtonPhotoCache @Inject constructor(
         decrypted.listFiles()?.filter { it.name != retainedName }?.forEach { directory ->
             check(directory.deleteRecursively()) { "Could not remove orphaned decrypted Proton media" }
         }
-        validatedThumbnails.filter { key -> key.userId != userId }
-            .toSet()
-            .let(validatedThumbnails::removeAll)
-    }
-
-    private fun thumbnailFile(userId: String, nodeUid: String): File =
-        File(thumbnailDirectory(userId), "${safeName(nodeUid)}.thumb")
-
-    private fun thumbnailDirectory(userId: String): File = File(userDirectory(userId), "thumbnails")
-
-    private fun pruneValidatedThumbnails(userId: String) {
-        validatedThumbnails.filter { key ->
-            key.userId == userId && !thumbnailExists(key.userId, key.nodeUid)
-        }.toSet().let(validatedThumbnails::removeAll)
-    }
-
-    private fun forgetValidatedThumbnails(userId: String) {
-        validatedThumbnails.filter { key -> key.userId == userId }
-            .toSet()
-            .let(validatedThumbnails::removeAll)
+        thumbnails.retainMemoryFor(userId)
     }
 
     private fun originalFile(userId: String, nodeUid: String): File =
@@ -568,8 +472,6 @@ internal class ProtonPhotoCache @Inject constructor(
     }
 
     private fun safeName(value: String): String = AtomicFileStore.safeName(value)
-
-    private data class ThumbnailCacheKey(val userId: String, val nodeUid: String)
 
     private companion object {
         const val ORIGINAL_CACHE_LIMIT_BYTES = 256L * 1024L * 1024L

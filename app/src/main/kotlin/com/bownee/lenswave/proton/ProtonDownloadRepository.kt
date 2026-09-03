@@ -1,15 +1,16 @@
 package com.bownee.lenswave.proton
 
+import android.graphics.Bitmap
+import com.bownee.lenswave.LenswaveDiagnostics
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 import java.net.SocketTimeoutException
-import com.bownee.lenswave.LenswaveDiagnostics
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.withTimeoutOrNull
@@ -54,8 +55,8 @@ internal class ProtonDownloadRepository @Inject constructor(
         }
     }
 
-    fun readThumbnail(userId: UserId, nodeUid: String): ByteArray? =
-        cache.readThumbnail(userId.id, nodeUid)
+    fun loadThumbnail(userId: UserId, nodeUid: String): Bitmap? =
+        cache.loadThumbnail(userId.id, nodeUid)
 
     internal suspend fun downloadThumbnails(
         userId: UserId,
@@ -64,7 +65,7 @@ internal class ProtonDownloadRepository @Inject constructor(
     ): ThumbnailBatchResult {
         val requested = nodeUids.distinct()
         val successful = requested.filterTo(mutableSetOf()) { nodeUid ->
-            cache.thumbnailIsDecodable(userId.id, nodeUid)
+            cache.loadThumbnail(userId.id, nodeUid) != null
         }
         if (successful.isNotEmpty()) {
             onProgress(ThumbnailBatchResult(successful.toSet(), emptyMap()))
@@ -168,21 +169,36 @@ internal class ProtonDownloadRepository @Inject constructor(
                 photosClient.enumerateThumbnails(nodeUids.map(::NodeUid), type).collect { thumbnail ->
                     val nodeUid = thumbnail.uid.value
                     if (nodeUid !in requested) return@collect
-                    val bytes = thumbnail.result.getOrElse { error ->
-                        failures.record(nodeUid, ThumbnailFailureClassifier.classify(error))
-                        return@collect
-                    }
-                    if (runCatching { cache.writeThumbnail(userId.id, nodeUid, bytes) }.isSuccess) {
-                        successful += nodeUid
-                        unreportedSuccessful += nodeUid
-                        failures.remove(nodeUid)
-                        if (unreportedSuccessful.size >= ProtonThumbnailDownloadPolicy.PROGRESS_BATCH_SIZE) {
-                            publishSuccessful()
+                    thumbnail.result.fold(
+                        onSuccess = { bytes ->
+                            if (runCatching { cache.writeThumbnail(userId.id, nodeUid, bytes) }.isSuccess) {
+                                successful += nodeUid
+                                unreportedSuccessful += nodeUid
+                                failures.remove(nodeUid)
+                                if (unreportedSuccessful.size >=
+                                    ProtonThumbnailDownloadPolicy.PROGRESS_BATCH_SIZE
+                                ) {
+                                    publishSuccessful()
+                                }
+                            } else {
+                                failures.record(nodeUid, ThumbnailFailureKind.STORAGE)
+                            }
+                        },
+                        onFailure = { error ->
+                            failures.record(nodeUid, ThumbnailFailureClassifier.classify(error))
                         }
-                    } else {
-                        failures.record(nodeUid, ThumbnailFailureKind.STORAGE)
+                    )
+                    if (ThumbnailPassCompletionPolicy.hasResponseForEveryNode(
+                            requested,
+                            successful,
+                            failures.keys,
+                        )
+                    ) {
+                        throw ThumbnailPassCompleteException()
                     }
                 }
+            } catch (_: ThumbnailPassCompleteException) {
+                // The SDK flow can remain open after delivering every result; no timeout is needed.
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Throwable) {
@@ -226,6 +242,18 @@ internal object ProtonThumbnailDownloadPolicy {
     fun <T> concurrentWindows(values: List<T>): List<List<List<T>>> =
         values.chunked(SDK_BATCH_SIZE).chunked(MAX_CONCURRENT_BATCHES)
 }
+
+internal object ThumbnailPassCompletionPolicy {
+    fun hasResponseForEveryNode(
+        requestedNodeUids: Set<String>,
+        successfulNodeUids: Set<String>,
+        failedNodeUids: Set<String>,
+    ): Boolean = requestedNodeUids.all { nodeUid ->
+        nodeUid in successfulNodeUids || nodeUid in failedNodeUids
+    }
+}
+
+private class ThumbnailPassCompleteException : CancellationException()
 
 internal enum class ThumbnailFailureKind(val priority: Int) {
     UNKNOWN(0),

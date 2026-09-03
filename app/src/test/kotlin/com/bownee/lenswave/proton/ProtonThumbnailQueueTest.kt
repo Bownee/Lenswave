@@ -190,6 +190,19 @@ class ProtonThumbnailQueueTest {
     }
 
     @Test
+    fun pendingCountIncludesClaimedAndDelayedWorkUntilItSettles() = runBlocking {
+        val queue = ProtonThumbnailQueue(FakeStore(), FakeClock())
+        queue.replaceSource(USER_ID, "timeline", listOf("claimed", "delayed"))
+        queue.claimReady(USER_ID, limit = 1)
+        queue.defer(USER_ID, "delayed")
+
+        assertEquals(2, queue.pendingCount(USER_ID))
+
+        queue.settle(USER_ID, setOf("claimed"), emptySet())
+        assertEquals(1, queue.pendingCount(USER_ID))
+    }
+
+    @Test
     fun deletedAlbumsNoLongerKeepTheirThumbnailWork() = runBlocking {
         val store = FakeStore()
         val queue = ProtonThumbnailQueue(store, FakeClock())

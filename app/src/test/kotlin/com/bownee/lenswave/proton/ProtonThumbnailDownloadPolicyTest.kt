@@ -1,6 +1,7 @@
 package com.bownee.lenswave.proton
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -27,5 +28,25 @@ class ProtonThumbnailDownloadPolicyTest {
                 ProtonThumbnailDownloadPolicy.SDK_BATCH_SIZE
         )
         assertTrue(ProtonThumbnailDownloadPolicy.SDK_PASS_TIMEOUT_MILLIS > 0L)
+    }
+
+    @Test
+    fun sdkPassCompletesAsSoonAsEveryRequestedNodeHasResponded() {
+        val requested = setOf("success", "failure")
+
+        assertTrue(
+            ThumbnailPassCompletionPolicy.hasResponseForEveryNode(
+                requested,
+                successfulNodeUids = setOf("success"),
+                failedNodeUids = setOf("failure"),
+            )
+        )
+        assertFalse(
+            ThumbnailPassCompletionPolicy.hasResponseForEveryNode(
+                requested,
+                successfulNodeUids = setOf("success"),
+                failedNodeUids = emptySet(),
+            )
+        )
     }
 }

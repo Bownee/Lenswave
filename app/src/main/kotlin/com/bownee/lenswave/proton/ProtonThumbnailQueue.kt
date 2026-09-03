@@ -225,6 +225,10 @@ internal class ProtonThumbnailQueue @Inject constructor(
         entries(userId).isNotEmpty()
     }
 
+    suspend fun pendingCount(userId: String): Int = mutex.withLock {
+        entries(userId).size
+    }
+
     suspend fun retainAlbumSources(userId: String, albumNodeUids: Collection<String>) {
         replaceSources(userId, emptyMap(), albumNodeUids)
     }
