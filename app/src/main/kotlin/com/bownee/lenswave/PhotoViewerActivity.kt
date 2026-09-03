@@ -297,11 +297,8 @@ class PhotoViewerActivity : FragmentActivity() {
         thumbnailPreview.scaleX = photoView.scaleX
         thumbnailPreview.scaleY = photoView.scaleY
         thumbnailPreview.translationX = photoView.translationX
-        thumbnailPreview.alpha = 0f
-        thumbnailPreview.animate()
-            .alpha(1f)
-            .setDuration(120L)
-            .start()
+        // Shown at full opacity straight away: fading it up from black reads as a brightness dip.
+        thumbnailPreview.alpha = 1f
     }
 
     private fun showPhoto(uri: Uri) {
@@ -323,23 +320,23 @@ class PhotoViewerActivity : FragmentActivity() {
                     if (request.stableId == requestedStableId) synchronizeDetailsSheetWithImage()
                 }
                 if (thumbnailPreview.isVisible) {
+                    // The full image fades in over the opaque thumbnail, which is only removed
+                    // once the fade completes, so brightness never dips through the black scrim.
                     photoView.animate().cancel()
                     photoView.translationX = thumbnailPreview.translationX
                     photoView.alpha = 0f
                     photoView.animate()
                         .alpha(1f)
                         .setDuration(FULL_QUALITY_CROSSFADE_MILLIS)
-                        .withEndAction { photoTransitioning = false }
-                        .start()
-                    thumbnailPreview.animate().cancel()
-                    thumbnailPreview.animate()
-                        .alpha(0f)
-                        .setDuration(FULL_QUALITY_CROSSFADE_MILLIS)
-                        .withEndAction(::clearThumbnailPreview)
+                        .withEndAction {
+                            photoTransitioning = false
+                            clearThumbnailPreview()
+                        }
                         .start()
                 } else {
                     photoView.alpha = 1f
                 }
+                prefetchAdjacentOriginals(requestedStableId)
             }.onFailure { error ->
                 handlePhotoLoadFailure(error, getString(R.string.could_not_display_photo))
             }
@@ -398,12 +395,9 @@ class PhotoViewerActivity : FragmentActivity() {
                     .start()
                 if (thumbnailPreview.isVisible) {
                     thumbnailPreview.animate().cancel()
-                    thumbnailPreview.animate()
-                        .alpha(0f)
-                        .setDuration(FULL_QUALITY_CROSSFADE_MILLIS)
-                        .withEndAction(::clearThumbnailPreview)
-                        .start()
+                    thumbnailPreview.postDelayed(::clearThumbnailPreview, FULL_QUALITY_CROSSFADE_MILLIS)
                 }
+                prefetchAdjacentOriginals(requestedStableId)
             }
 
             override fun onPlayerError(error: PlaybackException) {
@@ -703,6 +697,23 @@ class PhotoViewerActivity : FragmentActivity() {
             } finally {
                 favoriteInProgress = false
                 updateFavoriteButton()
+            }
+        }
+    }
+
+    /**
+     * Decrypts the neighbours' cached originals ahead of a swipe so the next photo opens from a
+     * ready file. Nothing is downloaded: only originals already in the encrypted cache qualify.
+     */
+    private fun prefetchAdjacentOriginals(stableId: String) {
+        val neighbours = listOfNotNull(adjacentTo(stableId, -1), adjacentTo(stableId, 1))
+            .filter { it.mediaKind != MediaKind.VIDEO }
+        if (neighbours.isEmpty()) return
+        lifecycleScope.launch(Dispatchers.IO) {
+            neighbours.forEach { neighbour ->
+                runCatching {
+                    protonRepository.prepareCachedOriginal(UserId(neighbour.userId), neighbour.nodeUid)
+                }
             }
         }
     }

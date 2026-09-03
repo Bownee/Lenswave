@@ -140,6 +140,12 @@ class ProtonPhotoGateway @Inject internal constructor(
             sessionGuard.withActiveSession(userId) { downloads.downloadOriginal(userId, nodeUid) }
         }
 
+    /** Materializes an already cached original without downloading; null when not cached. */
+    suspend fun prepareCachedOriginal(userId: UserId, nodeUid: String): File? =
+        withContext(Dispatchers.IO) {
+            sessionGuard.withActiveSession(userId) { downloads.prepareCachedOriginal(userId, nodeUid) }
+        }
+
     internal suspend fun downloadOriginalProgressively(
         userId: UserId,
         nodeUid: String,

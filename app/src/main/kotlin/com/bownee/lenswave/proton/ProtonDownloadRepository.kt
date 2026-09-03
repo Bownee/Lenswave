@@ -83,6 +83,9 @@ internal class ProtonDownloadRepository @Inject constructor(
         }
     }
 
+    suspend fun prepareCachedOriginal(userId: UserId, nodeUid: String): File? =
+        originalDownloadMutex(userId, nodeUid).withLock { cache.readOriginal(userId.id, nodeUid) }
+
     private suspend fun downloadOriginalInForeground(userId: UserId, nodeUid: String): File {
         cache.readOriginal(userId.id, nodeUid)?.let { return it }
         val (temporary, target) = cache.createOriginalTarget(userId.id, nodeUid)
