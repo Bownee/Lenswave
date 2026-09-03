@@ -108,6 +108,9 @@ class PhotoViewerActivity : FragmentActivity() {
     private var photoLoadJob: Job? = null
     private var videoProgressJob: Job? = null
     private var loadingPanelRunnable: Runnable? = null
+    private var pendingPreviewClear: Runnable? = null
+    /** Accumulates what the gallery must refresh; a later result must not drop an earlier flag. */
+    private val resultIntent = Intent()
     private var detailsScrollAnimator: ValueAnimator? = null
     private var detailsDragStartOffset: Int? = null
     private var detailsDragStartedShown = false
@@ -339,8 +342,9 @@ class PhotoViewerActivity : FragmentActivity() {
                         .alpha(1f)
                         .setDuration(FULL_QUALITY_CROSSFADE_MILLIS)
                         .withEndAction {
-                            photoTransitioning = false
-                            clearThumbnailPreview()
+                            // Only clear the preview this fade covered; a swipe may already have
+                            // installed the next photo's thumbnail while the fade was running.
+                            if (request.stableId == requestedStableId) clearThumbnailPreview()
                         }
                         .start()
                 } else {
@@ -353,9 +357,7 @@ class PhotoViewerActivity : FragmentActivity() {
         }
     }
 
-    private fun showVideo(uri: Uri) {
-        showVideo(uri, dataSourceFactory = null)
-    }
+    private fun showVideo(uri: Uri) = showVideo(uri, dataSourceFactory = null)
 
     private fun showProgressiveVideo(stream: ProtonOriginalStream, requestedStableId: String) {
         showVideo(Uri.fromFile(stream.file), ProtonProgressiveDataSource.Factory(stream))
@@ -405,7 +407,13 @@ class PhotoViewerActivity : FragmentActivity() {
                     .start()
                 if (thumbnailPreview.isVisible) {
                     thumbnailPreview.animate().cancel()
-                    thumbnailPreview.postDelayed(::clearThumbnailPreview, FULL_QUALITY_CROSSFADE_MILLIS)
+                    cancelPendingPreviewClear()
+                    val clear = Runnable {
+                        pendingPreviewClear = null
+                        if (request.stableId == requestedStableId) clearThumbnailPreview()
+                    }
+                    pendingPreviewClear = clear
+                    thumbnailPreview.postDelayed(clear, FULL_QUALITY_CROSSFADE_MILLIS)
                 }
                 prefetchAdjacentOriginals(requestedStableId)
             }
@@ -536,10 +544,12 @@ class PhotoViewerActivity : FragmentActivity() {
         cancelMediaAnimations()
         animateMediaTranslationX(0f, 160L)
         if (peekPreview.isVisible) {
+            val settledPeek = peekStableId
             peekPreview.animate()
                 .translationX(peekOffset * peekDistance())
                 .setDuration(160L)
-                .withEndAction(::hidePeek)
+                // A new drag may have started a different peek before this one settled.
+                .withEndAction { if (peekStableId == settledPeek) hidePeek() }
                 .start()
         } else {
             hidePeek()
@@ -696,6 +706,7 @@ class PhotoViewerActivity : FragmentActivity() {
         navigationFallback = null
         if (fallback != null) {
             clearThumbnailPreview()
+            releasePlayer()
             request = fallback.request
             request.writeTo(intent)
             updateMediaTitle()
@@ -771,7 +782,7 @@ class PhotoViewerActivity : FragmentActivity() {
                 navigationRequests = navigationRequests.map { item ->
                     if (item.stableId == request.stableId) item.withFavorite(favorite) else item
                 }
-                setResult(Activity.RESULT_OK, Intent().putExtra(EXTRA_FAVORITE_CHANGED, true))
+                setResult(Activity.RESULT_OK, resultIntent.putExtra(EXTRA_FAVORITE_CHANGED, true))
             } catch (error: CancellationException) {
                 throw error
             } catch (_: Throwable) {
@@ -1351,7 +1362,7 @@ class PhotoViewerActivity : FragmentActivity() {
     }
 
     private fun finishDeleted() {
-        setResult(Activity.RESULT_OK, Intent().putExtra(EXTRA_PHOTO_DELETED, true))
+        setResult(Activity.RESULT_OK, resultIntent.putExtra(EXTRA_PHOTO_DELETED, true))
         finish()
     }
 
@@ -1402,7 +1413,13 @@ class PhotoViewerActivity : FragmentActivity() {
         if (photoReady || thumbnailPreview.isVisible) photoDetailsScroll.post(::synchronizeDetailsSheetWithImage)
     }
 
+    private fun cancelPendingPreviewClear() {
+        pendingPreviewClear?.let(thumbnailPreview::removeCallbacks)
+        pendingPreviewClear = null
+    }
+
     private fun clearThumbnailPreview() {
+        cancelPendingPreviewClear()
         thumbnailPreview.animate().cancel()
         thumbnailPreview.setImageDrawable(null)
         thumbnailPreview.visibility = View.GONE

@@ -15,6 +15,7 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
@@ -66,6 +67,9 @@ class ProtonPhotosClientProvider @Inject constructor(
 
     suspend fun disconnect(userId: UserId) = mutex.withLock {
         if (clientUserId != userId) return@withLock
+        // SDK work launched on the shared scope belongs to this client; a closed client must not
+        // keep transferring into caches that are about to be wiped.
+        clientScope.coroutineContext.cancelChildren()
         client?.close()
         client = null
         clientUserId = null

@@ -41,15 +41,21 @@ class AppUpdateChecker @Inject internal constructor(
         null
     }
 
-    internal fun snooze(versionName: String) {
+    internal suspend fun snooze(versionName: String) {
         try {
-            val state = store.read()
-            store.write(
-                state.copy(
-                    snoozedVersionName = versionName,
-                    snoozedUntilMillis = clock.nowMillis() + SNOOZE_MILLIS,
-                )
-            )
+            withContext(dispatchers.io) {
+                checkMutex.withLock {
+                    val state = store.read()
+                    store.write(
+                        state.copy(
+                            snoozedVersionName = versionName,
+                            snoozedUntilMillis = clock.nowMillis() + SNOOZE_MILLIS,
+                        )
+                    )
+                }
+            }
+        } catch (error: CancellationException) {
+            throw error
         } catch (error: Throwable) {
             LenswaveDiagnostics.reportFailure("app-update-snooze", error)
         }

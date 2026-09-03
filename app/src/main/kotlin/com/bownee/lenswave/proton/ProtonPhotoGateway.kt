@@ -45,6 +45,7 @@ class ProtonPhotoGateway @Inject internal constructor(
             previousUserId?.let { previous ->
                 clientProvider.disconnect(previous)
                 cache.clearUser(previous.id)
+                downloads.forgetUser(previous)
             }
             timeline.reset()
             albums.reset()
@@ -229,6 +230,7 @@ class ProtonPhotoGateway @Inject internal constructor(
             clientProvider.disconnect(userId)
             cache.clearUser(userId.id)
             thumbnailQueue.forget(userId.id)
+            downloads.forgetUser(userId)
             if (wasActive) {
                 timeline.reset()
                 albums.reset()
@@ -236,8 +238,6 @@ class ProtonPhotoGateway @Inject internal constructor(
             }
         } }
     }
-
-    fun isActive(userId: UserId): Boolean = sessionGuard.isActive(userId)
 
     internal fun updateThumbnailWorkStatus(status: ProtonThumbnailWorkStatus?) {
         timeline.updateThumbnailWorkStatus(status)

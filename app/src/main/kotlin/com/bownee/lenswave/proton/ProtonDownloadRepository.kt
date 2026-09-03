@@ -111,6 +111,12 @@ internal class ProtonDownloadRepository @Inject constructor(
         return originalDownloadMutexes[(hash and Int.MAX_VALUE) % originalDownloadMutexes.size]
     }
 
+    /** Drops memoized file names so a disconnected account leaves nothing behind in memory. */
+    fun forgetUser(userId: UserId) {
+        val prefix = "${userId.id}:"
+        originalFileNames.keys.removeAll { key -> key.startsWith(prefix) }
+    }
+
     suspend fun getOriginalFileName(userId: UserId, nodeUid: String): String? {
         val key = "${userId.id}:$nodeUid"
         originalFileNames[key]?.let { return it }

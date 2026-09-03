@@ -99,13 +99,15 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
     private var pendingUpdateVersionName: String? = null
     private var thumbnailCacheIdentity: GalleryThumbnailCacheIdentity? = null
     private var notificationPermissionRequestInFlight = false
-
+    private val permissionPreferences by lazy {
+        getSharedPreferences(PERMISSION_PREFERENCES_NAME, MODE_PRIVATE)
+    }
 
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) {
         notificationPermissionRequestInFlight = false
-        getSharedPreferences(PERMISSION_PREFERENCES_NAME, MODE_PRIVATE).edit {
+        permissionPreferences.edit {
             putBoolean(KEY_THUMBNAIL_NOTIFICATION_PERMISSION_REQUESTED, true)
         }
     }
@@ -115,7 +117,9 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
     ) { result ->
         if (result.resultCode != Activity.RESULT_OK) return@registerForActivityResult
         val data = result.data ?: return@registerForActivityResult
-        if (data.getBooleanExtra(PhotoViewerActivity.EXTRA_PHOTO_DELETED, false)) {
+        if (data.getBooleanExtra(PhotoViewerActivity.EXTRA_PHOTO_DELETED, false) ||
+            data.getBooleanExtra(PhotoViewerActivity.EXTRA_FAVORITE_CHANGED, false)
+        ) {
             viewModel.refreshAfterMutation()
         }
     }
@@ -167,7 +171,7 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
     }
 
     override fun onUpdateSnoozed(versionName: String) {
-        appUpdateChecker.snooze(versionName)
+        lifecycleScope.launch { appUpdateChecker.snooze(versionName) }
     }
 
     private fun configureWindow() {
@@ -299,7 +303,10 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
     }
 
     private fun requestThumbnailNotificationPermissionIfNeeded(state: GalleryUiState) {
-        val preferences = getSharedPreferences(PERMISSION_PREFERENCES_NAME, MODE_PRIVATE)
+        // Runtime notification permission only exists from Android 13; the explicit check also
+        // keeps lint's InlinedApi analysis satisfied about the constant below.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        val preferences = permissionPreferences
         if (!ThumbnailNotificationPermissionPolicy.shouldRequest(
                 apiLevel = Build.VERSION.SDK_INT,
                 protonConnected = state.isProtonConnected,

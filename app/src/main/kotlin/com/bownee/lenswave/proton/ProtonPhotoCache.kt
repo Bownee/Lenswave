@@ -27,10 +27,13 @@ internal class ProtonPhotoCache @Inject constructor(
     ProtonThumbnailQueueStore {
     private val root = File(context.filesDir, "proton-photo-cache").apply { mkdirs() }
     private val originals = File(context.cacheDir, "proton-originals").apply { mkdirs() }
-    private val decrypted = File(context.cacheDir, "proton-decrypted").apply {
-        deleteRecursively()
-        mkdirs()
-    }
+    private val decrypted = File(context.cacheDir, "proton-decrypted")
+    /**
+     * Plaintext copies from a previous process are wiped once, on the first session activation,
+     * which runs on an I/O dispatcher. Doing it in the constructor would delete potentially
+     * hundreds of megabytes on the main thread while Hilt builds the object graph.
+     */
+    @Volatile private var decryptedWiped = false
     /** Metadata hydration only needs availability; authenticated contents are validated when read. */
     override fun thumbnailExists(userId: String, nodeUid: String): Boolean =
         thumbnails.exists(userId, nodeUid)
@@ -318,7 +321,16 @@ internal class ProtonPhotoCache @Inject constructor(
 
     override fun trimUser(userId: String) {
         thumbnails.maintain(userId)
+        wipeStaleDecryptedCopies()
         expireFiles(decryptedDirectory(userId), DECRYPTED_TTL_MILLIS)
+    }
+
+    @Synchronized
+    private fun wipeStaleDecryptedCopies() {
+        if (decryptedWiped) return
+        decrypted.deleteRecursively()
+        decrypted.mkdirs()
+        decryptedWiped = true
     }
 
     override fun reconcilePhotos(

@@ -30,6 +30,8 @@ internal class ProtonThumbnailStore @Inject constructor(
         override fun sizeOf(key: ThumbnailKey, value: Bitmap): Int = value.byteCount / 1_024
     }
     private val locks = Array(LOCK_COUNT) { Any() }
+    /** Stored-thumbnail counts per user; listing a large directory on every progress tick is too slow. */
+    private val counts = java.util.concurrent.ConcurrentHashMap<String, Int>()
 
     fun exists(userId: String, nodeUid: String): Boolean = file(userId, nodeUid).let { file ->
         (file.isFile && file.length() > 0L).also { exists ->
@@ -52,6 +54,7 @@ internal class ProtonThumbnailStore @Inject constructor(
                 ?: throw IllegalArgumentException("Proton returned an invalid thumbnail image")
             try {
                 val target = file(userId, nodeUid)
+                val existed = target.isFile && target.length() > 0L
                 target.parentFile?.mkdirs()
                 secureFiles.write(
                     scope(userId),
@@ -60,6 +63,7 @@ internal class ProtonThumbnailStore @Inject constructor(
                     "Could not commit thumbnail cache file",
                 )
                 target.setLastModified(clock.nowMillis())
+                if (!existed) adjustCount(userId, 1)
                 bitmaps.put(key, bitmap)
             } catch (error: Throwable) {
                 bitmap.recycle()
@@ -72,17 +76,27 @@ internal class ProtonThumbnailStore @Inject constructor(
         val key = ThumbnailKey(userId, nodeUid)
         synchronized(lock(key)) {
             bitmaps.remove(key)
-            file(userId, nodeUid).delete()
+            val target = file(userId, nodeUid)
+            val existed = target.isFile && target.length() > 0L
+            target.delete()
+            if (existed) adjustCount(userId, -1)
         }
     }
 
-    fun count(userId: String): Int = directory(userId).listFiles()
-        ?.count { file -> file.isFile && file.extension == "thumb" && file.length() > 0L }
-        ?: 0
+    fun count(userId: String): Int = counts.getOrPut(userId) {
+        directory(userId).listFiles()
+            ?.count { file -> file.isFile && file.extension == "thumb" && file.length() > 0L }
+            ?: 0
+    }
+
+    private fun adjustCount(userId: String, delta: Int) {
+        counts.computeIfPresent(userId) { _, count -> (count + delta).coerceAtLeast(0) }
+    }
 
     fun maintain(userId: String) {
         val directory = directory(userId)
         directory.listFiles()?.filter(::isStalePartial)?.forEach(File::delete)
+        counts.remove(userId)
         pruneMemoryCache(userId)
     }
 
@@ -93,10 +107,12 @@ internal class ProtonThumbnailStore @Inject constructor(
                 file.delete()
             }
         }
+        counts.remove(userId)
         pruneMemoryCache(userId)
     }
 
     fun clearMemory(userId: String) {
+        counts.remove(userId)
         bitmaps.snapshot().keys.filter { key -> key.userId == userId }.forEach(bitmaps::remove)
     }
 
