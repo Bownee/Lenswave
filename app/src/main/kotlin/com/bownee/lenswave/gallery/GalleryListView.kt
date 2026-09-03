@@ -21,6 +21,12 @@ internal class GalleryListView @JvmOverloads constructor(
         fastScroller.setEdgeInset(inset)
     }
 
+    /** Switches between the draggable handle and the platform scrollbar. */
+    fun setFastScrollHandleEnabled(enabled: Boolean) {
+        fastScroller.isEnabled = enabled
+        isVerticalScrollBarEnabled = !enabled
+    }
+
     internal fun fastScrollOffset(): Int = computeVerticalScrollOffset()
 
     internal fun fastScrollRange(): Int = computeVerticalScrollRange()
@@ -40,16 +46,17 @@ internal class GalleryListView @JvmOverloads constructor(
 
     override fun onScrollChanged(left: Int, top: Int, oldLeft: Int, oldTop: Int) {
         super.onScrollChanged(left, top, oldLeft, oldTop)
-        updateFastScrollVisibility()
+        fastScroller.updateVisibility()
         invalidate()
     }
 
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
         super.onLayout(changed, left, top, right, bottom)
-        updateFastScrollVisibility()
+        fastScroller.updateVisibility()
     }
 
-    private fun updateFastScrollVisibility() {
-        fastScroller.updateVisibility()
+    override fun onDetachedFromWindow() {
+        fastScroller.detach()
+        super.onDetachedFromWindow()
     }
 }

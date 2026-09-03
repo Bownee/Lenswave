@@ -79,7 +79,6 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
 
     private lateinit var screen: GalleryScreen
     private val root get() = screen.root
-    private val galleryHeader get() = screen.galleryHeader
     private val list get() = screen.list
     private val galleryFooter get() = screen.galleryFooter
     private val adapter get() = screen.adapter
@@ -336,12 +335,21 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
         viewModel.openAlbum(album)
     }
 
+    /** Tapping the tab that is already showing its root page scrolls that page back to the top. */
     private fun openPhotosTab() {
+        if (currentUiState.destination == GalleryDestination.Timeline) {
+            screen.scrollToTop()
+            return
+        }
         beforeNavigation()
         viewModel.openPhotosTab()
     }
 
     private fun openLibrary() {
+        if (currentUiState.destination == GalleryDestination.Library) {
+            screen.scrollToTop()
+            return
+        }
         beforeNavigation()
         viewModel.openLibrary()
     }
@@ -489,6 +497,8 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
             tab = GalleryNavigationPolicy.tab(destination),
             showBack = GalleryNavigationPolicy.parent(destination) != null,
         )
+        // Only the long photo timeline gets the draggable handle; other pages use the platform scrollbar.
+        list.setFastScrollHandleEnabled(destination == GalleryDestination.Timeline)
         updateNavigationVisibility(selecting)
     }
 
@@ -501,7 +511,7 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
         val height = GalleryFastScrollLayoutPolicy.footerHeight(
             navigationVisible = tabBar.isVisible,
             bottomInset = safeBottom,
-            navigationClearance = dp(74),
+            navigationClearance = dp(GalleryScreen.TAB_BAR_HEIGHT_DP + 14),
             baseClearance = dp(12),
         )
         val params = galleryFooter.layoutParams ?: AbsListView.LayoutParams(
@@ -572,23 +582,9 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
                 bottomInset = safeArea.bottom,
                 margin = resources.getDimensionPixelSize(R.dimen.gallery_fast_scroll_edge_margin),
             )
-            list.setPadding(0, safeArea.top, 0, 0)
             list.setFastScrollEdgeInset(fastScrollEdgePadding)
-            galleryHeader.setPadding(
-                dp(16) + safeArea.left,
-                dp(10),
-                dp(16) + safeArea.right,
-                dp(10),
-            )
+            screen.applySafeArea(safeArea)
             updateNavigationVisibility(adapter.selectedPhotos().isNotEmpty())
-            screen.updateStickyDateMargins(
-                top = dp(8) + safeArea.top,
-                start = dp(8) + if (root.layoutDirection == View.LAYOUT_DIRECTION_RTL) {
-                    safeArea.right
-                } else {
-                    safeArea.left
-                },
-            )
             updateBottomOverlayInsets(tabBar, safeArea)
             updateBottomOverlayInsets(selectionBar, safeArea)
             insets

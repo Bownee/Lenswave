@@ -399,7 +399,7 @@ class GalleryListAdapter(
         val videoBadge = ImageView(context).apply {
             setImageResource(R.drawable.ic_play)
             imageTintList = ColorStateList.valueOf(Color.WHITE)
-            setPadding(context.dp(4))
+            setPadding(context.dp(6))
             background = UiStyle.circle(context, Color.argb(150, 10, 12, 18))
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             visibility = View.GONE

@@ -13,6 +13,7 @@ import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.core.graphics.Insets
 import androidx.core.graphics.drawable.toDrawable
 import androidx.core.view.ViewCompat
 import androidx.core.widget.TextViewCompat
@@ -56,6 +57,11 @@ internal class GalleryScreen(
     val trashDeleteAllButton: Button
     private val photosTab: TabButton
     private val libraryTab: TabButton
+    private val titleRow: LinearLayout
+    /** Hosts the title row above the list on sub-pages so it stays put while the list scrolls. */
+    private val stickyHeader: FrameLayout
+    private var headerSticky = false
+    private var safeArea = Insets.NONE
 
     private var pendingStickyDatePosition: Int? = null
     private var stickyDateUpdatePosted = false
@@ -77,6 +83,12 @@ internal class GalleryScreen(
         emptyTitle = header.emptyTitle
         emptyMessage = header.emptyMessage
         emptyAction = header.emptyAction
+        titleRow = header.titleRow
+        stickyHeader = FrameLayout(activity).apply {
+            setBackgroundColor(UiStyle.withAlpha(UiStyle.background, 240))
+            visibility = View.GONE
+            isClickable = true
+        }
 
         adapter = GalleryListAdapter(
             context = activity,
@@ -133,6 +145,14 @@ internal class GalleryScreen(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 activity.dp(36),
                 Gravity.TOP or Gravity.START,
+            ),
+        )
+        root.addView(
+            stickyHeader,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP,
             ),
         )
 
@@ -192,6 +212,57 @@ internal class GalleryScreen(
         backButton.visibility = if (showBack) View.VISIBLE else View.GONE
         photosTab.setSelectedTab(tab == GalleryTab.PHOTOS)
         libraryTab.setSelectedTab(tab == GalleryTab.LIBRARY)
+        setHeaderSticky(showBack)
+    }
+
+    /** Scrolls back to the top, jumping most of the way first so long lists do not crawl. */
+    fun scrollToTop() {
+        if (list.firstVisiblePosition > SCROLL_TO_TOP_JUMP_ROWS) list.setSelection(SCROLL_TO_TOP_JUMP_ROWS)
+        list.post { list.smoothScrollToPositionFromTop(0, 0) }
+    }
+
+    /** Applies the window's safe area to the header, the list and the overlays that track them. */
+    fun applySafeArea(insets: Insets) {
+        safeArea = insets
+        layoutHeader()
+    }
+
+    private fun setHeaderSticky(sticky: Boolean) {
+        if (headerSticky == sticky) return
+        headerSticky = sticky
+        (titleRow.parent as? ViewGroup)?.removeView(titleRow)
+        if (sticky) {
+            stickyHeader.addView(titleRow, FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ))
+        } else {
+            galleryHeader.addView(titleRow, 0, matchWrap())
+        }
+        stickyHeader.visibility = if (sticky) View.VISIBLE else View.GONE
+        layoutHeader()
+    }
+
+    private fun layoutHeader() {
+        val horizontalStart = activity.dp(16) + safeArea.left
+        val horizontalEnd = activity.dp(16) + safeArea.right
+        stickyHeader.setPadding(horizontalStart, activity.dp(10) + safeArea.top, horizontalEnd, activity.dp(6))
+        val stickyHeight = if (headerSticky) activity.dp(TITLE_ROW_HEIGHT_DP + 16) else 0
+        list.setPadding(0, safeArea.top + stickyHeight, 0, 0)
+        galleryHeader.setPadding(
+            horizontalStart,
+            if (headerSticky) activity.dp(4) else activity.dp(10),
+            horizontalEnd,
+            activity.dp(10),
+        )
+        updateStickyDateMargins(
+            top = activity.dp(8) + safeArea.top + stickyHeight,
+            start = activity.dp(8) + if (root.layoutDirection == View.LAYOUT_DIRECTION_RTL) {
+                safeArea.right
+            } else {
+                safeArea.left
+            },
+        )
     }
 
     fun showContent() {
@@ -226,7 +297,7 @@ internal class GalleryScreen(
         selectionBar.visibility = if (selecting) View.VISIBLE else View.GONE
     }
 
-    fun updateStickyDateMargins(top: Int, start: Int) {
+    private fun updateStickyDateMargins(top: Int, start: Int) {
         (stickyDate.layoutParams as FrameLayout.LayoutParams).apply {
             topMargin = top
             marginStart = start
@@ -292,7 +363,7 @@ internal class GalleryScreen(
                 if (adapter.selectedPhotos().isNotEmpty()) adapter.clearSelection() else actions.onBack()
             }
         }
-        titleRow.addView(back, LinearLayout.LayoutParams(activity.dp(44), activity.dp(44)).apply {
+        titleRow.addView(back, LinearLayout.LayoutParams(activity.dp(TITLE_ROW_HEIGHT_DP), activity.dp(TITLE_ROW_HEIGHT_DP)).apply {
             marginEnd = activity.dp(10)
         })
         val title = text(activity.getString(R.string.photos), 28f, UiStyle.text).apply {
@@ -307,7 +378,7 @@ internal class GalleryScreen(
             R.drawable.ic_settings,
             activity.getString(R.string.settings),
         ).apply { setOnClickListener { actions.onSettings() } }
-        titleRow.addView(settings, LinearLayout.LayoutParams(activity.dp(44), activity.dp(44)))
+        titleRow.addView(settings, LinearLayout.LayoutParams(activity.dp(TITLE_ROW_HEIGHT_DP), activity.dp(TITLE_ROW_HEIGHT_DP)))
         container.addView(titleRow, matchWrap())
 
         val statusRow = LinearLayout(activity).apply {
@@ -347,6 +418,7 @@ internal class GalleryScreen(
         })
         return Header(
             container,
+            titleRow,
             title,
             status,
             settings,
@@ -401,17 +473,17 @@ internal class GalleryScreen(
         val container = LinearLayout(activity).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(activity.dp(6), activity.dp(6), activity.dp(6), activity.dp(6))
+            setPadding(activity.dp(4), activity.dp(4), activity.dp(4), activity.dp(4))
             background = UiStyle.rounded(
                 activity,
                 UiStyle.withAlpha(UiStyle.surface, 242),
-                30,
+                24,
                 UiStyle.border,
             )
             elevation = activity.dp(10).toFloat()
-            addView(photos, LinearLayout.LayoutParams(0, activity.dp(52), 1f))
-            addView(library, LinearLayout.LayoutParams(0, activity.dp(52), 1f).apply {
-                marginStart = activity.dp(6)
+            addView(photos, LinearLayout.LayoutParams(0, activity.dp(TAB_HEIGHT_DP), 1f))
+            addView(library, LinearLayout.LayoutParams(0, activity.dp(TAB_HEIGHT_DP), 1f).apply {
+                marginStart = activity.dp(4)
             })
         }
         return TabBar(container, photos, library)
@@ -523,7 +595,7 @@ internal class GalleryScreen(
             isClickable = true
             isFocusable = true
             contentDescription = label
-            addView(iconView, LayoutParams(context.dp(22), context.dp(22)).apply { marginEnd = context.dp(8) })
+            addView(iconView, LayoutParams(context.dp(20), context.dp(20)).apply { marginEnd = context.dp(8) })
             addView(labelView, LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
             setSelectedTab(false)
         }
@@ -538,7 +610,7 @@ internal class GalleryScreen(
             iconView.imageTintList = ColorStateList.valueOf(tint)
             labelView.setTextColor(if (selected) UiStyle.text else UiStyle.muted)
             background = UiStyle.rippled(
-                UiStyle.rounded(context, if (selected) UiStyle.accentSoft else Color.TRANSPARENT, 24),
+                UiStyle.rounded(context, if (selected) UiStyle.accentSoft else Color.TRANSPARENT, 20),
                 UiStyle.accent,
             )
         }
@@ -567,6 +639,7 @@ internal class GalleryScreen(
 
     private data class Header(
         val container: LinearLayout,
+        val titleRow: LinearLayout,
         val pageTitle: TextView,
         val status: TextView,
         val settingsButton: ImageButton,
@@ -592,4 +665,11 @@ internal class GalleryScreen(
         val delete: Button,
     )
 
+    companion object {
+        /** Height of the floating tab bar including its padding, used to keep the list clear of it. */
+        const val TAB_BAR_HEIGHT_DP = 48
+        private const val TAB_HEIGHT_DP = 40
+        private const val TITLE_ROW_HEIGHT_DP = 44
+        private const val SCROLL_TO_TOP_JUMP_ROWS = 12
+    }
 }
