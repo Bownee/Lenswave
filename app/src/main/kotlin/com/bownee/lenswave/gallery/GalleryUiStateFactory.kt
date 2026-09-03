@@ -60,20 +60,17 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
     }
 
     private fun combined(inputs: GalleryUiInputs): GalleryUiState {
-        if (!inputs.hasDeviceAccess) return base(
-            inputs = inputs,
-            emptyState = deviceAccessEmptyState(),
-        )
+        val deviceAssets = if (inputs.hasDeviceAccess) inputs.devicePhotos.items else emptyList()
         val protonAssets = if (inputs.protonAccountStatus == ProtonAccountStatus.CONNECTED) {
             val tagIndex = inputs.protonGallery.tagIndex()
             inputs.protonGallery.photos.map { it.toGalleryAsset(tagIndex) }
         } else {
             emptyList()
         }
-        val assets = CombinedGallery.merge(inputs.devicePhotos.items, protonAssets, inputs.combinedMatches)
+        val assets = CombinedGallery.merge(deviceAssets, protonAssets, inputs.combinedMatches)
         val status = buildString {
             append(photoCountStatus(assets.size))
-            if (inputs.devicePhotos.isLoading) {
+            if (inputs.hasDeviceAccess && inputs.devicePhotos.isLoading) {
                 append(text.string(R.string.status_separator))
                 append(text.string(R.string.loading_metadata))
             } else if (inputs.protonAccountStatus == ProtonAccountStatus.CONNECTING) {
@@ -106,10 +103,18 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
             }
         }
         val emptyState = when {
-            assets.isNotEmpty() || inputs.devicePhotos.isLoading -> null
+            assets.isNotEmpty() || (inputs.hasDeviceAccess && inputs.devicePhotos.isLoading) -> null
             inputs.protonAccountStatus == ProtonAccountStatus.CONNECTED &&
                 !inputs.protonGallery.hasLoaded -> null
             inputs.protonAccountStatus == ProtonAccountStatus.CONNECTING -> loadingMetadataEmptyState()
+            !inputs.hasDeviceAccess && inputs.protonAccountStatus == ProtonAccountStatus.DISCONNECTED ->
+                deviceAccessEmptyState()
+            !inputs.hasDeviceAccess -> GalleryEmptyState(
+                title = text.string(R.string.no_photos),
+                message = text.string(R.string.allow_photo_access_message),
+                actionLabel = text.string(R.string.allow_photo_access),
+                action = GalleryEmptyAction.REQUEST_DEVICE_ACCESS,
+            )
             inputs.protonAccountStatus == ProtonAccountStatus.DISCONNECTED -> GalleryEmptyState(
                 title = text.string(R.string.no_device_photos),
                 message = text.string(R.string.connect_proton_add_timeline),

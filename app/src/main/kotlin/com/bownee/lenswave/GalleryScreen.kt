@@ -15,8 +15,6 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.graphics.drawable.toDrawable
 import androidx.core.widget.TextViewCompat
-import com.bownee.lenswave.gallery.DeviceCollection
-import com.bownee.lenswave.gallery.DeviceCollectionPicker
 import com.bownee.lenswave.gallery.GalleryAsset
 import com.bownee.lenswave.gallery.GalleryDestination
 import com.bownee.lenswave.gallery.GalleryListAdapter
@@ -39,6 +37,9 @@ internal class GalleryScreen(
 ) {
     val root = FrameLayout(activity).apply { setBackgroundColor(UiStyle.background) }
     val pageTitle: TextView
+    val filterRow: LinearLayout
+    val sourceFilterButton: Button
+    val mediaFilterButton: Button
     private val status: TextView
     val list: GalleryListView
     val galleryHeader: LinearLayout
@@ -57,12 +58,9 @@ internal class GalleryScreen(
     val refreshButton: ImageButton
     val albumBackButton: ImageButton
     val trashDeleteAllButton: Button
-    val protonSourceButton: Button
-    val albumsSourceButton: Button
-    val deviceSourceButton: Button
-    val trashSourceButton: Button
-    val devicePicker: LinearLayout
-    val devicePickerButtons = mutableMapOf<DeviceCollection, Button>()
+    val photosSectionButton: Button
+    val albumsSectionButton: Button
+    val trashSectionButton: Button
 
     private var pendingStickyDatePosition: Int? = null
     private var stickyDateUpdatePosted = false
@@ -76,6 +74,9 @@ internal class GalleryScreen(
         val header = buildGalleryHeader()
         galleryHeader = header.container
         pageTitle = header.pageTitle
+        filterRow = header.filterRow
+        sourceFilterButton = header.sourceFilterButton
+        mediaFilterButton = header.mediaFilterButton
         status = header.status
         settingsButton = header.settingsButton
         refreshButton = header.refreshButton
@@ -142,17 +143,10 @@ internal class GalleryScreen(
 
         val source = buildSourceBar()
         sourceBar = source.container
-        protonSourceButton = source.proton
-        albumsSourceButton = source.albums
-        deviceSourceButton = source.device
-        trashSourceButton = source.trash
+        photosSectionButton = source.photos
+        albumsSectionButton = source.albums
+        trashSectionButton = source.trash
         root.addView(sourceBar, bottomOverlayParams())
-
-        devicePicker = buildDevicePicker().apply { visibility = View.GONE }
-        root.addView(devicePicker, devicePickerParams())
-        sourceBar.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
-            devicePicker.post(actions.onSourceBarLayout)
-        }
 
         val selection = buildSelectionBar()
         selectionBar = selection.container.apply { visibility = View.GONE }
@@ -221,7 +215,6 @@ internal class GalleryScreen(
 
     fun renderSelection(selectedCount: Int, viewingTrash: Boolean, showDeleteAll: Boolean) {
         val selecting = selectedCount > 0
-        if (selecting) devicePicker.visibility = View.GONE
         selectionCount.text = activity.resources.getQuantityString(
             R.plurals.selected_photo_count,
             selectedCount,
@@ -312,9 +305,6 @@ internal class GalleryScreen(
             setTypeface(typeface, Typeface.BOLD)
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
-            isClickable = true
-            isFocusable = true
-            setOnClickListener { actions.onSpaceMenu() }
             ViewCompat.setAccessibilityHeading(this, true)
         }
         titleRow.addView(title, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
@@ -340,6 +330,28 @@ internal class GalleryScreen(
         titleRow.addView(settings, LinearLayout.LayoutParams(activity.dp(48), activity.dp(48)))
         container.addView(titleRow, matchWrap())
 
+        val sourceFilter = filterButton(activity.getString(R.string.filter_all_sources)).apply {
+            setOnClickListener { actions.onFilters() }
+        }
+        val mediaFilter = filterButton(activity.getString(R.string.proton_filter_all)).apply {
+            setOnClickListener { actions.onFilters() }
+        }
+        val filterRow = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(
+                sourceFilter,
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, activity.dp(40)),
+            )
+            addView(
+                mediaFilter,
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, activity.dp(40)).apply {
+                    marginStart = activity.dp(8)
+                },
+            )
+        }
+        container.addView(filterRow, matchWrap().apply { topMargin = activity.dp(8) })
+
         val statusRow = LinearLayout(activity).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -364,7 +376,7 @@ internal class GalleryScreen(
             },
         )
         container.addView(statusRow, matchWrap().apply {
-            topMargin = activity.dp(14)
+            topMargin = activity.dp(8)
             bottomMargin = activity.dp(8)
         })
 
@@ -373,7 +385,19 @@ internal class GalleryScreen(
             topMargin = activity.dp(10)
             bottomMargin = activity.dp(12)
         })
-        return Header(container, title, status, settings, refresh, albumBack, deleteAll, empty)
+        return Header(
+            container,
+            title,
+            filterRow,
+            sourceFilter,
+            mediaFilter,
+            status,
+            settings,
+            refresh,
+            albumBack,
+            deleteAll,
+            empty,
+        )
     }
 
     private fun buildEmptyPanel(): EmptyPanel {
@@ -399,13 +423,15 @@ internal class GalleryScreen(
     }
 
     private fun buildSourceBar(): SourceBar {
-        val proton = sectionButton(activity.getString(R.string.photos)).apply { setOnClickListener { actions.onProtonSource() } }
-        val albums = sectionButton(activity.getString(R.string.albums)).apply { setOnClickListener { actions.onAlbumsSource() } }
-        val device = sectionButton(activity.getString(R.string.source_dropdown_label, activity.getString(R.string.collection_camera))).apply {
-            contentDescription = activity.getString(R.string.choose_device_collection, activity.getString(R.string.collection_camera))
-            setOnClickListener { actions.onDeviceSource() }
+        val photos = sectionButton(activity.getString(R.string.photos)).apply {
+            setOnClickListener { actions.onPhotosSection() }
         }
-        val trash = sectionButton(activity.getString(R.string.trash)).apply { setOnClickListener { actions.onTrashSource() } }
+        val albums = sectionButton(activity.getString(R.string.albums)).apply {
+            setOnClickListener { actions.onAlbumsSection() }
+        }
+        val trash = sectionButton(activity.getString(R.string.trash)).apply {
+            setOnClickListener { actions.onTrashSection() }
+        }
         val container = LinearLayout(activity).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -416,32 +442,15 @@ internal class GalleryScreen(
                 20,
                 UiStyle.navigationBorder,
             )
-            addView(proton, LinearLayout.LayoutParams(0, activity.dp(48), 1f))
+            addView(photos, LinearLayout.LayoutParams(0, activity.dp(48), 1f))
             addView(albums, LinearLayout.LayoutParams(0, activity.dp(48), 1f).apply {
                 marginStart = activity.dp(3)
             })
-            addView(device, LinearLayout.LayoutParams(0, activity.dp(48), 1f))
             addView(trash, LinearLayout.LayoutParams(0, activity.dp(48), 1f).apply {
                 marginStart = activity.dp(3)
             })
         }
-        return SourceBar(container, proton, albums, device, trash)
-    }
-
-    private fun buildDevicePicker() = LinearLayout(activity).apply {
-        orientation = LinearLayout.VERTICAL
-        setPadding(activity.dp(6), activity.dp(6), activity.dp(6), activity.dp(6))
-        background = UiStyle.rounded(activity, UiStyle.withAlpha(UiStyle.surface, 250), 20)
-        DeviceCollectionPicker.collections.forEach { collection ->
-            val button = sectionButton(activity.getString(DeviceCollectionPicker.menuLabelRes(collection))).apply {
-                gravity = Gravity.START or Gravity.CENTER_VERTICAL
-                elevation = 0f
-                stateListAnimator = null
-                setOnClickListener { actions.onDeviceCollection(collection) }
-            }
-            devicePickerButtons[collection] = button
-            addView(button, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, activity.dp(48)))
-        }
+        return SourceBar(container, photos, albums, trash)
     }
 
     private fun buildSelectionBar(): SelectionBar {
@@ -482,6 +491,17 @@ internal class GalleryScreen(
         minimumWidth = 0
         setPadding(activity.dp(8), 0, activity.dp(8), 0)
         background = Color.TRANSPARENT.toDrawable()
+    }
+
+    private fun filterButton(label: String) = Button(activity).apply {
+        text = activity.getString(R.string.source_dropdown_label, label)
+        textSize = 13f
+        setTextColor(UiStyle.text)
+        isAllCaps = false
+        minWidth = 0
+        minimumWidth = 0
+        setPadding(activity.dp(14), 0, activity.dp(14), 0)
+        background = UiStyle.rounded(activity, UiStyle.surface, 14, UiStyle.border)
     }
 
     private fun iconLabelButton(label: String, icon: Int, destructive: Boolean = false) =
@@ -528,31 +548,19 @@ internal class GalleryScreen(
         bottomMargin = activity.dp(12)
     }
 
-    private fun devicePickerParams() = FrameLayout.LayoutParams(
-        activity.dp(188),
-        ViewGroup.LayoutParams.WRAP_CONTENT,
-        Gravity.BOTTOM or Gravity.START,
-    ).apply {
-        marginStart = activity.dp(16)
-        bottomMargin = activity.dp(72)
-    }
-
     internal class Actions(
         val onPhotoClicked: (GalleryAsset) -> Unit,
         val onFavoriteClicked: (GalleryAsset) -> Unit,
         val onAlbumClicked: (ProtonAlbum) -> Unit,
         val onSelectionChanged: (List<GalleryAsset>) -> Unit,
         val onRefresh: () -> Unit,
-        val onSourceBarLayout: () -> Unit,
         val onAlbumBack: () -> Unit,
-        val onSpaceMenu: () -> Unit,
+        val onFilters: () -> Unit,
         val onSettings: () -> Unit,
         val onDeleteAllTrash: () -> Unit,
-        val onProtonSource: () -> Unit,
-        val onAlbumsSource: () -> Unit,
-        val onDeviceSource: () -> Unit,
-        val onTrashSource: () -> Unit,
-        val onDeviceCollection: (DeviceCollection) -> Unit,
+        val onPhotosSection: () -> Unit,
+        val onAlbumsSection: () -> Unit,
+        val onTrashSection: () -> Unit,
         val onDeleteSelection: () -> Unit,
     )
 
@@ -566,6 +574,9 @@ internal class GalleryScreen(
     private data class Header(
         val container: LinearLayout,
         val pageTitle: TextView,
+        val filterRow: LinearLayout,
+        val sourceFilterButton: Button,
+        val mediaFilterButton: Button,
         val status: TextView,
         val settingsButton: ImageButton,
         val refreshButton: ImageButton,
@@ -581,9 +592,8 @@ internal class GalleryScreen(
 
     private data class SourceBar(
         val container: LinearLayout,
-        val proton: Button,
+        val photos: Button,
         val albums: Button,
-        val device: Button,
         val trash: Button,
     )
 

@@ -44,7 +44,6 @@
     <string name="retry">Retry</string>
     <string name="delete_failed">Could not delete this photo</string>
     <string name="collection_all">All</string>
-    <string name="collection_all_device_photos">All device photos</string>
     <string name="collection_camera">Camera</string>
     <string name="collection_screenshots">Screenshots</string>
     <string name="collection_downloads">Downloads</string>
@@ -53,8 +52,6 @@
     <string name="space_combined">Combined</string>
     <string name="space_proton">Proton Photos</string>
     <string name="space_device">On this device</string>
-    <string name="choose_device_collection">%1$s. Choose a device collection.</string>
-    <string name="selected_item">✓ %1$s</string>
     <string name="status_separator"> · </string>
     <string name="status_with_detail">%1$s · %2$s</string>
     <string name="proton_not_connected">Proton not connected</string>
@@ -64,8 +61,17 @@
     <string name="connect_proton_add_timeline">Connect Proton Photos to add your cloud timeline.</string>
     <string name="connect_proton_message">Sign in securely to browse your Proton photo library. Lenswave is not an official Proton app.</string>
     <string name="photos">Photos</string>
+    <string name="filter_photos">Filter photos</string>
+    <string name="filter_trash">Filter trash</string>
+    <string name="filter_source">Source</string>
+    <string name="filter_media_type">Media type</string>
+    <string name="filter_all_sources">All sources</string>
+    <string name="filter_source_proton">Proton</string>
+    <string name="filter_source_device">Device</string>
+    <string name="choose_source_filter">Choose a photo source filter</string>
+    <string name="choose_media_filter">Choose a media type filter</string>
+    <string name="done">Done</string>
     <string name="proton_filter_all">All media</string>
-    <string name="choose_proton_filter">Filter Proton media. Current filter: %1$s</string>
     <string name="proton_tag_favorites">Favorites</string>
     <string name="proton_tag_screenshots">Screenshots</string>
     <string name="proton_tag_videos">Videos</string>
@@ -288,8 +294,8 @@
     <string name="could_not_load_device_trash">Could not load Device Trash</string>
     <string name="duplicate_check_failed">Duplicate check failed</string>
     <string name="privacy_and_data">Privacy and data</string>
-    <string name="privacy_disconnected_message">Lenswave disables Proton Core observability. Device photos stay on this device unless you explicitly share or save them. Combined duplicate scanning starts only when you choose Combined. Lenswave periodically contacts GitHub at startup to check for updates.</string>
-    <string name="privacy_connected_message">Lenswave disables Proton Core observability. Proton account telemetry is controlled by the setting below and applies to your Proton account. Combined duplicate scanning sends a device photo filename and locally computed content hash through the Proton Drive SDK only when you choose Combined. Lenswave periodically contacts GitHub at startup to check for updates.</string>
+    <string name="privacy_disconnected_message">Lenswave disables Proton Core observability. Device photos stay on this device unless you explicitly share or save them. Duplicate scanning starts only when the photo source filter is set to All sources. Lenswave periodically contacts GitHub at startup to check for updates.</string>
+    <string name="privacy_connected_message">Lenswave disables Proton Core observability. Proton account telemetry is controlled by the setting below and applies to your Proton account. Duplicate scanning sends a device photo filename and locally computed content hash through the Proton Drive SDK only when the photo source filter is set to All sources. Lenswave periodically contacts GitHub at startup to check for updates.</string>
     <string name="allow_proton_telemetry">Allow Proton account telemetry</string>
     <string name="save">Save</string>
     <string name="privacy_setting_saved">Privacy setting saved</string>

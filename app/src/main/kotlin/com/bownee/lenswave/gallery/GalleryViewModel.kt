@@ -239,7 +239,7 @@ class GalleryViewModel @Inject internal constructor(
             destination = if (readyAccount == null) {
                 GalleryDestination.Device()
             } else {
-                GalleryDestination.ProtonTimeline
+                GalleryDestination.Combined
             }
             saveDestination()
         } else if (readyAccount == null && destination.space != GallerySpace.DEVICE) {

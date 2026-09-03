@@ -66,6 +66,39 @@ class GalleryUiStateFactoryTest {
     }
 
     @Test
+    fun `combined photos remain usable without device permission`() {
+        val protonPhoto = ProtonGalleryPhoto("proton-photo", 42, hasThumbnail = true)
+        val state = factory.create(
+            GalleryUiInputs(
+                destination = GalleryDestination.Combined,
+                hasDeviceAccess = false,
+                protonAccountStatus = ProtonAccountStatus.CONNECTED,
+                protonGallery = ProtonGalleryState(
+                    photos = listOf(protonPhoto),
+                    hasLoaded = true,
+                ),
+            ),
+        )
+
+        assertEquals("proton:proton-photo", state.visibleAssets.single().stableId)
+        assertNull(state.emptyState)
+    }
+
+    @Test
+    fun `empty combined photos offers device access when Proton is connected`() {
+        val state = factory.create(
+            GalleryUiInputs(
+                destination = GalleryDestination.Combined,
+                hasDeviceAccess = false,
+                protonAccountStatus = ProtonAccountStatus.CONNECTED,
+                protonGallery = ProtonGalleryState(hasLoaded = true),
+            ),
+        )
+
+        assertEquals(GalleryEmptyAction.REQUEST_DEVICE_ACCESS, state.emptyState?.action)
+    }
+
+    @Test
     fun `Proton trash does not claim to be empty before metadata loads`() {
         val state = factory.create(
             GalleryUiInputs(

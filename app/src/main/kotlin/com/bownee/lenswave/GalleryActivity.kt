@@ -13,7 +13,6 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
-import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.AbsListView
@@ -37,21 +36,21 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
-import com.bownee.lenswave.gallery.DeviceCollection
 import com.bownee.lenswave.gallery.DeviceAccessLevel
-import com.bownee.lenswave.gallery.DeviceCollectionPicker
+import com.bownee.lenswave.gallery.DeviceCollection
 import com.bownee.lenswave.gallery.DevicePermissionPolicy
 import com.bownee.lenswave.gallery.GalleryAsset
 import com.bownee.lenswave.gallery.GalleryContent
 import com.bownee.lenswave.gallery.GalleryDeletionCoordinator
 import com.bownee.lenswave.gallery.GalleryDestination
-import com.bownee.lenswave.gallery.GalleryDestinations
 import com.bownee.lenswave.gallery.GalleryEmptyAction
 import com.bownee.lenswave.gallery.GalleryGrouping
 import com.bownee.lenswave.gallery.GalleryFastScrollLayoutPolicy
 import com.bownee.lenswave.gallery.GalleryScrollPosition
 import com.bownee.lenswave.gallery.GalleryScrollPositionStore
-import com.bownee.lenswave.gallery.GallerySpace
+import com.bownee.lenswave.gallery.GalleryNavigationPolicy
+import com.bownee.lenswave.gallery.GallerySection
+import com.bownee.lenswave.gallery.GallerySourceFilter
 import com.bownee.lenswave.gallery.GalleryThumbnailCacheIdentity
 import com.bownee.lenswave.gallery.GalleryThumbnailCachePolicy
 import com.bownee.lenswave.gallery.GalleryUiState
@@ -60,7 +59,6 @@ import com.bownee.lenswave.gallery.PhotoSource
 import com.bownee.lenswave.gallery.ThumbnailNotificationPermissionPolicy
 import com.bownee.lenswave.proton.ProtonAlbum
 import com.bownee.lenswave.proton.ProtonPhotoGateway
-import com.bownee.lenswave.proton.ProtonMediaTag
 import com.bownee.lenswave.gallery.PhotoDeletionExecutor
 import com.bownee.lenswave.proton.ProtonPresentationInitializer
 import com.bownee.lenswave.update.AppUpdateChecker
@@ -105,13 +103,15 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
     private val trashDeleteAllButton get() = screen.trashDeleteAllButton
     private lateinit var deletionCoordinator: GalleryDeletionCoordinator
 
-    private val protonSourceButton get() = screen.protonSourceButton
-    private val albumsSourceButton get() = screen.albumsSourceButton
-    private val deviceSourceButton get() = screen.deviceSourceButton
-    private val trashSourceButton get() = screen.trashSourceButton
-    private val devicePicker get() = screen.devicePicker
-    private val devicePickerButtons get() = screen.devicePickerButtons
+    private val filterRow get() = screen.filterRow
+    private val sourceFilterButton get() = screen.sourceFilterButton
+    private val mediaFilterButton get() = screen.mediaFilterButton
+    private val photosSectionButton get() = screen.photosSectionButton
+    private val albumsSectionButton get() = screen.albumsSectionButton
+    private val trashSectionButton get() = screen.trashSectionButton
     private var currentUiState = GalleryUiState()
+    private var lastPhotosDestination: GalleryDestination = GalleryDestination.Combined
+    private var lastTrashSource = PhotoSource.PROTON
     private var renderedDestination: GalleryDestination? = null
     private var renderedContent: GalleryContent? = null
     private val scrollPositions = GalleryScrollPositionStore()
@@ -224,53 +224,22 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
                 onAlbumClicked = ::openAlbum,
                 onSelectionChanged = ::showSelection,
                 onRefresh = {
-                    hideDevicePicker()
                     viewModel.requestRefresh()
                 },
-                onSourceBarLayout = ::updateDevicePickerLayout,
                 onAlbumBack = ::closeAlbum,
-                onSpaceMenu = ::showSpaceMenu,
+                onFilters = ::showFilters,
                 onSettings = ::showSettingsMenu,
                 onDeleteAllTrash = ::confirmDeleteAllTrashPhotos,
-                onProtonSource = {
-                    hideDevicePicker()
-                    if (currentUiState.destination is GalleryDestination.ProtonTimeline ||
-                        currentUiState.destination is GalleryDestination.ProtonTag
-                    ) {
-                        showProtonTagMenu()
-                    } else {
-                        selectDestination(GalleryDestination.ProtonTimeline)
-                    }
-                },
-                onAlbumsSource = {
-                    hideDevicePicker()
-                    selectDestination(GalleryDestination.ProtonAlbums)
-                },
-                onDeviceSource = {
-                    if (DeviceCollectionPicker.shouldOpenMenu(currentUiState.destination)) {
-                        toggleDevicePicker()
-                    } else {
-                        selectDeviceCollection(currentUiState.selectedDeviceCollection)
-                    }
-                },
-                onTrashSource = {
-                    hideDevicePicker()
-                    val source = when (currentUiState.destination.space) {
-                        GallerySpace.DEVICE -> PhotoSource.DEVICE
-                        GallerySpace.COMBINED,
-                        GallerySpace.PROTON -> PhotoSource.PROTON
-                    }
-                    selectDestination(GalleryDestination.Trash(source))
-                },
-                onDeviceCollection = ::selectDeviceCollection,
+                onPhotosSection = ::openPhotosSection,
+                onAlbumsSection = { selectDestination(GalleryDestination.ProtonAlbums) },
+                onTrashSection = ::openTrashSection,
                 onDeleteSelection = ::deleteSelectedPhotos,
             ),
         )
         setContentView(screen.root)
 
         applySystemInsets()
-        updatePageTitle()
-        updateSourceControls()
+        updateNavigationControls()
     }
 
     private fun initializeAuthentication() {
@@ -331,6 +300,7 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
             pendingScrollRestore = state.destination
         }
         currentUiState = state
+        rememberNavigation(state.destination)
         requestThumbnailNotificationPermissionIfNeeded(state)
         updateThumbnailCacheIdentity(deviceAccessLevel(), state.currentUserId)
         renderedDestination = state.destination
@@ -362,11 +332,9 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
             showDeleteAll = state.showDeleteAll && adapter.selectedPhotos().isEmpty(),
             refreshing = state.isRefreshing,
         )
-        updatePageTitle()
-        updateSourceControls()
+        updateNavigationControls()
         if (destinationChanged) {
             adapter.clearSelection()
-            hideDevicePicker()
         }
     }
 
@@ -479,11 +447,6 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
         return getString(R.string.photo_access_state, getString(accessLabel))
     }
 
-    private fun selectDeviceCollection(collection: DeviceCollection) {
-        hideDevicePicker()
-        selectDestination(GalleryDestination.Device(collection))
-    }
-
     private fun selectDestination(destination: GalleryDestination) {
         adapter.clearSelection()
         trashDeleteAllButton.visibility = View.GONE
@@ -591,13 +554,15 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
             viewingTrash = viewingTrash,
             showDeleteAll = currentUiState.showDeleteAll && visibleAssets.isNotEmpty(),
         )
+        filterRow.visibility = if (
+            selecting || GalleryNavigationPolicy.section(currentUiState.destination) == GallerySection.ALBUMS
+        ) View.GONE else View.VISIBLE
         updateNavigationVisibility(selecting)
     }
 
     private fun handleBack() {
         when {
             adapter.selectedPhotos().isNotEmpty() -> adapter.clearSelection()
-            devicePicker.isVisible -> hideDevicePicker()
             currentUiState.destination is GalleryDestination.ProtonAlbumPhotos -> viewModel.closeAlbum()
             else -> finish()
         }
@@ -617,137 +582,126 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
 
     private fun devicePermissions(): Array<String> = DevicePermissionPolicy.permissions(Build.VERSION.SDK_INT)
 
-    private fun updateSourceControls() {
+    private fun updateNavigationControls() {
         val destination = currentUiState.destination
-        val space = destination.space
-        val deviceCollection = currentUiState.selectedDeviceCollection
-        val collectionLabel = getString(deviceCollection.labelRes)
-        deviceSourceButton.text = getString(R.string.source_dropdown_label, collectionLabel)
-        deviceSourceButton.contentDescription = getString(R.string.choose_device_collection, collectionLabel)
-        protonSourceButton.visibility = if (space == GallerySpace.PROTON) View.VISIBLE else View.GONE
-        val selectedTag = (destination as? GalleryDestination.ProtonTag)?.tag
-        val protonLabel = getString(selectedTag?.labelRes ?: R.string.photos)
-        protonSourceButton.text = getString(R.string.source_dropdown_label, protonLabel)
-        protonSourceButton.contentDescription = getString(R.string.choose_proton_filter, protonLabel)
-        albumsSourceButton.visibility = if (space == GallerySpace.PROTON) View.VISIBLE else View.GONE
-        val deviceTrashAvailable = space == GallerySpace.DEVICE && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
-        trashSourceButton.visibility = if (space == GallerySpace.PROTON || deviceTrashAvailable) {
+        val section = GalleryNavigationPolicy.section(destination)
+        pageTitle.text = when (destination) {
+            is GalleryDestination.ProtonAlbumPhotos -> destination.album.name
+            else -> getString(
+                when (section) {
+                    GallerySection.PHOTOS -> R.string.photos
+                    GallerySection.ALBUMS -> R.string.albums
+                    GallerySection.TRASH -> R.string.trash
+                },
+            )
+        }
+        albumBackButton.visibility = if (destination is GalleryDestination.ProtonAlbumPhotos) {
             View.VISIBLE
         } else {
             View.GONE
         }
-        deviceSourceButton.visibility = if (space == GallerySpace.DEVICE) View.VISIBLE else View.GONE
-        styleSourceButton(
-            protonSourceButton,
-            destination == GalleryDestination.ProtonTimeline || destination is GalleryDestination.ProtonTag,
+        filterRow.visibility = if (
+            section == GallerySection.ALBUMS || adapter.selectedPhotos().isNotEmpty()
+        ) View.GONE else View.VISIBLE
+        sourceFilterButton.text = getString(
+            R.string.source_dropdown_label,
+            sourceFilterLabel(destination),
         )
-        styleSourceButton(
-            albumsSourceButton,
-            destination == GalleryDestination.ProtonAlbums ||
-                destination is GalleryDestination.ProtonAlbumPhotos,
+        sourceFilterButton.contentDescription = getString(R.string.choose_source_filter)
+        mediaFilterButton.visibility = if (section == GallerySection.PHOTOS) View.VISIBLE else View.GONE
+        mediaFilterButton.text = getString(
+            R.string.source_dropdown_label,
+            mediaFilterLabel(destination),
         )
-        styleSourceButton(deviceSourceButton, destination is GalleryDestination.Device)
-        styleSourceButton(
-            trashSourceButton,
-            destination is GalleryDestination.Trash,
-        )
-        devicePickerButtons.forEach { (collection, button) ->
-            val selected = collection == deviceCollection
-            val label = getString(DeviceCollectionPicker.menuLabelRes(collection))
-            button.text = if (selected) getString(R.string.selected_item, label) else label
-            button.isSelected = selected
-            button.isActivated = selected
-            ViewCompat.setStateDescription(
-                button,
-                getString(if (selected) R.string.selected else R.string.not_selected),
-            )
-            button.setTextColor(if (selected) UiStyle.text else UiStyle.muted)
-            button.background = if (selected) {
-                UiStyle.rounded(this, UiStyle.surfaceRaised, 14)
-            } else {
-                Color.TRANSPARENT.toDrawable()
-            }
-        }
+        mediaFilterButton.contentDescription = getString(R.string.choose_media_filter)
+        styleSourceButton(photosSectionButton, section == GallerySection.PHOTOS)
+        styleSourceButton(albumsSectionButton, section == GallerySection.ALBUMS)
+        styleSourceButton(trashSectionButton, section == GallerySection.TRASH)
         updateNavigationVisibility(adapter.selectedPhotos().isNotEmpty())
     }
 
-    private fun showProtonTagMenu() {
-        PopupMenu(this, protonSourceButton).apply {
-            val currentTag = (currentUiState.destination as? GalleryDestination.ProtonTag)?.tag
-            val allTitle = getString(R.string.proton_filter_all)
-            menu.add(
-                android.view.Menu.NONE,
-                PROTON_FILTER_ALL,
-                0,
-                if (currentTag == null) getString(R.string.selected_item, allTitle) else allTitle,
-            )
-            ProtonMediaTag.entries.forEachIndexed { index, tag ->
-                val label = getString(tag.labelRes)
-                menu.add(
-                    android.view.Menu.NONE,
-                    PROTON_FILTER_FIRST + index,
-                    index + 1,
-                    if (tag == currentTag) getString(R.string.selected_item, label) else label,
-                )
+    private fun sourceFilterLabel(destination: GalleryDestination): String {
+        val source = if (destination is GalleryDestination.Trash) {
+            if (destination.source == PhotoSource.PROTON) {
+                GallerySourceFilter.PROTON
+            } else {
+                GallerySourceFilter.DEVICE
             }
-            setOnMenuItemClickListener { item ->
-                val nextDestination = if (item.itemId == PROTON_FILTER_ALL) {
-                    GalleryDestination.ProtonTimeline
-                } else {
-                    val tag = ProtonMediaTag.entries.getOrNull(item.itemId - PROTON_FILTER_FIRST)
-                        ?: return@setOnMenuItemClickListener false
-                    GalleryDestination.ProtonTag(tag)
-                }
-                selectDestination(nextDestination)
-                true
-            }
-            show()
+        } else {
+            GalleryNavigationPolicy.photoFilters(
+                destination,
+                currentUiState.selectedDeviceCollection,
+            ).source
         }
-    }
-
-    private fun showSpaceMenu() {
-        PopupMenu(this, pageTitle).apply {
-            val currentSpace = currentUiState.destination.space
-            addSpaceItem(SPACE_COMBINED, GallerySpace.COMBINED, currentSpace)
-            addSpaceItem(SPACE_PROTON, GallerySpace.PROTON, currentSpace)
-            addSpaceItem(SPACE_DEVICE, GallerySpace.DEVICE, currentSpace)
-            setOnMenuItemClickListener { item ->
-                val space = when (item.itemId) {
-                    SPACE_COMBINED -> GallerySpace.COMBINED
-                    SPACE_PROTON -> GallerySpace.PROTON
-                    SPACE_DEVICE -> GallerySpace.DEVICE
-                    else -> return@setOnMenuItemClickListener false
-                }
-                hideDevicePicker()
-                val destination = when (space) {
-                    GallerySpace.DEVICE -> GalleryDestination.Device(currentUiState.selectedDeviceCollection)
-                    else -> GalleryDestinations.defaultFor(space)
-                }
-                selectDestination(destination)
-                true
-            }
-            show()
-        }
-    }
-
-    private fun PopupMenu.addSpaceItem(
-        itemId: Int,
-        space: GallerySpace,
-        currentSpace: GallerySpace,
-    ) {
-        val spaceLabel = getString(space.labelRes)
-        val title = if (space == currentSpace) getString(R.string.selected_item, spaceLabel) else spaceLabel
-        menu.add(
-            android.view.Menu.NONE,
-            itemId,
-            android.view.Menu.NONE,
-            title,
+        return getString(
+            when (source) {
+                GallerySourceFilter.ALL -> R.string.filter_all_sources
+                GallerySourceFilter.PROTON -> R.string.filter_source_proton
+                GallerySourceFilter.DEVICE -> R.string.filter_source_device
+            },
         )
     }
 
+    private fun mediaFilterLabel(destination: GalleryDestination): String = when (destination) {
+        is GalleryDestination.ProtonTag -> getString(destination.tag.labelRes)
+        is GalleryDestination.Device -> if (destination.collection == DeviceCollection.ALL) {
+            getString(R.string.proton_filter_all)
+        } else {
+            getString(destination.collection.labelRes)
+        }
+
+        else -> getString(R.string.proton_filter_all)
+    }
+
+    private fun showFilters() {
+        when (GalleryNavigationPolicy.section(currentUiState.destination)) {
+            GallerySection.PHOTOS -> GalleryFilterSheet.showPhotos(
+                context = this,
+                initial = GalleryNavigationPolicy.photoFilters(
+                    currentUiState.destination,
+                    currentUiState.selectedDeviceCollection,
+                ),
+                onApply = { filters ->
+                    selectDestination(GalleryNavigationPolicy.photoDestination(filters))
+                },
+            )
+
+            GallerySection.TRASH -> GalleryFilterSheet.showTrash(
+                context = this,
+                initial = (currentUiState.destination as GalleryDestination.Trash).source,
+                supportsDeviceTrash = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R,
+                onApply = { source -> selectDestination(GalleryDestination.Trash(source)) },
+            )
+
+            GallerySection.ALBUMS -> Unit
+        }
+    }
+
+    private fun openPhotosSection() {
+        selectDestination(lastPhotosDestination)
+    }
+
+    private fun openTrashSection() {
+        val source = if (currentUiState.currentUserId == null &&
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+        ) {
+            PhotoSource.DEVICE
+        } else {
+            lastTrashSource
+        }
+        selectDestination(GalleryDestination.Trash(source))
+    }
+
+    private fun rememberNavigation(destination: GalleryDestination) {
+        when (GalleryNavigationPolicy.section(destination)) {
+            GallerySection.PHOTOS -> lastPhotosDestination = destination
+            GallerySection.TRASH -> lastTrashSource = (destination as GalleryDestination.Trash).source
+            GallerySection.ALBUMS -> Unit
+        }
+    }
+
     private fun updateNavigationVisibility(selecting: Boolean) {
-        val hasContextNavigation = currentUiState.destination.space != GallerySpace.COMBINED
-        sourceBar.visibility = if (!selecting && hasContextNavigation) View.VISIBLE else View.GONE
+        sourceBar.visibility = if (selecting) View.GONE else View.VISIBLE
         updateGalleryFooterHeight()
     }
 
@@ -823,62 +777,10 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
         }
     }
 
-    private fun updatePageTitle() {
-        setSourceHeading(getString(currentUiState.destination.space.labelRes))
-        albumBackButton.visibility = if (
-            currentUiState.destination is GalleryDestination.ProtonAlbumPhotos
-        ) {
-            View.VISIBLE
-        } else {
-            View.GONE
-        }
-    }
-
-    private fun setSourceHeading(label: String) {
-        pageTitle.text = getString(R.string.source_dropdown_label, label)
-        pageTitle.contentDescription = getString(R.string.change_photo_source, label)
-    }
-
     private fun closeAlbum() {
         if (currentUiState.destination !is GalleryDestination.ProtonAlbumPhotos) return
         adapter.clearSelection()
         viewModel.closeAlbum()
-    }
-
-    private fun toggleDevicePicker() {
-        if (devicePicker.isVisible) {
-            hideDevicePicker()
-        } else {
-            updateSourceControls()
-            updateDevicePickerLayout()
-            devicePicker.visibility = View.VISIBLE
-        }
-    }
-
-    private fun hideDevicePicker() {
-        devicePicker.visibility = View.GONE
-    }
-
-    private fun updateDevicePickerLayout() {
-        if (root.height <= 0 || deviceSourceButton.width <= 0) return
-        val placement = DeviceCollectionPicker.anchoredPlacement(
-            rootHeight = root.height,
-            rootWidth = root.width,
-            sourceBarLeft = sourceBar.left,
-            sourceBarTop = sourceBar.top,
-            anchorLeft = deviceSourceButton.left,
-            anchorWidth = deviceSourceButton.width,
-            verticalGap = dp(8),
-            isRtl = root.layoutDirection == View.LAYOUT_DIRECTION_RTL,
-        )
-        (devicePicker.layoutParams as FrameLayout.LayoutParams).apply {
-            gravity = Gravity.BOTTOM or Gravity.START
-            width = placement.width
-            marginStart = placement.startMargin
-            marginEnd = 0
-            bottomMargin = placement.bottomMargin
-            devicePicker.layoutParams = this
-        }
     }
 
     private fun restorePendingScrollPosition(state: GalleryUiState) {
@@ -927,7 +829,6 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
             )
             updateBottomOverlayInsets(sourceBar, safeArea)
             updateBottomOverlayInsets(selectionBar, safeArea)
-            devicePicker.post(::updateDevicePickerLayout)
             insets
         }
         ViewCompat.requestApplyInsets(root)
@@ -956,10 +857,5 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
         const val SETTINGS_PRIVACY = 4
         const val KEY_THUMBNAIL_NOTIFICATION_PERMISSION_REQUESTED =
             "thumbnail-notification-permission-requested-v2"
-        const val SPACE_COMBINED = 10
-        const val SPACE_PROTON = 11
-        const val SPACE_DEVICE = 12
-        const val PROTON_FILTER_ALL = 100
-        const val PROTON_FILTER_FIRST = 101
     }
 }
