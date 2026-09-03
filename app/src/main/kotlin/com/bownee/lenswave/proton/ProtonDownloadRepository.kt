@@ -237,7 +237,6 @@ internal object ProtonThumbnailDownloadPolicy {
     const val SDK_BATCH_SIZE = 8
     const val MAX_CONCURRENT_BATCHES = 2
     const val BACKGROUND_CLAIM_SIZE = SDK_BATCH_SIZE * MAX_CONCURRENT_BATCHES
-    const val VISIBLE_CLAIM_SIZE = SDK_BATCH_SIZE
     const val PROGRESS_BATCH_SIZE = 4
     const val SDK_PASS_TIMEOUT_MILLIS = 15_000L
 

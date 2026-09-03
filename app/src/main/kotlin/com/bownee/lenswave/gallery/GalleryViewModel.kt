@@ -11,7 +11,6 @@ import com.bownee.lenswave.proton.ProtonAlbumsState
 import com.bownee.lenswave.proton.ProtonAccountSessionManager
 import com.bownee.lenswave.proton.ProtonAccountSessionState
 import com.bownee.lenswave.proton.ProtonGalleryState
-import com.bownee.lenswave.proton.ProtonGalleryPhoto
 import com.bownee.lenswave.proton.ProtonThumbnailScheduler
 import com.bownee.lenswave.proton.ProtonTrashState
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -23,7 +22,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -75,8 +73,6 @@ class GalleryViewModel @Inject internal constructor(
     private var combinedMatchProgress = CombinedMatchProgress(complete = true)
     private var combinedMatchInputKey: String? = null
     private var combinedMatchJob: Job? = null
-    private var sectionPriorityJob: Job? = null
-    private var visiblePriorityJob: Job? = null
     private var combinedMatchGeneration = 0L
     private var deviceAccessGeneration = 0L
     private var manualRefreshGeneration = 0
@@ -104,7 +100,6 @@ class GalleryViewModel @Inject internal constructor(
     fun selectDestination(newDestination: GalleryDestination) {
         if (destination == newDestination) {
             publishUiState()
-            prioritizeCurrentThumbnailSection()
             return
         }
         val previousDestination = destination
@@ -117,7 +112,6 @@ class GalleryViewModel @Inject internal constructor(
         }
         saveDestination()
         publishUiState()
-        prioritizeCurrentThumbnailSection()
         if (previousDestination is GalleryDestination.Device &&
             newDestination is GalleryDestination.Device &&
             devicePhotos.hasLoaded
@@ -134,7 +128,6 @@ class GalleryViewModel @Inject internal constructor(
         viewModelScope.launch {
             currentUserId?.let { userId ->
                 withContext(Dispatchers.IO) { protonRepository.loadCachedAlbum(userId, albumReference) }
-                prioritizeThumbnailSection(userId, destination)
                 protonThumbnailScheduler.enqueue(userId)
             }
             publishUiState()
@@ -164,24 +157,6 @@ class GalleryViewModel @Inject internal constructor(
 
     fun refreshAfterMutation() {
         requestRefresh(manual = false)
-    }
-
-    fun prioritizeVisibleThumbnails(nodeUids: Set<String>) {
-        val userId = currentUserId ?: return
-        val destinationAtStart = destination
-        if (!destinationAtStart.usesProton()) return
-        visiblePriorityJob?.cancel()
-        visiblePriorityJob = viewModelScope.launch(Dispatchers.IO) {
-            if (currentUserId != userId || destination != destinationAtStart) return@launch
-            protonRepository.prioritizeVisibleThumbnails(userId, nodeUids)
-            delay(VISIBLE_THUMBNAIL_DEBOUNCE_MILLIS)
-            if (currentUserId != userId || destination != destinationAtStart) return@launch
-            try {
-                protonRepository.downloadVisibleThumbnails(userId)
-            } finally {
-                protonThumbnailScheduler.enqueue(userId)
-            }
-        }
     }
 
     fun resumeThumbnailDownloads() {
@@ -253,10 +228,6 @@ class GalleryViewModel @Inject internal constructor(
         val userChanged = previousUserId != nextUserId
         if (userChanged) {
             resetCombinedMatchingAndJoin()
-            sectionPriorityJob?.cancelAndJoin()
-            visiblePriorityJob?.cancelAndJoin()
-            sectionPriorityJob = null
-            visiblePriorityJob = null
             currentUserId = nextUserId
         }
         if (state.transitioning) {
@@ -305,7 +276,6 @@ class GalleryViewModel @Inject internal constructor(
                 }
             }
             if (currentUserId == userId) {
-                prioritizeThumbnailSection(userId, destination)
                 protonThumbnailScheduler.restart(userId)
             }
         }
@@ -349,7 +319,6 @@ class GalleryViewModel @Inject internal constructor(
                         selectedDestination.album,
                         forceRemote,
                     )
-                    prioritizeThumbnailSection(userId, selectedDestination)
                 }
                 protonThumbnailScheduler.enqueue(userId)
             }
@@ -368,41 +337,7 @@ class GalleryViewModel @Inject internal constructor(
 
     private suspend fun refreshProtonSection(userId: UserId, sync: suspend () -> Unit) {
         sync()
-        prioritizeThumbnailSection(userId, destination)
         protonThumbnailScheduler.enqueue(userId)
-    }
-
-    private fun prioritizeCurrentThumbnailSection() {
-        val userId = currentUserId ?: return
-        val destinationAtStart = destination
-        if (!destinationAtStart.usesProton()) return
-        sectionPriorityJob?.cancel()
-        sectionPriorityJob = viewModelScope.launch(Dispatchers.IO) {
-            if (currentUserId != userId || destination != destinationAtStart) return@launch
-            prioritizeThumbnailSection(userId, destinationAtStart)
-            protonThumbnailScheduler.enqueue(userId)
-        }
-    }
-
-    private suspend fun prioritizeThumbnailSection(userId: UserId, selected: GalleryDestination) {
-        val nodeUids = when (selected) {
-            GalleryDestination.Combined,
-            GalleryDestination.ProtonTimeline
-            -> protonRepository.state.value.photos.map(ProtonGalleryPhoto::nodeUid)
-            GalleryDestination.ProtonAlbums -> protonRepository.albumsState.value.albums
-                .mapNotNull(com.bownee.lenswave.proton.ProtonAlbum::coverPhotoNodeUid)
-            is GalleryDestination.ProtonAlbumPhotos -> protonRepository.albumPhotosState.value
-                .takeIf { it.albumUid == selected.album.nodeUid }
-                ?.photos.orEmpty()
-                .map(ProtonGalleryPhoto::nodeUid)
-            is GalleryDestination.Trash -> if (selected.source == PhotoSource.PROTON) {
-                protonRepository.trashState.value.photos.map { it.nodeUid }
-            } else {
-                emptyList()
-            }
-            is GalleryDestination.Device -> emptyList()
-        }
-        protonRepository.prioritizeThumbnailSection(userId, nodeUids)
     }
 
     private fun GalleryDestination.usesProton(): Boolean = when (this) {
@@ -612,7 +547,6 @@ class GalleryViewModel @Inject internal constructor(
     }
 
     private companion object {
-        const val VISIBLE_THUMBNAIL_DEBOUNCE_MILLIS = 100L
         const val STATE_DESTINATION = "gallery.destination"
         const val STATE_DEVICE_COLLECTION = "gallery.device-collection"
         const val STATE_TRASH_SOURCE = "gallery.trash-source"

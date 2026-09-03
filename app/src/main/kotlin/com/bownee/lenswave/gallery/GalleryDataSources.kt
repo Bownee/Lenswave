@@ -67,9 +67,6 @@ interface ProtonGalleryReader {
         album: ProtonAlbumReference,
         forceRemote: Boolean = false,
     )
-    suspend fun prioritizeThumbnailSection(userId: UserId, nodeUids: Collection<String>)
-    suspend fun prioritizeVisibleThumbnails(userId: UserId, nodeUids: Collection<String>)
-    suspend fun downloadVisibleThumbnails(userId: UserId)
 }
 
 interface ProtonSessionLifecycle {

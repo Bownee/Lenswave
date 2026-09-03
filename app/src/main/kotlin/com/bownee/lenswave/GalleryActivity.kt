@@ -171,7 +171,6 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
     override fun onResume() {
         super.onResume()
         updateDeviceAccess()
-        screen.retryVisibleThumbnailDownloads()
         viewModel.resumeThumbnailDownloads()
         showPendingUpdate()
     }
@@ -219,7 +218,6 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
                 onPhotoClicked = ::openPhoto,
                 onAlbumClicked = ::openAlbum,
                 onSelectionChanged = ::showSelection,
-                onVisibleThumbnailsChanged = viewModel::prioritizeVisibleThumbnails,
                 onRefresh = {
                     hideDevicePicker()
                     viewModel.requestRefresh()
@@ -334,7 +332,6 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
                     adapter.submitAlbums(content.albums)
                 }
             }
-            screen.scheduleVisibleThumbnailUpdate()
             restorePendingScrollPosition(state)
         }
         state.emptyState?.let { empty ->

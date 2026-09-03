@@ -8,11 +8,18 @@ import kotlinx.coroutines.sync.withLock
 
 internal data class ProtonThumbnailQueueEntry(
     val nodeUid: String,
-    val sources: Set<String>,
-    val priority: Int,
-    val order: Long,
+    val sourceCaptureTimes: Map<String, Long>,
     val retryCount: Int = 0,
     val retryAtMillis: Long = 0L,
+) {
+    val sources: Set<String> get() = sourceCaptureTimes.keys
+    val captureTimeEpochSeconds: Long
+        get() = sourceCaptureTimes.values.maxOrNull() ?: Long.MIN_VALUE
+}
+
+internal data class ProtonThumbnailCandidate(
+    val nodeUid: String,
+    val captureTimeEpochSeconds: Long,
 )
 
 internal sealed interface ProtonThumbnailQueueStep {
@@ -28,29 +35,30 @@ internal class ProtonThumbnailQueue @Inject constructor(
 ) {
     private val mutex = Mutex()
     private val entriesByUser = mutableMapOf<String, LinkedHashMap<String, ProtonThumbnailQueueEntry>>()
-    private val dirtyUsers = mutableSetOf<String>()
-    private val currentSectionNodeUids = mutableMapOf<String, Set<String>>()
-    private val visibleNodeUids = mutableMapOf<String, Set<String>>()
     private val claimedNodeUids = mutableMapOf<String, MutableSet<String>>()
 
-    suspend fun replaceSource(userId: String, source: String, pendingNodeUids: Collection<String>) {
-        replaceSources(userId, mapOf(source to pendingNodeUids))
+    suspend fun replaceSource(
+        userId: String,
+        source: String,
+        pendingCandidates: Collection<ProtonThumbnailCandidate>,
+    ) {
+        replaceSources(userId, mapOf(source to pendingCandidates))
     }
 
     suspend fun replaceSources(
         userId: String,
-        pendingNodeUidsBySource: Map<String, Collection<String>>,
+        pendingCandidatesBySource: Map<String, Collection<ProtonThumbnailCandidate>>,
         retainedAlbumNodeUids: Collection<String>? = null,
     ) {
         mutex.withLock {
             val entries = entries(userId)
-            val replacedSources = pendingNodeUidsBySource.keys
+            val replacedSources = pendingCandidatesBySource.keys
             val retainedAlbumSources = retainedAlbumNodeUids?.mapTo(mutableSetOf()) { nodeUid ->
                 "album:$nodeUid"
             }
             entries.replaceAll { _, entry ->
                 entry.copy(
-                    sources = entry.sources.filterTo(mutableSetOf()) { source ->
+                    sourceCaptureTimes = entry.sourceCaptureTimes.filterKeys { source ->
                         source !in replacedSources &&
                             (retainedAlbumSources == null ||
                                 !source.startsWith("album:") ||
@@ -58,22 +66,16 @@ internal class ProtonThumbnailQueue @Inject constructor(
                     },
                 )
             }
-            var order = nextOrder(entries.values) + pendingNodeUidsBySource.values.sumOf { it.size }
-            val section = currentSectionNodeUids[userId].orEmpty()
-            val visible = visibleNodeUids[userId].orEmpty()
-            pendingNodeUidsBySource.forEach { (source, pendingNodeUids) ->
-                pendingNodeUids.distinct().forEach { nodeUid ->
-                    val existing = entries[nodeUid]
-                    entries[nodeUid] = existing?.copy(sources = existing.sources + source)
+            pendingCandidatesBySource.forEach { (source, candidates) ->
+                candidates.distinctBy(ProtonThumbnailCandidate::nodeUid).forEach { candidate ->
+                    val existing = entries[candidate.nodeUid]
+                    entries[candidate.nodeUid] = existing?.copy(
+                        sourceCaptureTimes = existing.sourceCaptureTimes +
+                            (source to candidate.captureTimeEpochSeconds),
+                    )
                         ?: ProtonThumbnailQueueEntry(
-                            nodeUid = nodeUid,
-                            sources = setOf(source),
-                            priority = when (nodeUid) {
-                                in visible -> VISIBLE_PRIORITY
-                                in section -> SECTION_PRIORITY
-                                else -> BACKGROUND_PRIORITY
-                            },
-                            order = order--,
+                            nodeUid = candidate.nodeUid,
+                            sourceCaptureTimes = mapOf(source to candidate.captureTimeEpochSeconds),
                         )
                 }
             }
@@ -83,62 +85,22 @@ internal class ProtonThumbnailQueue @Inject constructor(
         }
     }
 
-    suspend fun prioritizeSection(userId: String, nodeUids: Collection<String>) {
-        mutex.withLock {
-            val section = nodeUids.toSet()
-            currentSectionNodeUids[userId] = section
-            val visible = visibleNodeUids[userId].orEmpty().intersect(section)
-            if (visible.isEmpty()) visibleNodeUids.remove(userId) else visibleNodeUids[userId] = visible
-            val entries = entries(userId)
-            var order = nextOrder(entries.values) + section.size
-            entries.replaceAll { nodeUid, entry ->
-                when (nodeUid) {
-                    in visible -> entry.copy(priority = VISIBLE_PRIORITY, order = order--)
-                    in section -> entry.copy(priority = SECTION_PRIORITY, order = order--)
-                    else -> entry.copy(priority = BACKGROUND_PRIORITY)
-                }
-            }
-            dirtyUsers += userId
-        }
-    }
-
-    suspend fun prioritizeVisible(userId: String, nodeUids: Collection<String>) {
-        mutex.withLock {
-            val visible = nodeUids.toSet()
-            val previouslyVisible = visibleNodeUids.put(userId, visible).orEmpty()
-            if (previouslyVisible == visible) return@withLock
-            val section = currentSectionNodeUids[userId].orEmpty()
-            val entries = entries(userId)
-            entries.replaceAll { nodeUid, entry ->
-                if (entry.priority != VISIBLE_PRIORITY) entry else entry.copy(
-                    priority = if (nodeUid in section) SECTION_PRIORITY else BACKGROUND_PRIORITY,
-                )
-            }
-            var order = nextOrder(entries.values) + visible.size
-            visible.forEach { nodeUid ->
-                entries[nodeUid]?.let { entry ->
-                    entries[nodeUid] = entry.copy(
-                        priority = VISIBLE_PRIORITY,
-                        order = order--,
-                        // A retry delay earned while off-screen must not leave a visible hole.
-                        retryAtMillis = if (nodeUid in previouslyVisible) entry.retryAtMillis else 0L,
-                    )
-                }
-            }
-            dirtyUsers += userId
-        }
-    }
-
-    suspend fun retryNow(userId: String, nodeUid: String, sources: Set<String>) {
+    suspend fun retryNow(
+        userId: String,
+        candidate: ProtonThumbnailCandidate,
+        sources: Set<String>,
+    ) {
         if (sources.isEmpty()) return
         mutex.withLock {
             val entries = entries(userId)
-            val existing = entries[nodeUid]
-            entries[nodeUid] = ProtonThumbnailQueueEntry(
-                nodeUid = nodeUid,
-                sources = existing?.sources.orEmpty() + sources,
-                priority = VISIBLE_PRIORITY,
-                order = nextOrder(entries.values),
+            val existing = entries[candidate.nodeUid]
+            val sourceCaptureTimes = existing?.sourceCaptureTimes.orEmpty().toMutableMap()
+            sources.forEach { source ->
+                sourceCaptureTimes.putIfAbsent(source, candidate.captureTimeEpochSeconds)
+            }
+            entries[candidate.nodeUid] = ProtonThumbnailQueueEntry(
+                nodeUid = candidate.nodeUid,
+                sourceCaptureTimes = sourceCaptureTimes,
                 retryCount = existing?.retryCount ?: 0,
                 retryAtMillis = 0L,
             )
@@ -146,20 +108,8 @@ internal class ProtonThumbnailQueue @Inject constructor(
         }
     }
 
-    suspend fun nextReady(userId: String): ProtonThumbnailQueueEntry? = mutex.withLock {
-        val now = clock.nowMillis()
-        entries(userId).values
-            .asSequence()
-            .filter { entry -> entry.retryAtMillis <= now }
-            .sortedWith(compareBy<ProtonThumbnailQueueEntry> { it.priority }.thenByDescending { it.order })
-            .firstOrNull()
-    }
-
     suspend fun claimReady(userId: String, limit: Int): List<ProtonThumbnailQueueEntry> =
-        claim(userId, limit, maximumPriority = Int.MAX_VALUE)
-
-    suspend fun claimVisible(userId: String, limit: Int): List<ProtonThumbnailQueueEntry> =
-        claim(userId, limit, maximumPriority = VISIBLE_PRIORITY)
+        claim(userId, limit)
 
     suspend fun settle(
         userId: String,
@@ -200,27 +150,6 @@ internal class ProtonThumbnailQueue @Inject constructor(
         }
     }
 
-    suspend fun complete(userId: String, nodeUid: String): Boolean = mutex.withLock {
-        val removed = entries(userId).remove(nodeUid) != null
-        claimedNodeUids[userId]?.remove(nodeUid)
-        if (removed) dirtyUsers += userId
-        removed
-    }
-
-    suspend fun defer(userId: String, nodeUid: String) {
-        mutex.withLock {
-            val entries = entries(userId)
-            val entry = entries[nodeUid] ?: return@withLock
-            val retryCount = entry.retryCount + 1
-            entries[nodeUid] = entry.copy(
-                retryCount = retryCount,
-                retryAtMillis = clock.nowMillis() + retryDelayMillis(retryCount),
-            )
-            claimedNodeUids[userId]?.remove(nodeUid)
-            persist(userId, entries)
-        }
-    }
-
     suspend fun hasPending(userId: String): Boolean = mutex.withLock {
         entries(userId).isNotEmpty()
     }
@@ -236,17 +165,7 @@ internal class ProtonThumbnailQueue @Inject constructor(
     suspend fun forget(userId: String) {
         mutex.withLock {
             entriesByUser.remove(userId)
-            dirtyUsers.remove(userId)
-            currentSectionNodeUids.remove(userId)
-            visibleNodeUids.remove(userId)
             claimedNodeUids.remove(userId)
-        }
-    }
-
-    suspend fun flush(userId: String) {
-        mutex.withLock {
-            if (userId !in dirtyUsers) return@withLock
-            persist(userId, entries(userId))
         }
     }
 
@@ -260,16 +179,11 @@ internal class ProtonThumbnailQueue @Inject constructor(
         entries: Map<String, ProtonThumbnailQueueEntry>,
     ) {
         store.writeThumbnailQueue(userId, entries.values.toList())
-        dirtyUsers.remove(userId)
     }
-
-    private fun nextOrder(entries: Collection<ProtonThumbnailQueueEntry>): Long =
-        (entries.maxOfOrNull(ProtonThumbnailQueueEntry::order) ?: 0L) + 1L
 
     private suspend fun claim(
         userId: String,
         limit: Int,
-        maximumPriority: Int,
     ): List<ProtonThumbnailQueueEntry> = mutex.withLock {
         require(limit > 0) { "Thumbnail claim limit must be positive" }
         val now = clock.nowMillis()
@@ -277,9 +191,8 @@ internal class ProtonThumbnailQueue @Inject constructor(
         entries(userId).values
             .asSequence()
             .filter { entry -> entry.retryAtMillis <= now }
-            .filter { entry -> entry.priority <= maximumPriority }
             .filterNot { entry -> entry.nodeUid in claimed }
-            .sortedWith(compareBy<ProtonThumbnailQueueEntry> { it.priority }.thenByDescending { it.order })
+            .sortedWith(NEWEST_FIRST)
             .take(limit)
             .toList()
             .onEach { entry -> claimed += entry.nodeUid }
@@ -291,11 +204,10 @@ internal class ProtonThumbnailQueue @Inject constructor(
     }
 
     private companion object {
-        const val VISIBLE_PRIORITY = 0
-        const val SECTION_PRIORITY = 10
-        const val BACKGROUND_PRIORITY = 100
         const val BASE_RETRY_MILLIS = 30_000L
         const val MAX_RETRY_MILLIS = 15L * 60L * 1_000L
         const val MAX_RETRY_SHIFT = 5
+        val NEWEST_FIRST = compareByDescending(ProtonThumbnailQueueEntry::captureTimeEpochSeconds)
+            .thenBy(ProtonThumbnailQueueEntry::nodeUid)
     }
 }

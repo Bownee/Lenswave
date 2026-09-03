@@ -17,5 +17,9 @@ internal fun Node.toProtonTrashPhoto(hasThumbnail: Boolean): ProtonTrashPhoto? {
         trashedAtEpochSeconds = (trashTime ?: creationTime).epochSecond,
         hasThumbnail = hasThumbnail,
         displayName = originalFileName().orEmpty(),
+        captureTimeEpochSeconds = when (this) {
+            is PhotoNode -> captureTime.epochSecond
+            else -> creationTime.epochSecond
+        },
     )
 }

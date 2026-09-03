@@ -24,6 +24,7 @@ class ProtonTrashPhotoMapperTest {
                 trashedAtEpochSeconds = 2_000L,
                 hasThumbnail = true,
                 displayName = "photo.jpg",
+                captureTimeEpochSeconds = 900L,
             ),
             photo,
         )

@@ -5,6 +5,7 @@ data class ProtonTrashPhoto(
     val trashedAtEpochSeconds: Long,
     val hasThumbnail: Boolean,
     val displayName: String = "",
+    val captureTimeEpochSeconds: Long = trashedAtEpochSeconds,
 )
 
 data class ProtonTrashState(

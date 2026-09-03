@@ -45,7 +45,6 @@ class ProtonThumbnailWorker(
             }
             val initialProgress = repository.thumbnailWorkProgress(requestedUserId)
             if (initialProgress.pending == 0) {
-                repository.flushThumbnailQueue(requestedUserId)
                 return resolve(repository)
             }
             val networkMonitor = ProtonThumbnailNetworkMonitor(applicationContext)
@@ -96,7 +95,6 @@ class ProtonThumbnailWorker(
                 foregroundInfoFactory,
                 repository.thumbnailWorkProgress(requestedUserId).notificationProgress(),
             )
-            repository.flushThumbnailQueue(requestedUserId)
             resolve(
                 repository,
                 if (completedWithinTime) issue else ProtonThumbnailWorkIssue.TIMEOUT,

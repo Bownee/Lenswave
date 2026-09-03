@@ -22,8 +22,6 @@ import androidx.lifecycle.lifecycleScope
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -63,8 +61,6 @@ class ProtonPhotoPickerActivity : FragmentActivity() {
     private lateinit var thumbnailLoader: GalleryThumbnailLoader
     private var currentUserId: UserId? = null
     private var openingPhoto = false
-    private var visibleThumbnailJob: Job? = null
-    private var lastVisibleThumbnailNodeUids: Set<String> = emptySet()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -83,10 +79,6 @@ class ProtonPhotoPickerActivity : FragmentActivity() {
 
     override fun onResume() {
         super.onResume()
-        lastVisibleThumbnailNodeUids = emptySet()
-        grid.post {
-            prioritizeVisibleThumbnails(grid.firstVisiblePosition, grid.childCount)
-        }
         currentUserId?.let { userId ->
             lifecycleScope.launch(Dispatchers.IO) { thumbnailScheduler.resume(userId) }
         }
@@ -123,18 +115,6 @@ class ProtonPhotoPickerActivity : FragmentActivity() {
         progress = screen.progress
         retryButton = screen.retryButton
         grid = screen.grid
-        grid.setOnScrollListener(object : AbsListView.OnScrollListener {
-            override fun onScrollStateChanged(view: AbsListView?, scrollState: Int) = Unit
-
-            override fun onScroll(
-                view: AbsListView?,
-                firstVisibleItem: Int,
-                visibleItemCount: Int,
-                totalItemCount: Int,
-            ) {
-                prioritizeVisibleThumbnails(firstVisibleItem, visibleItemCount)
-            }
-        })
         applySystemInsets(screen.root)
         setContentView(screen.root)
     }
@@ -176,8 +156,6 @@ class ProtonPhotoPickerActivity : FragmentActivity() {
         val activeUserId = session.activeUserId
         if (activeUserId == null) {
             if (currentUserId != null) {
-                visibleThumbnailJob?.cancel()
-                lastVisibleThumbnailNodeUids = emptySet()
                 adapter.clear()
             }
             currentUserId = null
@@ -195,8 +173,6 @@ class ProtonPhotoPickerActivity : FragmentActivity() {
 
         disconnectButton.isEnabled = !session.transitioning
         if (currentUserId == activeUserId) return
-        visibleThumbnailJob?.cancel()
-        lastVisibleThumbnailNodeUids = emptySet()
         adapter.clear()
         currentUserId = activeUserId
         connectButton.visibility = View.GONE
@@ -208,9 +184,6 @@ class ProtonPhotoPickerActivity : FragmentActivity() {
     private fun showGalleryState(state: ProtonGalleryState) {
         if (state.userId != currentUserId?.id) return
         adapter.photos = state.photos
-        grid.post {
-            prioritizeVisibleThumbnails(grid.firstVisiblePosition, grid.childCount)
-        }
         progress.visibility = if (openingPhoto) View.VISIBLE else View.GONE
         val thumbnailProgress = ProtonThumbnailProgressCalculator.timeline(state.photos)
         status.text = when {
@@ -246,35 +219,7 @@ class ProtonPhotoPickerActivity : FragmentActivity() {
     private suspend fun refreshMetadata(userId: UserId, forceRemote: Boolean) {
         repository.syncTimelineMetadata(userId, forceRemote)
         if (repository.state.value.userId == userId.id && repository.state.value.hasLoaded) {
-            repository.prioritizeThumbnailSection(
-                userId,
-                repository.state.value.photos.map(ProtonGalleryPhoto::nodeUid),
-            )
             thumbnailScheduler.restart(userId)
-        }
-    }
-
-    private fun prioritizeVisibleThumbnails(firstVisibleItem: Int, visibleItemCount: Int) {
-        if (visibleItemCount <= 0) return
-        val start = firstVisibleItem.coerceIn(0, adapter.count)
-        val end = (start + visibleItemCount).coerceAtMost(adapter.count)
-        val nodeUids = adapter.photos
-            .subList(start, end)
-            .filterNot(ProtonGalleryPhoto::hasThumbnail)
-            .mapTo(mutableSetOf(), ProtonGalleryPhoto::nodeUid)
-        if (nodeUids == lastVisibleThumbnailNodeUids) return
-        lastVisibleThumbnailNodeUids = nodeUids
-        visibleThumbnailJob?.cancel()
-        val userId = currentUserId ?: return
-        visibleThumbnailJob = lifecycleScope.launch(Dispatchers.IO) {
-            repository.prioritizeVisibleThumbnails(userId, nodeUids)
-            delay(VISIBLE_THUMBNAIL_DEBOUNCE_MILLIS)
-            if (currentUserId != userId) return@launch
-            try {
-                repository.downloadVisibleThumbnails(userId)
-            } finally {
-                thumbnailScheduler.enqueue(userId)
-            }
         }
     }
 
@@ -395,6 +340,5 @@ class ProtonPhotoPickerActivity : FragmentActivity() {
 
     companion object {
         const val EXTRA_PHOTO_PATH = "com.bownee.lenswave.extra.PROTON_PHOTO_PATH"
-        private const val VISIBLE_THUMBNAIL_DEBOUNCE_MILLIS = 100L
     }
 }

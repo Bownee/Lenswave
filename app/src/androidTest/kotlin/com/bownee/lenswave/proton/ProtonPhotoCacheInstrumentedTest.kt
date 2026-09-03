@@ -152,6 +152,36 @@ class ProtonPhotoCacheInstrumentedTest {
         }
     }
 
+    @Test fun thumbnailQueueCaptureTimesSurviveProcessRestoration() {
+        val context = isolatedContext()
+        val userId = "queue-${UUID.randomUUID()}"
+        val cache = createCache(
+            context,
+            SecureFileStore(),
+            FakeClock(System.currentTimeMillis()),
+        )
+        val entries = listOf(
+            ProtonThumbnailQueueEntry(
+                nodeUid = "newest",
+                sourceCaptureTimes = mapOf("timeline" to 300L, "album:one" to 300L),
+            ),
+            ProtonThumbnailQueueEntry(
+                nodeUid = "older",
+                sourceCaptureTimes = mapOf("timeline" to 100L),
+                retryCount = 2,
+                retryAtMillis = 4_000L,
+            ),
+        )
+        try {
+            cache.writeThumbnailQueue(userId, entries)
+
+            assertEquals(entries, cache.readThumbnailQueue(userId))
+        } finally {
+            cache.clearUser(userId)
+            context.testRoot.deleteRecursively()
+        }
+    }
+
     private fun validThumbnail(): ByteArray = ByteArrayOutputStream().use { output ->
         val bitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
         try {

@@ -133,6 +133,10 @@ internal class ProtonPhotoCache @Inject constructor(
                             trashedAtEpochSeconds = value.getLong("trashedAt"),
                             hasThumbnail = thumbnailExists(userId, nodeUid),
                             displayName = value.optString("displayName"),
+                            captureTimeEpochSeconds = value.optLong(
+                                "captureTime",
+                                Long.MIN_VALUE,
+                            ),
                         )
                     )
                 }
@@ -153,6 +157,7 @@ internal class ProtonPhotoCache @Inject constructor(
                     .put("nodeUid", photo.nodeUid)
                     .put("trashedAt", photo.trashedAtEpochSeconds)
                     .put("displayName", photo.displayName)
+                    .put("captureTime", photo.captureTimeEpochSeconds)
             )
         }
         writeAtomically(userId, trashIndexFile(userId), array.toString(), "Could not commit Proton Trash index")
@@ -178,17 +183,26 @@ internal class ProtonPhotoCache @Inject constructor(
             buildList {
                 for (position in 0 until array.length()) {
                     val value = array.getJSONObject(position)
-                    val sources = value.getJSONArray("sources")
+                    val sourceCaptureTimes = value.optJSONObject("sourceCaptureTimes")?.let { stored ->
+                        buildMap {
+                            val sources = stored.keys()
+                            while (sources.hasNext()) {
+                                val source = sources.next()
+                                put(source, stored.getLong(source))
+                            }
+                        }
+                    } ?: run {
+                        val legacySources = value.getJSONArray("sources")
+                        buildMap {
+                            for (sourcePosition in 0 until legacySources.length()) {
+                                put(legacySources.getString(sourcePosition), Long.MIN_VALUE)
+                            }
+                        }
+                    }
                     add(
                         ProtonThumbnailQueueEntry(
                             nodeUid = value.getString("nodeUid"),
-                            sources = buildSet {
-                                for (sourcePosition in 0 until sources.length()) {
-                                    add(sources.getString(sourcePosition))
-                                }
-                            },
-                            priority = value.getInt("priority"),
-                            order = value.getLong("order"),
+                            sourceCaptureTimes = sourceCaptureTimes,
                             retryCount = value.optInt("retryCount"),
                             retryAtMillis = value.optLong("retryAtMillis"),
                         )
@@ -204,12 +218,14 @@ internal class ProtonPhotoCache @Inject constructor(
     override fun writeThumbnailQueue(userId: String, entries: List<ProtonThumbnailQueueEntry>) {
         val array = JSONArray()
         entries.forEach { entry ->
+            val sourceCaptureTimes = JSONObject()
+            entry.sourceCaptureTimes.toSortedMap().forEach { (source, captureTime) ->
+                sourceCaptureTimes.put(source, captureTime)
+            }
             array.put(
                 JSONObject()
                     .put("nodeUid", entry.nodeUid)
-                    .put("sources", JSONArray(entry.sources.sorted()))
-                    .put("priority", entry.priority)
-                    .put("order", entry.order)
+                    .put("sourceCaptureTimes", sourceCaptureTimes)
                     .put("retryCount", entry.retryCount)
                     .put("retryAtMillis", entry.retryAtMillis)
             )
