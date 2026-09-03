@@ -12,6 +12,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
+import android.text.format.Formatter
 import android.view.View
 import android.view.KeyEvent
 import android.view.ViewGroup
@@ -36,7 +37,9 @@ import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import com.bownee.lenswave.gallery.GalleryAsset
 import com.bownee.lenswave.gallery.DeviceCollection
 import com.bownee.lenswave.gallery.MediaKind
@@ -51,11 +54,14 @@ import com.bownee.lenswave.metadata.PhotoMetadataAction
 import com.bownee.lenswave.metadata.PhotoMetadataReader
 import com.bownee.lenswave.metadata.requiresMediaLocationPermission
 import com.bownee.lenswave.proton.ProtonPhotoGateway
+import com.bownee.lenswave.proton.ProtonOriginalDownloadProgress
+import com.bownee.lenswave.proton.ProtonOriginalStream
 import com.bownee.lenswave.storage.TransientPhotoFiles
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import me.proton.core.domain.entity.UserId
@@ -106,6 +112,7 @@ class PhotoViewerActivity : FragmentActivity() {
     private var thumbnailBitmap: Bitmap? = null
     private var navigationFallback: NavigationFallback? = null
     private var photoLoadJob: Job? = null
+    private var videoProgressJob: Job? = null
     private var loadingPanelRunnable: Runnable? = null
     private var detailsScrollAnimator: ValueAnimator? = null
     private var detailsDragStartOffset: Int? = null
@@ -249,10 +256,18 @@ class PhotoViewerActivity : FragmentActivity() {
                 val (file, originalFileName) = withContext(Dispatchers.IO) {
                     val userId = UserId(requestedPhoto.userId)
                     val nodeUid = requestedPhoto.protonNodeUid
-                    val original = protonRepository.downloadOriginal(
-                        userId,
-                        nodeUid,
-                    )
+                    val original = if (requestedPhoto.mediaKind == MediaKind.VIDEO) {
+                        protonRepository.downloadOriginalProgressively(userId, nodeUid) { stream ->
+                            withContext(Dispatchers.Main.immediate) {
+                                if (request.stableId != requestedPhoto.stableId) {
+                                    throw CancellationException("Viewer moved to different media")
+                                }
+                                showProgressiveVideo(stream, requestedPhoto.stableId)
+                            }
+                        }
+                    } else {
+                        protonRepository.downloadOriginal(userId, nodeUid)
+                    }
                     val displayName = requestedPhoto.displayName.ifBlank {
                         protonRepository.getOriginalFileName(userId, nodeUid).orEmpty()
                     }
@@ -263,12 +278,14 @@ class PhotoViewerActivity : FragmentActivity() {
                     request = (request as PhotoRequest.Proton).copy(displayName = originalFileName)
                     request.writeTo(intent)
                 }
-                showMedia(Uri.fromFile(file))
+                if (requestedPhoto.mediaKind != MediaKind.VIDEO) showMedia(Uri.fromFile(file))
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Throwable) {
                 if (request.stableId != requestedPhoto.stableId) return@launch
-                handlePhotoLoadFailure(error, getString(R.string.could_not_download_proton_photo))
+                if (!retryButton.isVisible) {
+                    handlePhotoLoadFailure(error, getString(R.string.could_not_download_proton_photo))
+                }
             }
         }
     }
@@ -355,9 +372,30 @@ class PhotoViewerActivity : FragmentActivity() {
     }
 
     private fun showVideo(uri: Uri) {
+        showVideo(uri, dataSourceFactory = null)
+    }
+
+    private fun showProgressiveVideo(stream: ProtonOriginalStream, requestedStableId: String) {
+        showVideo(Uri.fromFile(stream.file), ProtonProgressiveDataSource.Factory(stream))
+        cancelLoadingPanelDelay()
+        loadingPanel.visibility = View.VISIBLE
+        videoProgressJob = lifecycleScope.launch {
+            stream.progress.collect { downloadProgress ->
+                if (request.stableId == requestedStableId && !photoReady) {
+                    updateVideoDownloadProgress(downloadProgress)
+                }
+            }
+        }
+    }
+
+    @androidx.annotation.OptIn(markerClass = [UnstableApi::class])
+    private fun showVideo(
+        uri: Uri,
+        dataSourceFactory: ProtonProgressiveDataSource.Factory?,
+    ) {
         val requestedStableId = request.stableId
         resolvedUri = uri
-        if (detailsShown) ensureMetadataLoaded()
+        if (detailsShown && dataSourceFactory == null) ensureMetadataLoaded()
         photoView.clear()
         photoView.visibility = View.GONE
         releasePlayer()
@@ -375,8 +413,11 @@ class PhotoViewerActivity : FragmentActivity() {
                     ?.let { TransientPhotoFiles.deleteIfOwned(this@PhotoViewerActivity, it) }
                 navigationFallback = null
                 photoReady = true
+                videoProgressJob?.cancel()
+                videoProgressJob = null
                 hideLoadingPanel()
                 setActionsEnabled(true)
+                if (detailsShown) ensureMetadataLoaded()
                 playerView.animate().cancel()
                 playerView.alpha = 0f
                 playerView.animate()
@@ -399,21 +440,63 @@ class PhotoViewerActivity : FragmentActivity() {
                 }
             }
         })
-        createdPlayer.setMediaItem(MediaItem.fromUri(uri))
+        val mediaItem = MediaItem.fromUri(uri)
+        if (dataSourceFactory == null) {
+            createdPlayer.setMediaItem(mediaItem)
+        } else {
+            createdPlayer.setMediaSource(
+                ProgressiveMediaSource.Factory(dataSourceFactory).createMediaSource(mediaItem)
+            )
+        }
         createdPlayer.prepare()
         createdPlayer.playWhenReady = true
     }
 
     private fun releasePlayer() {
+        videoProgressJob?.cancel()
+        videoProgressJob = null
         playerView.player = null
         player?.release()
         player = null
+    }
+
+    private fun updateVideoDownloadProgress(downloadProgress: ProtonOriginalDownloadProgress) {
+        progress.visibility = View.VISIBLE
+        status.visibility = View.VISIBLE
+        retryButton.visibility = View.GONE
+        if (downloadProgress.complete) {
+            progress.isIndeterminate = false
+            progress.max = VIDEO_PROGRESS_MAX
+            progress.progress = VIDEO_PROGRESS_MAX
+            status.setText(R.string.preparing_video)
+            return
+        }
+
+        val totalBytes = downloadProgress.totalBytes
+        val percent = downloadProgress.percent
+        progress.isIndeterminate = percent == null
+        if (percent == null || totalBytes == null) {
+            status.text = getString(
+                R.string.downloading_video_size,
+                Formatter.formatShortFileSize(this, downloadProgress.downloadedBytes),
+            )
+            return
+        }
+        progress.max = VIDEO_PROGRESS_MAX
+        progress.progress = percent * VIDEO_PROGRESS_MAX / 100
+        status.text = getString(
+            R.string.downloading_video_progress,
+            Formatter.formatShortFileSize(this, downloadProgress.downloadedBytes),
+            Formatter.formatShortFileSize(this, totalBytes),
+            percent,
+        )
     }
 
     private fun scheduleLoadingPanel() {
         cancelLoadingPanelDelay()
         status.visibility = View.GONE
         progress.visibility = View.VISIBLE
+        progress.isIndeterminate = true
         loadingPanel.visibility = View.GONE
         val requestedStableId = request.stableId
         val runnable = Runnable {
@@ -1305,6 +1388,7 @@ class PhotoViewerActivity : FragmentActivity() {
         private const val VIDEO_CONTROLS_HEIGHT_DP = 80
         private const val FULL_QUALITY_CROSSFADE_MILLIS = 180L
         private const val LOADING_PANEL_DELAY_MILLIS = 300L
+        private const val VIDEO_PROGRESS_MAX = 1_000
 
         fun createIntent(
             context: Context,

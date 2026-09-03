@@ -141,6 +141,16 @@ class ProtonPhotoGateway @Inject internal constructor(
             sessionGuard.withActiveSession(userId) { downloads.downloadOriginal(userId, nodeUid) }
         }
 
+    internal suspend fun downloadOriginalProgressively(
+        userId: UserId,
+        nodeUid: String,
+        onReady: suspend (ProtonOriginalStream) -> Unit,
+    ): File = withContext(Dispatchers.IO) {
+        sessionGuard.withActiveSession(userId) {
+            downloads.downloadOriginalProgressively(userId, nodeUid, onReady)
+        }
+    }
+
     override suspend fun getOriginalFileName(userId: UserId, nodeUid: String): String? =
         withContext(Dispatchers.IO) {
             sessionGuard.withActiveSession(userId) { downloads.getOriginalFileName(userId, nodeUid) }

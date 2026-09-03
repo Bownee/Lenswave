@@ -96,6 +96,9 @@
     <string name="could_not_load_proton_photos">Could not load Proton photos</string>
     <string name="could_not_play_video">Could not play this video</string>
     <string name="video_description">Video: %1$s</string>
+    <string name="downloading_video_size">Downloading video · %1$s</string>
+    <string name="downloading_video_progress">Downloading video · %1$s of %2$s (%3$d%%)</string>
+    <string name="preparing_video">Download complete · preparing video</string>
     <string name="add_to_favorites">Add to favorites</string>
     <string name="remove_from_favorites">Remove from favorites</string>
     <string name="could_not_update_favorite">Could not update the favorite</string>

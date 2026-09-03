@@ -11,8 +11,13 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import me.proton.core.crypto.common.context.CryptoContext
@@ -23,6 +28,7 @@ import me.proton.core.user.domain.repository.UserAddressRepository
 import me.proton.drive.sdk.CorePublicAddressResolver
 import me.proton.drive.sdk.CoreUserAddressResolver
 import me.proton.drive.sdk.LoggerProvider
+import me.proton.drive.sdk.ProgressUpdate
 import me.proton.drive.sdk.ProtonDriveSdk
 import me.proton.drive.sdk.ProtonPhotosClient
 import me.proton.drive.sdk.entity.ClientCreateRequest
@@ -72,10 +78,28 @@ class ProtonPhotosClientProvider @Inject constructor(
         userId: UserId,
         nodeUid: String,
         output: WritableByteChannel,
+        onProgress: (ProgressUpdate) -> Unit = {},
     ) {
         get(userId).downloader(PhotosDownloaderRequest(NodeUid(nodeUid))).use { downloader ->
             downloader.downloadToStream(clientScope, output).use { controller ->
-                controller.awaitCompletion()
+                coroutineScope {
+                    val progressJob = launch(start = CoroutineStart.UNDISPATCHED) {
+                        try {
+                            controller.progressFlow.collect { progress ->
+                                progress?.let(onProgress)
+                            }
+                        } catch (error: CancellationException) {
+                            throw error
+                        } catch (error: Throwable) {
+                            LenswaveDiagnostics.reportFailure("original-download-progress", error)
+                        }
+                    }
+                    try {
+                        controller.awaitCompletion()
+                    } finally {
+                        progressJob.cancelAndJoin()
+                    }
+                }
             }
         }
     }

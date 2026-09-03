@@ -290,25 +290,34 @@ internal class ProtonPhotoCache @Inject constructor(
 
     override fun createOriginalTarget(userId: String, nodeUid: String): Pair<File, File> {
         val target = originalFile(userId, nodeUid)
-        val transientDirectory = decryptedDirectory(userId).apply { mkdirs() }
+        val materialized = decryptedOriginalFile(userId, nodeUid)
+        materialized.parentFile?.mkdirs()
         target.parentFile?.mkdirs()
-        val temporary = File.createTempFile("${safeName(nodeUid)}.", ".part", transientDirectory)
-        return temporary to target
+        check(materialized.delete() || !materialized.exists()) {
+            "Could not replace materialized Proton media"
+        }
+        return materialized to target
     }
 
     override fun commitOriginal(userId: String, nodeUid: String, plaintext: File, target: File): File {
-        return try {
-            secureFiles.encryptFile(scope(userId), plaintext, target, "Could not protect downloaded photo")
-            target.setLastModified(clock.nowMillis())
-            readOriginal(userId, nodeUid) ?: error("Could not verify protected downloaded photo")
-        } finally {
-            plaintext.delete()
+        require(plaintext == decryptedOriginalFile(userId, nodeUid)) {
+            "Downloaded Proton media must use its materialized cache target"
         }
+        secureFiles.encryptFile(scope(userId), plaintext, target, "Could not protect downloaded photo")
+        val storedAt = clock.nowMillis()
+        target.setLastModified(storedAt)
+        plaintext.setLastModified(storedAt)
+        return plaintext
     }
 
     override fun onOriginalStored(userId: String, target: File) {
         target.setLastModified(clock.nowMillis())
-        trimDirectory(originalDirectory(userId), ORIGINAL_CACHE_LIMIT_BYTES, ORIGINAL_TTL_MILLIS)
+        trimDirectory(
+            originalDirectory(userId),
+            ORIGINAL_CACHE_LIMIT_BYTES,
+            ORIGINAL_TTL_MILLIS,
+            retainedFile = target,
+        )
     }
 
     override fun trimUser(userId: String) {
@@ -500,14 +509,23 @@ internal class ProtonPhotoCache @Inject constructor(
     private fun isExpired(file: File, ttlMillis: Long): Boolean =
         file.lastModified() <= 0L || clock.nowMillis() - file.lastModified() > ttlMillis
 
-    private fun trimDirectory(directory: File, maxBytes: Long, ttlMillis: Long) {
-        directory.listFiles()?.filter(File::isFile)?.filter { isExpired(it, ttlMillis) }?.forEach(File::delete)
+    private fun trimDirectory(
+        directory: File,
+        maxBytes: Long,
+        ttlMillis: Long,
+        retainedFile: File? = null,
+    ) {
+        directory.listFiles()
+            ?.filter(File::isFile)
+            ?.filter { file -> file != retainedFile && isExpired(file, ttlMillis) }
+            ?.forEach(File::delete)
         val remaining = directory.listFiles()?.filter(File::isFile)
             ?.sortedBy(File::lastModified)
             .orEmpty()
         var totalBytes = remaining.sumOf(File::length)
         for (file in remaining) {
             if (totalBytes <= maxBytes) break
+            if (file == retainedFile) continue
             val length = file.length()
             if (file.delete()) totalBytes -= length
         }

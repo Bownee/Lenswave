@@ -6,6 +6,8 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 import java.net.SocketTimeoutException
+import java.nio.ByteBuffer
+import java.nio.channels.WritableByteChannel
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
@@ -13,6 +15,8 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import me.proton.core.domain.entity.UserId
 import me.proton.drive.sdk.ProtonPhotosClient
@@ -23,8 +27,62 @@ import me.proton.drive.sdk.entity.ThumbnailType
 internal class ProtonDownloadRepository @Inject constructor(
     private val clientProvider: ProtonPhotosClientProvider,
     private val cache: ProtonMediaCache,
+    private val transferCoordinator: ProtonTransferCoordinator,
 ) {
-    suspend fun downloadOriginal(userId: UserId, nodeUid: String): File {
+    private val originalDownloadMutexes = Array(ORIGINAL_DOWNLOAD_MUTEX_COUNT) { Mutex() }
+
+    suspend fun downloadOriginal(userId: UserId, nodeUid: String): File =
+        originalDownloadMutex(userId, nodeUid).withLock {
+            transferCoordinator.withForegroundTransfer {
+                downloadOriginalInForeground(userId, nodeUid)
+            }
+        }
+
+    internal suspend fun downloadOriginalProgressively(
+        userId: UserId,
+        nodeUid: String,
+        onReady: suspend (ProtonOriginalStream) -> Unit,
+    ): File = originalDownloadMutex(userId, nodeUid).withLock {
+        transferCoordinator.withForegroundTransfer {
+            cache.readOriginal(userId.id, nodeUid)?.let { cached ->
+                val stream = ProtonOriginalStream(cached).apply { complete() }
+                onReady(stream)
+                return@withForegroundTransfer cached
+            }
+
+            val (temporary, target) = cache.createOriginalTarget(userId.id, nodeUid)
+            val stream = ProtonOriginalStream(temporary)
+            try {
+                onReady(stream)
+                FileOutputStream(temporary).use { output ->
+                    val reportingOutput = ProgressWritableByteChannel(output.channel, stream::bytesWritten)
+                    clientProvider.downloadTo(userId, nodeUid, reportingOutput) { progress ->
+                        stream.updateProgress(progress.bytesCompleted, progress.bytesInTotal)
+                    }
+                }
+                stream.complete()
+                runCatching {
+                    cache.commitOriginal(userId.id, nodeUid, temporary, target).also {
+                        cache.onOriginalStored(userId.id, target)
+                    }
+                }.getOrElse { error ->
+                    LenswaveDiagnostics.reportFailure("original-cache-store", error)
+                    temporary
+                }
+            } catch (error: CancellationException) {
+                stream.fail(error)
+                temporary.delete()
+                throw error
+            } catch (error: Throwable) {
+                stream.fail(error)
+                LenswaveDiagnostics.reportFailure("original-download", error)
+                temporary.delete()
+                throw error
+            }
+        }
+    }
+
+    private suspend fun downloadOriginalInForeground(userId: UserId, nodeUid: String): File {
         cache.readOriginal(userId.id, nodeUid)?.let { return it }
         val (temporary, target) = cache.createOriginalTarget(userId.id, nodeUid)
         return try {
@@ -42,6 +100,11 @@ internal class ProtonDownloadRepository @Inject constructor(
             temporary.delete()
             throw error
         }
+    }
+
+    private fun originalDownloadMutex(userId: UserId, nodeUid: String): Mutex {
+        val hash = 31 * userId.id.hashCode() + nodeUid.hashCode()
+        return originalDownloadMutexes[(hash and Int.MAX_VALUE) % originalDownloadMutexes.size]
     }
 
     suspend fun getOriginalFileName(userId: UserId, nodeUid: String): String? {
@@ -155,6 +218,16 @@ internal class ProtonDownloadRepository @Inject constructor(
         nodeUids: Collection<String>,
         type: ThumbnailType,
         onProgress: suspend (ThumbnailBatchResult) -> Unit,
+    ): ThumbnailBatchResult = transferCoordinator.withBackgroundTransfer {
+        downloadThumbnailPassWhenAllowed(photosClient, userId, nodeUids, type, onProgress)
+    }
+
+    private suspend fun downloadThumbnailPassWhenAllowed(
+        photosClient: ProtonPhotosClient,
+        userId: UserId,
+        nodeUids: Collection<String>,
+        type: ThumbnailType,
+        onProgress: suspend (ThumbnailBatchResult) -> Unit,
     ): ThumbnailBatchResult {
         val requested = nodeUids.toSet()
         val successful = mutableSetOf<String>()
@@ -226,6 +299,21 @@ internal class ProtonDownloadRepository @Inject constructor(
         val previous = this[nodeUid]
         if (previous == null || kind.priority > previous.priority) this[nodeUid] = kind
     }
+
+    private companion object {
+        const val ORIGINAL_DOWNLOAD_MUTEX_COUNT = 32
+    }
+}
+
+private class ProgressWritableByteChannel(
+    private val delegate: WritableByteChannel,
+    private val onBytesWritten: (Int) -> Unit,
+) : WritableByteChannel {
+    override fun write(source: ByteBuffer): Int = delegate.write(source).also(onBytesWritten)
+
+    override fun isOpen(): Boolean = delegate.isOpen
+
+    override fun close() = delegate.close()
 }
 
 internal data class ThumbnailBatchResult(
