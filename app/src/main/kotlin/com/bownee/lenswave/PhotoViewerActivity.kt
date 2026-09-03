@@ -210,13 +210,14 @@ class PhotoViewerActivity : FragmentActivity() {
         updateFavoriteButton()
         scheduleLoadingPanel()
         val requestedPhoto = request
+        if (requestedPhoto.displayName.isBlank()) resolveDisplayName(requestedPhoto)
         photoLoadJob = lifecycleScope.launch {
             showCachedProtonThumbnail(requestedPhoto)
             try {
-                val (file, originalFileName) = withContext(Dispatchers.IO) {
+                val file = withContext(Dispatchers.IO) {
                     val userId = UserId(requestedPhoto.userId)
                     val nodeUid = requestedPhoto.nodeUid
-                    val original = if (requestedPhoto.mediaKind == MediaKind.VIDEO) {
+                    if (requestedPhoto.mediaKind == MediaKind.VIDEO) {
                         protonRepository.downloadOriginalProgressively(userId, nodeUid) { stream ->
                             withContext(Dispatchers.Main.immediate) {
                                 if (request.stableId != requestedPhoto.stableId) {
@@ -228,16 +229,8 @@ class PhotoViewerActivity : FragmentActivity() {
                     } else {
                         protonRepository.downloadOriginal(userId, nodeUid)
                     }
-                    val displayName = requestedPhoto.displayName.ifBlank {
-                        protonRepository.getOriginalFileName(userId, nodeUid).orEmpty()
-                    }
-                    original to displayName
                 }
                 if (request.stableId != requestedPhoto.stableId) return@launch
-                if (originalFileName.isNotBlank()) {
-                    request = request.copy(displayName = originalFileName)
-                    request.writeTo(intent)
-                }
                 if (requestedPhoto.mediaKind != MediaKind.VIDEO) showMedia(Uri.fromFile(file))
             } catch (error: CancellationException) {
                 throw error
@@ -252,6 +245,32 @@ class PhotoViewerActivity : FragmentActivity() {
 
     private fun showMedia(uri: Uri) {
         if (request.mediaKind == MediaKind.VIDEO) showVideo(uri) else showPhoto(uri)
+    }
+
+    /**
+     * Timeline entries carry no file name, and asking Proton for it is a network round trip.
+     * The name only feeds accessibility text and the details sheet, so it is resolved off the
+     * critical path and applied once it arrives.
+     */
+    private fun resolveDisplayName(requestedPhoto: PhotoRequest) {
+        lifecycleScope.launch {
+            val name = withContext(Dispatchers.IO) {
+                protonRepository.getOriginalFileName(UserId(requestedPhoto.userId), requestedPhoto.nodeUid)
+            }.orEmpty()
+            if (name.isBlank()) return@launch
+            navigationRequests = navigationRequests.map { item ->
+                if (item.stableId == requestedPhoto.stableId) item.copy(displayName = name) else item
+            }
+            if (request.stableId != requestedPhoto.stableId) return@launch
+            request = request.copy(displayName = name)
+            request.writeTo(intent)
+            photoView.contentDescription = getString(
+                if (request.mediaKind == MediaKind.VIDEO) R.string.video_description
+                else R.string.photo_image_description,
+                name,
+            )
+            playerView.contentDescription = photoView.contentDescription
+        }
     }
 
     private suspend fun showCachedProtonThumbnail(requestedPhoto: PhotoRequest) {

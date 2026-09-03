@@ -29,6 +29,7 @@ internal class ProtonDownloadRepository @Inject constructor(
     private val cache: ProtonMediaCache,
     private val transferCoordinator: ProtonTransferCoordinator,
 ) {
+    private val originalFileNames = java.util.concurrent.ConcurrentHashMap<String, String>()
     private val originalDownloadMutexes = Array(ORIGINAL_DOWNLOAD_MUTEX_COUNT) { Mutex() }
 
     suspend fun downloadOriginal(userId: UserId, nodeUid: String): File =
@@ -108,8 +109,11 @@ internal class ProtonDownloadRepository @Inject constructor(
     }
 
     suspend fun getOriginalFileName(userId: UserId, nodeUid: String): String? {
+        val key = "${userId.id}:$nodeUid"
+        originalFileNames[key]?.let { return it }
         return try {
             clientProvider.get(userId).getNode(NodeUid(nodeUid))?.originalFileName()
+                ?.also { name -> originalFileNames[key] = name }
         } catch (error: CancellationException) {
             throw error
         } catch (error: Throwable) {
