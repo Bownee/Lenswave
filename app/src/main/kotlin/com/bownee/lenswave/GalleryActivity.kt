@@ -8,6 +8,7 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.graphics.drawable.InsetDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -774,12 +775,19 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
             getString(if (selected) R.string.selected else R.string.not_selected),
         )
         button.setTextColor(if (selected) UiStyle.text else UiStyle.navigationMuted)
-        button.background = UiStyle.rounded(
-            this,
-            if (selected) UiStyle.navigationSelected else Color.TRANSPARENT,
-            15,
-            if (selected) UiStyle.navigationBorder else Color.TRANSPARENT,
-        )
+        button.background = if (selected) {
+            InsetDrawable(
+                UiStyle.rounded(
+                    this,
+                    UiStyle.navigationSelected,
+                    15,
+                    UiStyle.navigationBorder,
+                ),
+                dp(3),
+            )
+        } else {
+            Color.TRANSPARENT.toDrawable()
+        }
     }
 
     private fun toggleOverviewFavorite(photo: GalleryAsset) {
