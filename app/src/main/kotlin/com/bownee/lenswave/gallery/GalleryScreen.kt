@@ -101,6 +101,8 @@ internal class GalleryScreen(
 
         val listHeader = buildListHeader()
         galleryHeader = listHeader.container
+        // The filter chips scroll away with the content; only the title row stays pinned.
+        galleryHeader.addView(filterRow, 0, UiStyle.matchWrap().apply { bottomMargin = activity.dp(6) })
         emptyPanel = listHeader.empty.container
         emptyTitle = listHeader.empty.title
         emptyMessage = listHeader.empty.message
@@ -168,7 +170,7 @@ internal class GalleryScreen(
 
         list.setOnFastScrollInteractionListener { active ->
             adapter.setFastScrolling(active)
-            if (!active) stickyDateController.schedule(list.firstVisiblePosition)
+            if (!active) stickyDateController.schedule()
         }
         stickyDateController.attach()
     }
@@ -195,7 +197,7 @@ internal class GalleryScreen(
             )
             list.post {
                 if (!isCurrentDestination()) return@post
-                stickyDateController.schedule(list.firstVisiblePosition)
+                stickyDateController.schedule()
             }
         }
     }
@@ -248,12 +250,8 @@ internal class GalleryScreen(
             activity.dp(16) + insets.right,
             activity.dp(8),
         )
-        galleryHeader.setPadding(
-            activity.dp(16) + insets.left,
-            activity.dp(4),
-            activity.dp(16) + insets.right,
-            activity.dp(10),
-        )
+        galleryHeader.setPadding(insets.left, activity.dp(2), insets.right, activity.dp(6))
+        filterRow.setPadding(activity.dp(16), 0, activity.dp(16), 0)
         layoutBelowHeader()
     }
 
@@ -431,7 +429,6 @@ internal class GalleryScreen(
                 setBackgroundColor(UiStyle.withAlpha(UiStyle.background, 244))
                 isClickable = true
                 addView(titleRow, UiStyle.matchWrap())
-                addView(filterRow, UiStyle.matchWrap().apply { topMargin = activity.dp(8) })
             }
         return StickyHeader(container, titleRow, back, pageTitle, tabSwitch, photos, albums, settings, filterRow, chips)
     }
@@ -440,12 +437,14 @@ internal class GalleryScreen(
         val container =
             LinearLayout(activity).apply {
                 orientation = LinearLayout.VERTICAL
-                setPadding(activity.dp(16), activity.dp(4), activity.dp(16), activity.dp(10))
+                setPadding(0, activity.dp(2), 0, activity.dp(6))
             }
         val empty = buildEmptyPanel()
         container.addView(
             empty.container,
             UiStyle.matchWrap().apply {
+                marginStart = activity.dp(16)
+                marginEnd = activity.dp(16)
                 topMargin = activity.dp(14)
                 bottomMargin = activity.dp(12)
             },

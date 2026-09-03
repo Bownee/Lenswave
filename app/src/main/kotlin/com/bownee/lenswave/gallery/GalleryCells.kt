@@ -28,7 +28,7 @@ internal class PhotoCell(
         }
     val selectionScrim =
         View(context).apply {
-            background = UiStyle.rounded(context, UiStyle.withAlpha(UiStyle.accent, 70), 10)
+            background = UiStyle.rounded(context, UiStyle.withAlpha(UiStyle.accent, 70), 6)
             visibility = View.GONE
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
@@ -58,7 +58,7 @@ internal class PhotoCell(
         }
 
     init {
-        UiStyle.clipRounded(this, 10)
+        UiStyle.clipRounded(this, 6)
         setBackgroundColor(UiStyle.surface)
         addView(image, LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         addView(selectionScrim, LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
