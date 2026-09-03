@@ -180,7 +180,6 @@ class PhotoViewerActivity : FragmentActivity() {
                 onVerticalDrag = ::handleDetailsDrag,
                 onHorizontalDrag = ::handleHorizontalPhotoDrag,
                 onBack = ::handleBack,
-                onShowDetails = { showDetails() },
                 onEdit = ::openEditor,
                 onDelete = ::deletePhoto,
                 onRetry = ::loadPhoto,

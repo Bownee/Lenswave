@@ -17,7 +17,6 @@
         <item quantity="other">%1$d selected</item>
     </plurals>
     <string name="source_dropdown_label">%1$s ▾</string>
-    <string name="swipe_up_for_details">Swipe up for details</string>
     <string name="photo_details">Details</string>
     <string name="open_in_maps">Open in Maps</string>
     <string name="opening_proton_sign_in">Opening secure Proton sign-in…</string>

@@ -26,7 +26,6 @@ class AccessibilityContractInstrumentedTest {
                         onVerticalDrag = { _, _, _ -> },
                         onHorizontalDrag = { _, _ -> },
                         onBack = {},
-                        onShowDetails = {},
                         onEdit = {},
                         onDelete = {},
                         onRetry = {},

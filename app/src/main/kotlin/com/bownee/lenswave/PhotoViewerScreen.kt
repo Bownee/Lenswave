@@ -167,15 +167,8 @@ internal class PhotoViewerScreen(
         }
         this.actions = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            minimumHeight = context.dp(112)
+            minimumHeight = context.dp(64)
             setPadding(context.dp(8), context.dp(6), context.dp(8), context.dp(8))
-            addView(TextView(context).apply {
-                setText(R.string.swipe_up_for_details)
-                textSize = 12f
-                gravity = Gravity.CENTER
-                setTextColor(UiStyle.muted)
-                setOnClickListener { actions.onShowDetails() }
-            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, context.dp(48)))
             addView(buttons, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
         root.addView(
@@ -262,7 +255,6 @@ internal class PhotoViewerScreen(
         val onVerticalDrag: (Float, Float, Boolean) -> Unit,
         val onHorizontalDrag: (Float, Boolean) -> Unit,
         val onBack: () -> Unit,
-        val onShowDetails: () -> Unit,
         val onEdit: () -> Unit,
         val onDelete: () -> Unit,
         val onRetry: () -> Unit,
