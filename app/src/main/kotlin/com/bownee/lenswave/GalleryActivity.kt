@@ -907,7 +907,7 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
                 dp(10),
             )
             updateNavigationVisibility(adapter.selectedPhotos().isNotEmpty())
-            screen.updateStickyMonthMargins(
+            screen.updateStickyDateMargins(
                 top = dp(8) + safeArea.top,
                 start = dp(8) + if (root.layoutDirection == View.LAYOUT_DIRECTION_RTL) {
                     safeArea.right

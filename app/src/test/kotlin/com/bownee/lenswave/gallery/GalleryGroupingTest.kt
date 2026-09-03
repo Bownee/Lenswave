@@ -11,13 +11,13 @@ import java.util.Locale
 
 class GalleryGroupingTest {
     @Test
-    fun groupsNewestPhotosByMonthAndChunksRows() {
+    fun groupsNewestPhotosByDayAndChunksRows() {
         val photos = listOf(
-            photo("feb-1", timestamp(2026, 2, 1)),
-            photo("mar-1", timestamp(2026, 3, 1)),
-            photo("mar-4", timestamp(2026, 3, 4)),
-            photo("mar-2", timestamp(2026, 3, 2)),
-            photo("mar-3", timestamp(2026, 3, 3)),
+            photo("jul-11", timestamp(2026, 7, 11)),
+            photo("jul-12-d", timestamp(2026, 7, 12)),
+            photo("jul-12-b", timestamp(2026, 7, 12)),
+            photo("jul-12-a", timestamp(2026, 7, 12)),
+            photo("jul-12-c", timestamp(2026, 7, 12)),
         )
 
         val rows = GalleryGrouping.createRows(
@@ -28,11 +28,14 @@ class GalleryGroupingTest {
             unknownDateLabel = "No capture date",
         )
 
-        assertEquals("March 2026", (rows[0] as GalleryRow.MonthHeader).label)
-        assertEquals(listOf("mar-4", "mar-3", "mar-2"), (rows[1] as GalleryRow.Photos).items.map { it.stableId })
-        assertEquals(listOf("mar-1"), (rows[2] as GalleryRow.Photos).items.map { it.stableId })
-        assertEquals("February 2026", (rows[3] as GalleryRow.MonthHeader).label)
-        assertEquals(listOf("feb-1"), (rows[4] as GalleryRow.Photos).items.map { it.stableId })
+        assertEquals("Sun, 12 Jul 2026", (rows[0] as GalleryRow.DateHeader).label)
+        assertEquals(
+            listOf("jul-12-a", "jul-12-b", "jul-12-c"),
+            (rows[1] as GalleryRow.Photos).items.map { it.stableId },
+        )
+        assertEquals(listOf("jul-12-d"), (rows[2] as GalleryRow.Photos).items.map { it.stableId })
+        assertEquals("Sat, 11 Jul 2026", (rows[3] as GalleryRow.DateHeader).label)
+        assertEquals(listOf("jul-11"), (rows[4] as GalleryRow.Photos).items.map { it.stableId })
     }
 
     @Test
@@ -45,8 +48,8 @@ class GalleryGroupingTest {
         )
 
         assertTrue(
-            rows.last { it is GalleryRow.MonthHeader } ==
-                GalleryRow.MonthHeader("unknown", "No capture date")
+            rows.last { it is GalleryRow.DateHeader } ==
+                GalleryRow.DateHeader("unknown", "No capture date")
         )
     }
 

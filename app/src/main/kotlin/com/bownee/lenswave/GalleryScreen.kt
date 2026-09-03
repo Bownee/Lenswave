@@ -48,7 +48,7 @@ internal class GalleryScreen(
     private val emptyMessage: TextView
     private val emptyAction: Button
     val adapter: GalleryListAdapter
-    val stickyMonth: TextView
+    val stickyDate: TextView
     val sourceBar: LinearLayout
     val selectionBar: LinearLayout
     private val selectionCount: TextView
@@ -64,13 +64,13 @@ internal class GalleryScreen(
     val devicePicker: LinearLayout
     val devicePickerButtons = mutableMapOf<DeviceCollection, Button>()
 
-    private var pendingStickyMonthPosition: Int? = null
-    private var stickyMonthUpdatePosted = false
-    private val stickyMonthUpdate = Runnable {
-        stickyMonthUpdatePosted = false
-        val position = pendingStickyMonthPosition ?: return@Runnable
-        pendingStickyMonthPosition = null
-        updateStickyMonth(position)
+    private var pendingStickyDatePosition: Int? = null
+    private var stickyDateUpdatePosted = false
+    private val stickyDateUpdate = Runnable {
+        stickyDateUpdatePosted = false
+        val position = pendingStickyDatePosition ?: return@Runnable
+        pendingStickyDatePosition = null
+        updateStickyDate(position)
     }
     init {
         val header = buildGalleryHeader()
@@ -123,7 +123,7 @@ internal class GalleryScreen(
             ),
         )
 
-        stickyMonth = text("", 15f, UiStyle.text).apply {
+        stickyDate = text("", 15f, UiStyle.text).apply {
             gravity = Gravity.CENTER
             setTypeface(typeface, Typeface.BOLD)
             setPadding(activity.dp(16), 0, activity.dp(16), 0)
@@ -132,7 +132,7 @@ internal class GalleryScreen(
             visibility = View.GONE
         }
         root.addView(
-            stickyMonth,
+            stickyDate,
             FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 activity.dp(40),
@@ -164,9 +164,9 @@ internal class GalleryScreen(
     }
 
     fun dispose() {
-        list.removeCallbacks(stickyMonthUpdate)
-        pendingStickyMonthPosition = null
-        stickyMonthUpdatePosted = false
+        list.removeCallbacks(stickyDateUpdate)
+        pendingStickyDatePosition = null
+        stickyDateUpdatePosted = false
     }
 
     fun captureScrollPosition(): GalleryScrollPosition? {
@@ -187,7 +187,7 @@ internal class GalleryScreen(
             )
             list.post {
                 if (!isCurrentDestination()) return@post
-                scheduleStickyMonthUpdate(list.firstVisiblePosition)
+                scheduleStickyDateUpdate(list.firstVisiblePosition)
             }
         }
     }
@@ -234,11 +234,11 @@ internal class GalleryScreen(
         selectionBar.visibility = if (selecting) View.VISIBLE else View.GONE
     }
 
-    fun updateStickyMonthMargins(top: Int, start: Int) {
-        (stickyMonth.layoutParams as FrameLayout.LayoutParams).apply {
+    fun updateStickyDateMargins(top: Int, start: Int) {
+        (stickyDate.layoutParams as FrameLayout.LayoutParams).apply {
             topMargin = top
             marginStart = start
-            stickyMonth.layoutParams = this
+            stickyDate.layoutParams = this
         }
     }
 
@@ -246,7 +246,7 @@ internal class GalleryScreen(
         list.setOnFastScrollInteractionListener { active ->
             adapter.setFastScrolling(active)
             if (!active) {
-                scheduleStickyMonthUpdate(list.firstVisiblePosition)
+                scheduleStickyDateUpdate(list.firstVisiblePosition)
             }
         }
         list.setOnScrollListener(object : AbsListView.OnScrollListener {
@@ -258,30 +258,30 @@ internal class GalleryScreen(
                 visibleItemCount: Int,
                 totalItemCount: Int,
             ) {
-                scheduleStickyMonthUpdate(firstVisibleItem)
+                scheduleStickyDateUpdate(firstVisibleItem)
             }
         })
     }
 
-    private fun scheduleStickyMonthUpdate(firstVisibleItem: Int) {
-        pendingStickyMonthPosition = firstVisibleItem
-        if (stickyMonthUpdatePosted) return
-        stickyMonthUpdatePosted = true
-        list.postOnAnimation(stickyMonthUpdate)
+    private fun scheduleStickyDateUpdate(firstVisibleItem: Int) {
+        pendingStickyDatePosition = firstVisibleItem
+        if (stickyDateUpdatePosted) return
+        stickyDateUpdatePosted = true
+        list.postOnAnimation(stickyDateUpdate)
     }
 
-    private fun updateStickyMonth(firstVisibleItem: Int) {
+    private fun updateStickyDate(firstVisibleItem: Int) {
         if (firstVisibleItem < list.headerViewsCount) {
-            stickyMonth.visibility = View.GONE
+            stickyDate.visibility = View.GONE
             return
         }
         val position = firstVisibleItem - list.headerViewsCount
-        val label = adapter.monthLabelForPosition(position)
+        val label = adapter.dateLabelForPosition(position)
         if (label == null) {
-            stickyMonth.visibility = View.GONE
+            stickyDate.visibility = View.GONE
         } else {
-            stickyMonth.text = label
-            stickyMonth.visibility = View.VISIBLE
+            stickyDate.text = label
+            stickyDate.visibility = View.VISIBLE
         }
     }
 

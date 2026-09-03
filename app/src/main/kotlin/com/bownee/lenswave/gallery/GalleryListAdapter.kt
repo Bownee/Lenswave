@@ -85,21 +85,21 @@ class GalleryListAdapter(
         if (changed) notifyDataSetChanged()
     }
 
-    fun monthLabelForPosition(position: Int): String? {
+    fun dateLabelForPosition(position: Int): String? {
         for (index in position.coerceAtMost(rows.lastIndex) downTo 0) {
-            (rows[index] as? GalleryRow.MonthHeader)?.let { return it.label }
+            (rows[index] as? GalleryRow.DateHeader)?.let { return it.label }
         }
         return null
     }
 
-    fun isMonthHeader(position: Int): Boolean = rows.getOrNull(position) is GalleryRow.MonthHeader
+    fun isDateHeader(position: Int): Boolean = rows.getOrNull(position) is GalleryRow.DateHeader
 
     override fun getCount(): Int = rows.size
 
     override fun getItem(position: Int): GalleryRow = rows[position]
 
     override fun getItemId(position: Int): Long = when (val row = rows[position]) {
-        is GalleryRow.MonthHeader -> row.key.hashCode().toLong()
+        is GalleryRow.DateHeader -> row.key.hashCode().toLong()
         is GalleryRow.Photos -> row.items.first().stableId.hashCode().toLong()
         is GalleryRow.Albums -> row.items.first().nodeUid.hashCode().toLong()
     }
@@ -107,7 +107,7 @@ class GalleryListAdapter(
     override fun getViewTypeCount(): Int = 3
 
     override fun getItemViewType(position: Int): Int = when (rows[position]) {
-        is GalleryRow.MonthHeader -> TYPE_HEADER
+        is GalleryRow.DateHeader -> TYPE_HEADER
         is GalleryRow.Photos -> TYPE_PHOTOS
         is GalleryRow.Albums -> TYPE_ALBUMS
     }
@@ -116,12 +116,12 @@ class GalleryListAdapter(
 
     override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View =
         when (val row = rows[position]) {
-            is GalleryRow.MonthHeader -> headerView(row, convertView)
+            is GalleryRow.DateHeader -> headerView(row, convertView)
             is GalleryRow.Photos -> photosView(row, convertView)
             is GalleryRow.Albums -> albumsView(row, convertView)
         }
 
-    private fun headerView(row: GalleryRow.MonthHeader, convertView: View?): View {
+    private fun headerView(row: GalleryRow.DateHeader, convertView: View?): View {
         val label = (convertView as? TextView) ?: TextView(context).apply {
             setTextColor(UiStyle.text)
             textSize = 18f
