@@ -10,6 +10,7 @@ import android.view.ViewGroup
 import android.widget.AbsListView
 import android.widget.BaseAdapter
 import android.widget.FrameLayout
+import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
@@ -26,20 +27,24 @@ class GalleryListAdapter(
     private val context: Context,
     private val thumbnailLoader: GalleryThumbnailLoader,
     private val onPhotoClicked: (GalleryAsset) -> Unit,
+    private val onFavoriteClicked: (GalleryAsset) -> Unit,
     private val onAlbumClicked: (ProtonAlbum) -> Unit,
     private val onSelectionChanged: (List<GalleryAsset>) -> Unit,
     private val currentDestination: () -> GalleryDestination,
 ) : BaseAdapter() {
     private val selected = linkedMapOf<String, GalleryAsset>()
+    private val favoriteUpdates = mutableSetOf<String>()
     private var rows: List<GalleryRow> = emptyList()
     private var isFastScrolling = false
 
     fun submitPhotos(photos: List<GalleryAsset>) {
+        val stableIds = photos.mapTo(mutableSetOf(), GalleryAsset::stableId)
         rows = GalleryGrouping.createRows(
             photos = photos,
             unknownDateLabel = context.getString(R.string.unknown_date),
         )
-        selected.keys.retainAll(photos.mapTo(mutableSetOf(), GalleryAsset::stableId))
+        selected.keys.retainAll(stableIds)
+        favoriteUpdates.retainAll(stableIds)
         notifyDataSetChanged()
         notifySelectionChanged()
     }
@@ -74,6 +79,11 @@ class GalleryListAdapter(
     }
 
     fun selectedPhotos(): List<GalleryAsset> = selected.values.toList()
+
+    fun setFavoriteUpdateInProgress(stableId: String, inProgress: Boolean) {
+        val changed = if (inProgress) favoriteUpdates.add(stableId) else favoriteUpdates.remove(stableId)
+        if (changed) notifyDataSetChanged()
+    }
 
     fun monthLabelForPosition(position: Int): String? {
         for (index in position.coerceAtMost(rows.lastIndex) downTo 0) {
@@ -137,6 +147,8 @@ class GalleryListAdapter(
                 cell.loading.visibility = View.GONE
                 cell.protonBadge.visibility = View.GONE
                 cell.videoBadge.visibility = View.GONE
+                cell.favorite.visibility = View.GONE
+                cell.favorite.setOnClickListener(null)
                 cell.setOnClickListener(null)
                 cell.setOnLongClickListener(null)
                 continue
@@ -164,6 +176,21 @@ class GalleryListAdapter(
                 true
             }
             val isSelected = photo.stableId in selected
+            val showFavorite = selected.isEmpty() && photo.canFavoriteInProton
+            val favoriteUpdating = photo.stableId in favoriteUpdates
+            cell.favorite.visibility = if (showFavorite) View.VISIBLE else View.GONE
+            cell.favorite.isEnabled = showFavorite && !favoriteUpdating
+            cell.favorite.alpha = if (favoriteUpdating) 0.5f else 1f
+            cell.favorite.setImageResource(
+                if (photo.isFavorite) R.drawable.ic_favorite else R.drawable.ic_favorite_border,
+            )
+            cell.favorite.contentDescription = context.getString(
+                if (photo.isFavorite) R.string.remove_from_favorites else R.string.add_to_favorites,
+            )
+            cell.favorite.setOnClickListener(
+                if (showFavorite && !favoriteUpdating) View.OnClickListener { onFavoriteClicked(photo) }
+                else null,
+            )
             cell.isSelected = isSelected
             cell.isActivated = isSelected
             ViewCompat.setStateDescription(
@@ -324,6 +351,17 @@ class GalleryListAdapter(
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             visibility = View.GONE
         }
+        val favorite = ImageButton(context).apply {
+            setPadding(context.dp(12))
+            imageTintList = ColorStateList.valueOf(Color.WHITE)
+            background = UiStyle.rounded(
+                context,
+                Color.argb(185, 20, 22, 27),
+                16,
+                Color.argb(105, 255, 255, 255),
+            )
+            visibility = View.GONE
+        }
 
         init {
             addView(image, LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
@@ -337,6 +375,10 @@ class GalleryListAdapter(
                 marginEnd = context.dp(7)
             })
             addView(videoBadge, LayoutParams(context.dp(28), context.dp(28), Gravity.CENTER))
+            addView(favorite, LayoutParams(context.dp(48), context.dp(48), Gravity.BOTTOM or Gravity.START).apply {
+                bottomMargin = context.dp(4)
+                marginStart = context.dp(4)
+            })
         }
     }
 

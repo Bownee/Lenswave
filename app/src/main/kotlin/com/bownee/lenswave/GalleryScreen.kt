@@ -95,6 +95,7 @@ internal class GalleryScreen(
                 protonUserId = currentUserId,
             ),
             onPhotoClicked = actions.onPhotoClicked,
+            onFavoriteClicked = actions.onFavoriteClicked,
             onAlbumClicked = actions.onAlbumClicked,
             onSelectionChanged = actions.onSelectionChanged,
             currentDestination = currentDestination,
@@ -538,6 +539,7 @@ internal class GalleryScreen(
 
     internal class Actions(
         val onPhotoClicked: (GalleryAsset) -> Unit,
+        val onFavoriteClicked: (GalleryAsset) -> Unit,
         val onAlbumClicked: (ProtonAlbum) -> Unit,
         val onSelectionChanged: (List<GalleryAsset>) -> Unit,
         val onRefresh: () -> Unit,

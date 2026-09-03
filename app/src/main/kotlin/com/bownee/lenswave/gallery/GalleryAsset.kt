@@ -113,6 +113,12 @@ data class GalleryAsset(
     val isStoredInProton: Boolean
         get() = protonReplicas.isNotEmpty()
 
+    val protonReplicaNodeUids: List<String>
+        get() = protonReplicas.map(PhotoReplica.Proton::nodeUid)
+
+    val canFavoriteInProton: Boolean
+        get() = !isTrashed && protonReplicas.isNotEmpty()
+
     val isFavorite: Boolean
         get() = protonReplicas.any { com.bownee.lenswave.proton.ProtonMediaTag.FAVORITES in it.tags }
 

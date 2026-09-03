@@ -1,16 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="launcher_background">#000000</color>
-    <color name="lenswave_background">#15171C</color>
-    <color name="lenswave_surface">#20232A</color>
-    <color name="lenswave_surface_raised">#2A2E37</color>
-    <color name="lenswave_border">#424854</color>
-    <color name="lenswave_navigation_surface">#29292D</color>
-    <color name="lenswave_navigation_selected">#424247</color>
-    <color name="lenswave_navigation_border">#5A5A62</color>
-    <color name="lenswave_navigation_muted">#B4B4BC</color>
-    <color name="lenswave_text">#F4F6FC</color>
-    <color name="lenswave_muted">#A6ADBE</color>
+    <color name="lenswave_background">#23262C</color>
+    <color name="lenswave_surface">#2D3138</color>
+    <color name="lenswave_surface_raised">#393E47</color>
+    <color name="lenswave_border">#555D69</color>
+    <color name="lenswave_navigation_surface">#414348</color>
+    <color name="lenswave_navigation_selected">#5A5D64</color>
+    <color name="lenswave_navigation_border">#74777F</color>
+    <color name="lenswave_navigation_muted">#D0D1D5</color>
+    <color name="lenswave_text">#F7F8FB</color>
+    <color name="lenswave_muted">#BEC4CF</color>
     <color name="lenswave_accent">#AA98FF</color>
     <color name="lenswave_accent_pressed">#8F7CE0</color>
     <color name="lenswave_accent_disabled">#70699A</color>

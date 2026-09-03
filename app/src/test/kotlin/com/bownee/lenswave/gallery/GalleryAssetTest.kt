@@ -1,6 +1,7 @@
 package com.bownee.lenswave.gallery
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -35,6 +36,45 @@ class GalleryAssetTest {
         assertTrue(asset.isStoredInProton)
         assertEquals(listOf("remote"), asset.protonBackingNodeUids)
         assertEquals(2, asset.replicas.size)
+    }
+
+    @Test
+    fun `Proton-backed media exposes favorite targets`() {
+        val asset = GalleryAsset.device(
+            stableId = "device-photo",
+            capturedAtEpochMillis = 1,
+            displayName = "photo.jpg",
+            uri = "content://photos/1",
+            collection = DeviceCollection.CAMERA,
+            sizeBytes = 100,
+            modifiedAtEpochMillis = 2,
+        ).withReplicas(listOf(protonReplica("first"), protonReplica("second")))
+
+        assertTrue(asset.canFavoriteInProton)
+        assertEquals(listOf("first", "second"), asset.protonReplicaNodeUids)
+    }
+
+    @Test
+    fun `local-only and trashed media cannot be favorited in Proton`() {
+        val local = GalleryAsset.device(
+            stableId = "device-photo",
+            capturedAtEpochMillis = 1,
+            displayName = "photo.jpg",
+            uri = "content://photos/1",
+            collection = DeviceCollection.CAMERA,
+            sizeBytes = 100,
+            modifiedAtEpochMillis = 2,
+        )
+        val trashed = GalleryAsset.proton(
+            stableId = "proton-photo",
+            capturedAtEpochMillis = 1,
+            nodeUid = "remote",
+            hasThumbnail = true,
+            isTrashed = true,
+        )
+
+        assertFalse(local.canFavoriteInProton)
+        assertFalse(trashed.canFavoriteInProton)
     }
 
     private fun protonReplica(nodeUid: String) = PhotoReplica.Proton(

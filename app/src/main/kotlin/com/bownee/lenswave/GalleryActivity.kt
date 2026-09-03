@@ -65,6 +65,7 @@ import com.bownee.lenswave.proton.ProtonPresentationInitializer
 import com.bownee.lenswave.update.AppUpdateChecker
 import com.bownee.lenswave.update.UpdateAvailableDialogFragment
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -218,6 +219,7 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
             currentDestination = { currentUiState.destination },
             actions = GalleryScreen.Actions(
                 onPhotoClicked = ::openPhoto,
+                onFavoriteClicked = ::toggleOverviewFavorite,
                 onAlbumClicked = ::openAlbum,
                 onSelectionChanged = ::showSelection,
                 onRefresh = {
@@ -778,6 +780,37 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
             15,
             if (selected) UiStyle.navigationBorder else Color.TRANSPARENT,
         )
+    }
+
+    private fun toggleOverviewFavorite(photo: GalleryAsset) {
+        val userId = currentUiState.currentUserId ?: return
+        if (!photo.canFavoriteInProton) return
+        val nodeUids = photo.protonReplicaNodeUids.distinct()
+        if (nodeUids.isEmpty()) return
+        val favorite = !photo.isFavorite
+        adapter.setFavoriteUpdateInProgress(photo.stableId, true)
+        lifecycleScope.launch {
+            try {
+                val result = protonRepository.setFavorite(userId, nodeUids, favorite)
+                if (result.updatedCount != nodeUids.size) {
+                    Toast.makeText(
+                        this@GalleryActivity,
+                        R.string.could_not_update_favorite,
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Throwable) {
+                Toast.makeText(
+                    this@GalleryActivity,
+                    R.string.could_not_update_favorite,
+                    Toast.LENGTH_LONG,
+                ).show()
+            } finally {
+                adapter.setFavoriteUpdateInProgress(photo.stableId, false)
+            }
+        }
     }
 
     private fun updatePageTitle() {
