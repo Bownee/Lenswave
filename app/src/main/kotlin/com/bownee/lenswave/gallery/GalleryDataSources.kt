@@ -6,6 +6,7 @@ import com.bownee.lenswave.proton.ProtonAlbumsState
 import com.bownee.lenswave.proton.ProtonGalleryPhoto
 import com.bownee.lenswave.proton.ProtonGalleryState
 import com.bownee.lenswave.proton.ProtonPhotoGateway
+import com.bownee.lenswave.proton.ProtonMediaTag
 import com.bownee.lenswave.proton.ProtonTrashState
 import dagger.Binds
 import dagger.Module
@@ -59,6 +60,7 @@ interface ProtonGalleryReader {
     val trashState: StateFlow<ProtonTrashState>
 
     suspend fun syncTimelineMetadata(userId: UserId, forceRemote: Boolean = false)
+    suspend fun syncTagMetadata(userId: UserId, tag: ProtonMediaTag, forceRemote: Boolean = false)
     suspend fun syncAlbumsMetadata(userId: UserId, forceRemote: Boolean = false)
     suspend fun syncTrashMetadata(userId: UserId, forceRemote: Boolean = false)
     suspend fun loadCachedAlbum(userId: UserId, album: ProtonAlbumReference)

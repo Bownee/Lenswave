@@ -3,6 +3,7 @@ package com.bownee.lenswave.gallery
 import androidx.annotation.StringRes
 import com.bownee.lenswave.R
 import com.bownee.lenswave.proton.ProtonAlbumReference
+import com.bownee.lenswave.proton.ProtonMediaTag
 
 sealed interface GalleryDestination {
     val space: GallerySpace
@@ -18,6 +19,12 @@ sealed interface GalleryDestination {
     }
 
     data object ProtonTimeline : GalleryDestination {
+        override val space = GallerySpace.PROTON
+    }
+
+    data class ProtonTag(
+        val tag: ProtonMediaTag,
+    ) : GalleryDestination {
         override val space = GallerySpace.PROTON
     }
 

@@ -11,6 +11,9 @@ interface ProtonTimelineCache {
     fun readIndex(userId: String): List<ProtonGalleryPhoto>
     fun hasTimelineSnapshot(userId: String): Boolean
     fun writeIndex(userId: String, photos: List<ProtonGalleryPhoto>)
+    fun readTag(userId: String, tag: ProtonMediaTag): List<ProtonGalleryPhoto>
+    fun hasTagSnapshot(userId: String, tag: ProtonMediaTag): Boolean
+    fun writeTag(userId: String, tag: ProtonMediaTag, photos: List<ProtonGalleryPhoto>)
     fun thumbnailExists(userId: String, nodeUid: String): Boolean
     fun reconcilePhotos(
         userId: String,

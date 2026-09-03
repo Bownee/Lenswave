@@ -1,5 +1,6 @@
 package com.bownee.lenswave.proton
 
+import com.bownee.lenswave.gallery.MediaKind
 import me.proton.drive.sdk.entity.FileNode
 import me.proton.drive.sdk.entity.Node
 import me.proton.drive.sdk.entity.PhotoNode
@@ -10,7 +11,11 @@ internal fun Node.toProtonTrashPhoto(hasThumbnail: Boolean): ProtonTrashPhoto? {
         is FileNode -> mediaType
         else -> return null
     }
-    if (!mediaType.startsWith("image/", ignoreCase = true)) return null
+    val mediaKind = when {
+        mediaType.startsWith("image/", ignoreCase = true) -> MediaKind.IMAGE
+        mediaType.startsWith("video/", ignoreCase = true) -> MediaKind.VIDEO
+        else -> return null
+    }
 
     return ProtonTrashPhoto(
         nodeUid = uid.value,
@@ -21,5 +26,6 @@ internal fun Node.toProtonTrashPhoto(hasThumbnail: Boolean): ProtonTrashPhoto? {
             is PhotoNode -> captureTime.epochSecond
             else -> creationTime.epochSecond
         },
+        mediaKind = mediaKind,
     )
 }

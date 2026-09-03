@@ -57,6 +57,16 @@ internal class ProtonPhotoCache @Inject constructor(
         writePhotoIndex(userId, indexFile(userId), photos)
     }
 
+    override fun readTag(userId: String, tag: ProtonMediaTag): List<ProtonGalleryPhoto> =
+        readPhotoIndex(userId, tagIndexFile(userId, tag))
+
+    override fun hasTagSnapshot(userId: String, tag: ProtonMediaTag): Boolean =
+        hasValidArray(userId, tagIndexFile(userId, tag))
+
+    override fun writeTag(userId: String, tag: ProtonMediaTag, photos: List<ProtonGalleryPhoto>) {
+        writePhotoIndex(userId, tagIndexFile(userId, tag), photos)
+    }
+
     override fun readAlbums(userId: String): List<ProtonAlbum> {
         val index = albumsIndexFile(userId)
         if (!index.isFile) return emptyList()
@@ -137,6 +147,11 @@ internal class ProtonPhotoCache @Inject constructor(
                                 "captureTime",
                                 Long.MIN_VALUE,
                             ),
+                            mediaKind = runCatching {
+                                com.bownee.lenswave.gallery.MediaKind.valueOf(
+                                    value.optString("mediaKind", "IMAGE"),
+                                )
+                            }.getOrDefault(com.bownee.lenswave.gallery.MediaKind.IMAGE),
                         )
                     )
                 }
@@ -158,6 +173,7 @@ internal class ProtonPhotoCache @Inject constructor(
                     .put("trashedAt", photo.trashedAtEpochSeconds)
                     .put("displayName", photo.displayName)
                     .put("captureTime", photo.captureTimeEpochSeconds)
+                    .put("mediaKind", photo.mediaKind.name)
             )
         }
         writeAtomically(userId, trashIndexFile(userId), array.toString(), "Could not commit Proton Trash index")
@@ -307,6 +323,13 @@ internal class ProtonPhotoCache @Inject constructor(
         remoteNodeUids: Collection<String>,
     ): ProtonPhotoChanges {
         val changes = ProtonPhotoReconciliation.compare(cachedNodeUids, remoteNodeUids)
+        val remote = remoteNodeUids.toSet()
+        ProtonMediaTag.entries.forEach { tag ->
+            if (!hasTagSnapshot(userId, tag)) return@forEach
+            val tagged = readTag(userId, tag)
+            val retained = tagged.filter { it.nodeUid in remote }
+            if (retained.size != tagged.size) writeTag(userId, tag, retained)
+        }
         val retainedNodeUids = nonTimelineReferencedNodeUids(userId)
         changes.removedNodeUids.forEach { nodeUid ->
             if (nodeUid in retainedNodeUids) return@forEach
@@ -337,6 +360,11 @@ internal class ProtonPhotoCache @Inject constructor(
             decryptedOriginalFile(userId, nodeUid).delete()
         }
         writeIndex(userId, readIndex(userId).filterNot { it.nodeUid in removed })
+        ProtonMediaTag.entries.forEach { tag ->
+            if (hasTagSnapshot(userId, tag)) {
+                writeTag(userId, tag, readTag(userId, tag).filterNot { it.nodeUid in removed })
+            }
+        }
         val albumCounts = mutableMapOf<String, Long>()
         albumPhotosDirectory(userId).listFiles()
             ?.filter { it.extension == "json" }
@@ -386,6 +414,9 @@ internal class ProtonPhotoCache @Inject constructor(
     private fun decryptedDirectory(userId: String): File = File(decrypted, safeName(userId))
 
     private fun indexFile(userId: String): File = File(userDirectory(userId), "index.json")
+
+    private fun tagIndexFile(userId: String, tag: ProtonMediaTag): File =
+        File(File(userDirectory(userId), "tags"), "${tag.name.lowercase()}.json")
 
     private fun albumsIndexFile(userId: String): File = File(userDirectory(userId), "albums.json")
 

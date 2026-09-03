@@ -59,6 +59,7 @@ import com.bownee.lenswave.gallery.PhotoSource
 import com.bownee.lenswave.gallery.ThumbnailNotificationPermissionPolicy
 import com.bownee.lenswave.proton.ProtonAlbum
 import com.bownee.lenswave.proton.ProtonPhotoGateway
+import com.bownee.lenswave.proton.ProtonMediaTag
 import com.bownee.lenswave.gallery.PhotoDeletionExecutor
 import com.bownee.lenswave.proton.ProtonPresentationInitializer
 import com.bownee.lenswave.update.AppUpdateChecker
@@ -138,10 +139,11 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
     private val viewerLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        if (result.resultCode != Activity.RESULT_OK ||
-            result.data?.getBooleanExtra(PhotoViewerActivity.EXTRA_PHOTO_DELETED, false) != true
-        ) return@registerForActivityResult
-        viewModel.refreshAfterMutation()
+        if (result.resultCode != Activity.RESULT_OK) return@registerForActivityResult
+        val data = result.data ?: return@registerForActivityResult
+        if (data.getBooleanExtra(PhotoViewerActivity.EXTRA_PHOTO_DELETED, false)) {
+            viewModel.refreshAfterMutation()
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -229,7 +231,13 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
                 onDeleteAllTrash = ::confirmDeleteAllTrashPhotos,
                 onProtonSource = {
                     hideDevicePicker()
-                    selectDestination(GalleryDestination.ProtonTimeline)
+                    if (currentUiState.destination is GalleryDestination.ProtonTimeline ||
+                        currentUiState.destination is GalleryDestination.ProtonTag
+                    ) {
+                        showProtonTagMenu()
+                    } else {
+                        selectDestination(GalleryDestination.ProtonTimeline)
+                    }
                 },
                 onAlbumsSource = {
                     hideDevicePicker()
@@ -431,6 +439,10 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
             this,
             Manifest.permission.READ_MEDIA_IMAGES,
         ) == PackageManager.PERMISSION_GRANTED,
+        readMediaVideosGranted = ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.READ_MEDIA_VIDEO,
+        ) == PackageManager.PERMISSION_GRANTED,
         selectedPhotosGranted = ContextCompat.checkSelfPermission(
             this,
             Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED,
@@ -610,6 +622,10 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
         deviceSourceButton.text = getString(R.string.source_dropdown_label, collectionLabel)
         deviceSourceButton.contentDescription = getString(R.string.choose_device_collection, collectionLabel)
         protonSourceButton.visibility = if (space == GallerySpace.PROTON) View.VISIBLE else View.GONE
+        val selectedTag = (destination as? GalleryDestination.ProtonTag)?.tag
+        val protonLabel = getString(selectedTag?.labelRes ?: R.string.photos)
+        protonSourceButton.text = getString(R.string.source_dropdown_label, protonLabel)
+        protonSourceButton.contentDescription = getString(R.string.choose_proton_filter, protonLabel)
         albumsSourceButton.visibility = if (space == GallerySpace.PROTON) View.VISIBLE else View.GONE
         val deviceTrashAvailable = space == GallerySpace.DEVICE && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
         trashSourceButton.visibility = if (space == GallerySpace.PROTON || deviceTrashAvailable) {
@@ -618,7 +634,10 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
             View.GONE
         }
         deviceSourceButton.visibility = if (space == GallerySpace.DEVICE) View.VISIBLE else View.GONE
-        styleSourceButton(protonSourceButton, destination == GalleryDestination.ProtonTimeline)
+        styleSourceButton(
+            protonSourceButton,
+            destination == GalleryDestination.ProtonTimeline || destination is GalleryDestination.ProtonTag,
+        )
         styleSourceButton(
             albumsSourceButton,
             destination == GalleryDestination.ProtonAlbums ||
@@ -647,6 +666,40 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
             }
         }
         updateNavigationVisibility(adapter.selectedPhotos().isNotEmpty())
+    }
+
+    private fun showProtonTagMenu() {
+        PopupMenu(this, protonSourceButton).apply {
+            val currentTag = (currentUiState.destination as? GalleryDestination.ProtonTag)?.tag
+            val allTitle = getString(R.string.proton_filter_all)
+            menu.add(
+                android.view.Menu.NONE,
+                PROTON_FILTER_ALL,
+                0,
+                if (currentTag == null) getString(R.string.selected_item, allTitle) else allTitle,
+            )
+            ProtonMediaTag.entries.forEachIndexed { index, tag ->
+                val label = getString(tag.labelRes)
+                menu.add(
+                    android.view.Menu.NONE,
+                    PROTON_FILTER_FIRST + index,
+                    index + 1,
+                    if (tag == currentTag) getString(R.string.selected_item, label) else label,
+                )
+            }
+            setOnMenuItemClickListener { item ->
+                val nextDestination = if (item.itemId == PROTON_FILTER_ALL) {
+                    GalleryDestination.ProtonTimeline
+                } else {
+                    val tag = ProtonMediaTag.entries.getOrNull(item.itemId - PROTON_FILTER_FIRST)
+                        ?: return@setOnMenuItemClickListener false
+                    GalleryDestination.ProtonTag(tag)
+                }
+                selectDestination(nextDestination)
+                true
+            }
+            show()
+        }
     }
 
     private fun showSpaceMenu() {
@@ -863,5 +916,7 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
         const val SPACE_COMBINED = 10
         const val SPACE_PROTON = 11
         const val SPACE_DEVICE = 12
+        const val PROTON_FILTER_ALL = 100
+        const val PROTON_FILTER_FIRST = 101
     }
 }

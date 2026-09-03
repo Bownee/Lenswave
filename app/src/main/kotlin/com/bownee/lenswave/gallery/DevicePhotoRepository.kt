@@ -29,32 +29,37 @@ class DevicePhotoRepository @Inject constructor(
     }
 
     private suspend fun loadPhotos(trashed: Boolean): List<GalleryAsset> = withContext(dispatchers.io) {
-        val collection = MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
+        val collection = MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL)
         val projection = buildList {
-            add(MediaStore.Images.Media._ID)
-            add(MediaStore.Images.Media.DISPLAY_NAME)
-            add(MediaStore.Images.Media.DATE_TAKEN)
-            add(MediaStore.Images.Media.DATE_ADDED)
-            add(MediaStore.Images.Media.DATE_MODIFIED)
-            add(MediaStore.Images.Media.SIZE)
-            add(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
-            add(MediaStore.Images.Media.RELATIVE_PATH)
-            add(MediaStore.Images.Media.OWNER_PACKAGE_NAME)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) add(MediaStore.Images.Media.IS_DOWNLOAD)
+            add(MediaStore.Files.FileColumns._ID)
+            add(MediaStore.Files.FileColumns.DISPLAY_NAME)
+            add(MediaStore.Images.ImageColumns.DATE_TAKEN)
+            add(MediaStore.Files.FileColumns.DATE_ADDED)
+            add(MediaStore.Files.FileColumns.DATE_MODIFIED)
+            add(MediaStore.Files.FileColumns.SIZE)
+            add(MediaStore.Files.FileColumns.BUCKET_DISPLAY_NAME)
+            add(MediaStore.Files.FileColumns.RELATIVE_PATH)
+            add(MediaStore.Files.FileColumns.OWNER_PACKAGE_NAME)
+            add(MediaStore.Files.FileColumns.MEDIA_TYPE)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) add(MediaStore.Downloads.IS_DOWNLOAD)
         }.toTypedArray()
-        val selection = "${MediaStore.Images.Media.IS_PENDING} = 0"
-        val sortOrder = "${MediaStore.Images.Media.DATE_TAKEN} DESC, ${MediaStore.Images.Media.DATE_ADDED} DESC"
+        val selection = "${MediaStore.Files.FileColumns.IS_PENDING} = 0 AND " +
+            "${MediaStore.Files.FileColumns.MEDIA_TYPE} IN " +
+            "(${MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE}, ${MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO})"
+        val sortOrder = "${MediaStore.Images.ImageColumns.DATE_TAKEN} DESC, " +
+            "${MediaStore.Files.FileColumns.DATE_ADDED} DESC"
         queryPhotos(collection, projection, selection, sortOrder, trashed)?.use { cursor ->
-            val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
-            val nameColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
-            val takenColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_TAKEN)
-            val addedColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_ADDED)
-            val modifiedColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_MODIFIED)
-            val sizeColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.SIZE)
-            val bucketColumn = cursor.getColumnIndex(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
-            val pathColumn = cursor.getColumnIndex(MediaStore.Images.Media.RELATIVE_PATH)
-            val ownerColumn = cursor.getColumnIndex(MediaStore.Images.Media.OWNER_PACKAGE_NAME)
-            val downloadColumn = cursor.getColumnIndex(MediaStore.Images.Media.IS_DOWNLOAD)
+            val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns._ID)
+            val nameColumn = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.DISPLAY_NAME)
+            val takenColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.ImageColumns.DATE_TAKEN)
+            val addedColumn = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.DATE_ADDED)
+            val modifiedColumn = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.DATE_MODIFIED)
+            val sizeColumn = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.SIZE)
+            val bucketColumn = cursor.getColumnIndex(MediaStore.Files.FileColumns.BUCKET_DISPLAY_NAME)
+            val pathColumn = cursor.getColumnIndex(MediaStore.Files.FileColumns.RELATIVE_PATH)
+            val ownerColumn = cursor.getColumnIndex(MediaStore.Files.FileColumns.OWNER_PACKAGE_NAME)
+            val mediaTypeColumn = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.MEDIA_TYPE)
+            val downloadColumn = cursor.getColumnIndex(MediaStore.Downloads.IS_DOWNLOAD)
             buildList {
                 while (cursor.moveToNext()) {
                     val id = cursor.getLong(idColumn)
@@ -75,6 +80,13 @@ class DevicePhotoRepository @Inject constructor(
                             collection = section,
                             sizeBytes = cursor.getLong(sizeColumn),
                             modifiedAtEpochMillis = cursor.getLong(modifiedColumn) * 1_000L,
+                            mediaKind = if (
+                                cursor.getInt(mediaTypeColumn) == MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO
+                            ) {
+                                MediaKind.VIDEO
+                            } else {
+                                MediaKind.IMAGE
+                            },
                             isTrashed = trashed,
                         )
                     )

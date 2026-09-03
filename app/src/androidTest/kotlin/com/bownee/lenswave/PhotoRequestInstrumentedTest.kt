@@ -2,6 +2,7 @@ package com.bownee.lenswave
 
 import android.content.Intent
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.bownee.lenswave.gallery.MediaKind
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Test
@@ -35,5 +36,26 @@ class PhotoRequestInstrumentedTest {
         assertEquals(proton, PhotoRequest.from(protonIntent))
         assertFalse(protonIntent.hasExtra(PhotoViewerActivity.EXTRA_URI))
         assertFalse(protonIntent.hasExtra(PhotoViewerActivity.EXTRA_PROTON_BACKING_NODE_UIDS))
+    }
+
+    @Test fun videoAndFavoriteStateSurviveIntentAndNavigationSerialization() {
+        val request = PhotoRequest.Proton(
+            stableId = "proton:video",
+            protonNodeUid = "volume~video",
+            userId = "user",
+            capturedAt = 56L,
+            displayName = "clip.mp4",
+            isTrashed = false,
+            mediaKind = MediaKind.VIDEO,
+            isFavorite = true,
+        )
+
+        assertEquals(request, PhotoRequest.from(request.writeTo(Intent())))
+        assertEquals(request, PhotoRequest.navigationFrom(Intent().apply {
+            putParcelableArrayListExtra(
+                PhotoViewerActivity.EXTRA_NAVIGATION,
+                arrayListOf(request.toBundle()),
+            )
+        }).single())
     }
 }

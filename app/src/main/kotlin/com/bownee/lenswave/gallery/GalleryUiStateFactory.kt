@@ -4,6 +4,9 @@ import com.bownee.lenswave.R
 import com.bownee.lenswave.proton.ProtonAlbumPhotosState
 import com.bownee.lenswave.proton.ProtonAlbumsState
 import com.bownee.lenswave.proton.ProtonGalleryState
+import com.bownee.lenswave.proton.ProtonGalleryPhoto
+import com.bownee.lenswave.proton.ProtonMediaTag
+import com.bownee.lenswave.proton.ProtonTagState
 import com.bownee.lenswave.proton.ProtonTrashState
 import me.proton.core.domain.entity.UserId
 
@@ -50,6 +53,7 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
         GalleryDestination.Combined -> combined(inputs)
         is GalleryDestination.Device -> device(inputs, destination)
         GalleryDestination.ProtonTimeline -> protonTimeline(inputs)
+        is GalleryDestination.ProtonTag -> protonTag(inputs, destination)
         GalleryDestination.ProtonAlbums -> protonAlbums(inputs)
         is GalleryDestination.ProtonAlbumPhotos -> protonAlbum(inputs, destination)
         is GalleryDestination.Trash -> trash(inputs, destination)
@@ -61,7 +65,8 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
             emptyState = deviceAccessEmptyState(),
         )
         val protonAssets = if (inputs.protonAccountStatus == ProtonAccountStatus.CONNECTED) {
-            inputs.protonGallery.photos.map { it.toGalleryAsset() }
+            val tagIndex = inputs.protonGallery.tagIndex()
+            inputs.protonGallery.photos.map { it.toGalleryAsset(tagIndex) }
         } else {
             emptyList()
         }
@@ -163,7 +168,8 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
 
     private fun protonTimeline(inputs: GalleryUiInputs): GalleryUiState {
         protonUnavailable(inputs)?.let { return it }
-        val assets = inputs.protonGallery.photos.map { it.toGalleryAsset() }
+        val tagIndex = inputs.protonGallery.tagIndex()
+        val assets = inputs.protonGallery.photos.map { it.toGalleryAsset(tagIndex) }
         val statusDetail = when {
             inputs.shouldShowMetadataLoading(
                 inputs.protonGallery.syncing,
@@ -188,6 +194,42 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
             )
         }
         return base(inputs, GalleryContent.Photos(assets), status, emptyState)
+    }
+
+    private fun protonTag(
+        inputs: GalleryUiInputs,
+        destination: GalleryDestination.ProtonTag,
+    ): GalleryUiState {
+        protonUnavailable(inputs)?.let { return it }
+        val state = inputs.protonGallery.tags[destination.tag] ?: ProtonTagState()
+        val tagIndex = inputs.protonGallery.tagIndex()
+        val assets = state.photos.map { it.toGalleryAsset(tagIndex) }
+        val statusDetail = when {
+            state.syncing || !state.hasLoaded -> text.string(R.string.loading_metadata)
+            state.errorMessage != null -> text.string(R.string.could_not_refresh)
+            else -> protonLoadingDetail(
+                ProtonThumbnailProgressCalculator.timeline(state.photos),
+            ) ?: photoCountStatus(assets.size)
+        }
+        val label = text.string(destination.tag.labelRes)
+        val emptyState = when {
+            assets.isNotEmpty() -> null
+            state.errorMessage != null -> GalleryEmptyState(
+                text.string(R.string.could_not_load_proton_filter, label),
+                text.string(R.string.check_connection_refresh),
+            )
+            !state.hasLoaded -> null
+            else -> GalleryEmptyState(
+                text.string(R.string.no_media_in_filter, label),
+                text.string(R.string.proton_filtered_media_appear_here),
+            )
+        }
+        return base(
+            inputs,
+            GalleryContent.Photos(assets),
+            status(label, statusDetail),
+            emptyState,
+        )
     }
 
     private fun protonAlbums(inputs: GalleryUiInputs): GalleryUiState {
@@ -225,7 +267,8 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
         protonUnavailable(inputs)?.let { return it }
         val albumState = inputs.protonAlbumPhotos.takeIf { it.albumUid == destination.album.nodeUid }
             ?: ProtonAlbumPhotosState()
-        val assets = albumState.photos.map { it.toGalleryAsset() }
+        val tagIndex = inputs.protonGallery.tagIndex()
+        val assets = albumState.photos.map { it.toGalleryAsset(tagIndex) }
         val statusDetail = when {
             inputs.shouldShowMetadataLoading(albumState.syncing, albumState.hasLoaded) ->
                 text.string(R.string.loading_metadata)
@@ -297,7 +340,9 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
     private fun protonTrash(inputs: GalleryUiInputs): GalleryUiState {
         protonUnavailable(inputs, area = R.string.trash)?.let { return it }
         val state = inputs.protonTrash
-        val assets = ProtonTrashGallery.createPhotos(state.photos)
+        val videoNodeUids = inputs.protonGallery.tagNodeUids(ProtonMediaTag.VIDEOS)
+        val favoriteNodeUids = inputs.protonGallery.tagNodeUids(ProtonMediaTag.FAVORITES)
+        val assets = ProtonTrashGallery.createPhotos(state.photos, videoNodeUids, favoriteNodeUids)
         val statusDetail = when {
             inputs.shouldShowMetadataLoading(state.syncing, state.hasLoaded) ->
                 text.string(R.string.loading_metadata)
@@ -402,4 +447,21 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
 
     private fun status(label: String, detail: String): String =
         text.string(R.string.status_with_detail, label, detail)
+
+    private fun ProtonGalleryPhoto.toGalleryAsset(tagIndex: Map<String, Set<ProtonMediaTag>>): GalleryAsset {
+        val tags = tagIndex[nodeUid].orEmpty()
+        return toGalleryAsset(
+            mediaKind = if (ProtonMediaTag.VIDEOS in tags) MediaKind.VIDEO else MediaKind.IMAGE,
+            tags = tags,
+        )
+    }
+
+    private fun ProtonGalleryState.tagNodeUids(tag: ProtonMediaTag): Set<String> =
+        tags[tag]?.photos.orEmpty().mapTo(mutableSetOf(), ProtonGalleryPhoto::nodeUid)
+
+    private fun ProtonGalleryState.tagIndex(): Map<String, Set<ProtonMediaTag>> = buildMap {
+        tags.forEach { (tag, state) ->
+            state.photos.forEach { photo -> put(photo.nodeUid, get(photo.nodeUid).orEmpty() + tag) }
+        }
+    }
 }

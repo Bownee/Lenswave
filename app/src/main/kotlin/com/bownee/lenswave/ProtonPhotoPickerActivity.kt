@@ -37,6 +37,7 @@ import com.bownee.lenswave.proton.ProtonThumbnailScheduler
 import com.bownee.lenswave.proton.ProtonAccountSessionManager
 import com.bownee.lenswave.proton.ProtonAccountSessionState
 import com.bownee.lenswave.proton.ProtonPhotoGateway
+import com.bownee.lenswave.proton.ProtonMediaTag
 import com.bownee.lenswave.proton.ProtonPresentationInitializer
 import javax.inject.Inject
 import java.text.DateFormat
@@ -183,27 +184,41 @@ class ProtonPhotoPickerActivity : FragmentActivity() {
 
     private fun showGalleryState(state: ProtonGalleryState) {
         if (state.userId != currentUserId?.id) return
-        adapter.photos = state.photos
+        val videoState = state.tags[ProtonMediaTag.VIDEOS]
+        val videoNodeUids = videoState?.photos.orEmpty()
+            .mapTo(mutableSetOf(), ProtonGalleryPhoto::nodeUid)
+        adapter.photos = if (videoState?.hasLoaded == true) {
+            state.photos.filterNot { it.nodeUid in videoNodeUids }
+        } else {
+            emptyList()
+        }
         progress.visibility = if (openingPhoto) View.VISIBLE else View.GONE
-        val thumbnailProgress = ProtonThumbnailProgressCalculator.timeline(state.photos)
+        val thumbnailProgress = ProtonThumbnailProgressCalculator.timeline(adapter.photos)
         status.text = when {
             openingPhoto -> getString(R.string.downloading_full_resolution)
-            state.syncing -> getString(R.string.loading_metadata)
             state.errorMessage != null -> getString(R.string.could_not_refresh_detail, state.errorMessage)
+            videoState?.errorMessage != null -> getString(
+                R.string.could_not_refresh_detail,
+                videoState.errorMessage,
+            )
+            state.syncing || videoState?.syncing == true || videoState?.hasLoaded != true ->
+                getString(R.string.loading_metadata)
             thumbnailProgress.downloaded < thumbnailProgress.total -> getString(
                 R.string.downloading_thumbnails_progress,
                 thumbnailProgress.downloaded,
                 thumbnailProgress.total,
             )
-            state.photos.isEmpty() && state.hasLoaded -> getString(R.string.no_photos_found)
-            state.photos.isNotEmpty() -> resources.getQuantityString(
+            adapter.photos.isEmpty() && state.hasLoaded -> getString(R.string.no_photos_found)
+            adapter.photos.isNotEmpty() -> resources.getQuantityString(
                 R.plurals.photos_tap_to_edit,
-                state.photos.size,
-                state.photos.size,
+                adapter.photos.size,
+                adapter.photos.size,
             )
             else -> getString(R.string.loading_metadata)
         }
-        retryButton.visibility = if (state.errorMessage != null && currentUserId != null) {
+        retryButton.visibility = if (
+            (state.errorMessage != null || videoState?.errorMessage != null) && currentUserId != null
+        ) {
             View.VISIBLE
         } else {
             View.GONE

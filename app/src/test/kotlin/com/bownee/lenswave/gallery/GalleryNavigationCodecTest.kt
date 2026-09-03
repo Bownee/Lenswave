@@ -1,6 +1,7 @@
 package com.bownee.lenswave.gallery
 
 import com.bownee.lenswave.proton.ProtonAlbumReference
+import com.bownee.lenswave.proton.ProtonMediaTag
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -12,6 +13,7 @@ class GalleryNavigationCodecTest {
             GalleryDestination.Combined,
             GalleryDestination.Device(DeviceCollection.SCREENSHOTS),
             GalleryDestination.ProtonTimeline,
+            GalleryDestination.ProtonTag(ProtonMediaTag.FAVORITES),
             GalleryDestination.ProtonAlbums,
             GalleryDestination.ProtonAlbumPhotos(ProtonAlbumReference("album-id", "Favorites")),
             GalleryDestination.Trash(PhotoSource.DEVICE),

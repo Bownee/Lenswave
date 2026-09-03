@@ -182,6 +182,36 @@ class ProtonPhotoCacheInstrumentedTest {
         }
     }
 
+    @Test fun tagIndexesAreEncryptedPersistedAndReconciledWithTheTimeline() {
+        val context = isolatedContext()
+        val userId = "tags-${UUID.randomUUID()}"
+        val cache = createCache(
+            context,
+            SecureFileStore(),
+            FakeClock(System.currentTimeMillis()),
+        )
+        val retained = ProtonGalleryPhoto("volume~retained", 200L, false)
+        val removed = ProtonGalleryPhoto("volume~removed", 100L, false)
+        try {
+            cache.writeIndex(userId, listOf(retained, removed))
+            cache.writeTag(userId, ProtonMediaTag.VIDEOS, listOf(retained, removed))
+
+            assertTrue(cache.hasTagSnapshot(userId, ProtonMediaTag.VIDEOS))
+            assertEquals(listOf(retained, removed), cache.readTag(userId, ProtonMediaTag.VIDEOS))
+
+            cache.reconcilePhotos(
+                userId,
+                cachedNodeUids = listOf(retained.nodeUid, removed.nodeUid),
+                remoteNodeUids = listOf(retained.nodeUid),
+            )
+
+            assertEquals(listOf(retained), cache.readTag(userId, ProtonMediaTag.VIDEOS))
+        } finally {
+            cache.clearUser(userId)
+            context.testRoot.deleteRecursively()
+        }
+    }
+
     private fun validThumbnail(): ByteArray = ByteArrayOutputStream().use { output ->
         val bitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
         try {

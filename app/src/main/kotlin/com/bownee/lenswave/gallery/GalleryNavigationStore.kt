@@ -3,6 +3,7 @@ package com.bownee.lenswave.gallery
 import android.content.Context
 import androidx.core.content.edit
 import com.bownee.lenswave.proton.ProtonAlbumReference
+import com.bownee.lenswave.proton.ProtonMediaTag
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -18,6 +19,7 @@ internal data class StoredGalleryNavigation(
     val trashSource: String? = null,
     val albumUid: String? = null,
     val albumName: String? = null,
+    val protonTag: String? = null,
 )
 
 internal object GalleryNavigationCodec {
@@ -26,6 +28,7 @@ internal object GalleryNavigationCodec {
             GalleryDestination.Combined -> DESTINATION_COMBINED
             is GalleryDestination.Device -> DESTINATION_DEVICE
             GalleryDestination.ProtonTimeline -> DESTINATION_PROTON_TIMELINE
+            is GalleryDestination.ProtonTag -> DESTINATION_PROTON_TAG
             GalleryDestination.ProtonAlbums -> DESTINATION_PROTON_ALBUMS
             is GalleryDestination.ProtonAlbumPhotos -> DESTINATION_PROTON_ALBUM
             is GalleryDestination.Trash -> DESTINATION_TRASH
@@ -34,6 +37,7 @@ internal object GalleryNavigationCodec {
         trashSource = (state.destination as? GalleryDestination.Trash)?.source?.name,
         albumUid = (state.destination as? GalleryDestination.ProtonAlbumPhotos)?.album?.nodeUid,
         albumName = (state.destination as? GalleryDestination.ProtonAlbumPhotos)?.album?.name,
+        protonTag = (state.destination as? GalleryDestination.ProtonTag)?.tag?.name,
     )
 
     fun decode(stored: StoredGalleryNavigation): GalleryNavigationState? {
@@ -44,6 +48,10 @@ internal object GalleryNavigationCodec {
             DESTINATION_COMBINED -> GalleryDestination.Combined
             DESTINATION_DEVICE -> GalleryDestination.Device(collection)
             DESTINATION_PROTON_TIMELINE -> GalleryDestination.ProtonTimeline
+            DESTINATION_PROTON_TAG -> stored.protonTag
+                ?.let { runCatching { ProtonMediaTag.valueOf(it) }.getOrNull() }
+                ?.let(GalleryDestination::ProtonTag)
+                ?: GalleryDestination.ProtonTimeline
             DESTINATION_PROTON_ALBUMS -> GalleryDestination.ProtonAlbums
             DESTINATION_PROTON_ALBUM -> stored.albumUid?.let { uid ->
                 GalleryDestination.ProtonAlbumPhotos(
@@ -65,6 +73,7 @@ internal object GalleryNavigationCodec {
     private const val DESTINATION_COMBINED = "combined"
     private const val DESTINATION_DEVICE = "device"
     private const val DESTINATION_PROTON_TIMELINE = "proton-timeline"
+    private const val DESTINATION_PROTON_TAG = "proton-tag"
     private const val DESTINATION_PROTON_ALBUMS = "proton-albums"
     private const val DESTINATION_PROTON_ALBUM = "proton-album"
     private const val DESTINATION_TRASH = "trash"
@@ -88,6 +97,7 @@ internal class SharedPreferencesGalleryNavigationStore @Inject constructor(
             trashSource = preferences.getString(KEY_TRASH_SOURCE, null),
             albumUid = preferences.getString(KEY_ALBUM_UID, null),
             albumName = preferences.getString(KEY_ALBUM_NAME, null),
+            protonTag = preferences.getString(KEY_PROTON_TAG, null),
         ),
     )
 
@@ -99,6 +109,7 @@ internal class SharedPreferencesGalleryNavigationStore @Inject constructor(
             putString(KEY_TRASH_SOURCE, stored.trashSource)
             putString(KEY_ALBUM_UID, stored.albumUid)
             putString(KEY_ALBUM_NAME, stored.albumName)
+            putString(KEY_PROTON_TAG, stored.protonTag)
         }
     }
 
@@ -109,5 +120,6 @@ internal class SharedPreferencesGalleryNavigationStore @Inject constructor(
         const val KEY_TRASH_SOURCE = "trash-source"
         const val KEY_ALBUM_UID = "album-uid"
         const val KEY_ALBUM_NAME = "album-name"
+        const val KEY_PROTON_TAG = "proton-tag"
     }
 }

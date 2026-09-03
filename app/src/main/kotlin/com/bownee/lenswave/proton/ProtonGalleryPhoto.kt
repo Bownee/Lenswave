@@ -6,6 +6,18 @@ data class ProtonGalleryPhoto(
     val hasThumbnail: Boolean,
 )
 
+data class ProtonTagState(
+    val photos: List<ProtonGalleryPhoto> = emptyList(),
+    val hasLoaded: Boolean = false,
+    val syncing: Boolean = false,
+    val errorMessage: String? = null,
+)
+
+data class ProtonFavoriteResult(
+    val updatedCount: Int = 0,
+    val failedCount: Int = 0,
+)
+
 enum class ProtonThumbnailWorkIssue {
     TIMEOUT,
     INCOMPLETE,
@@ -43,4 +55,5 @@ data class ProtonGalleryState(
     val downloadedThumbnailCount: Int = 0,
     val errorMessage: String? = null,
     val thumbnailWorkStatus: ProtonThumbnailWorkStatus? = null,
+    val tags: Map<ProtonMediaTag, ProtonTagState> = emptyMap(),
 )

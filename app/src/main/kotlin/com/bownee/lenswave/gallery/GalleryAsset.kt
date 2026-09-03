@@ -8,6 +8,11 @@ enum class PhotoSource {
     PROTON,
 }
 
+enum class MediaKind {
+    IMAGE,
+    VIDEO,
+}
+
 enum class DeviceCollection(@param:StringRes val labelRes: Int) {
     ALL(R.string.collection_all),
     CAMERA(R.string.collection_camera),
@@ -19,6 +24,7 @@ enum class DeviceCollection(@param:StringRes val labelRes: Int) {
 
 sealed interface PhotoReplica {
     val source: PhotoSource
+    val mediaKind: MediaKind
     val isTrashed: Boolean
 
     data class Device(
@@ -26,6 +32,7 @@ sealed interface PhotoReplica {
         val collection: DeviceCollection,
         val sizeBytes: Long,
         val modifiedAtEpochMillis: Long,
+        override val mediaKind: MediaKind = MediaKind.IMAGE,
         override val isTrashed: Boolean = false,
     ) : PhotoReplica {
         override val source = PhotoSource.DEVICE
@@ -34,6 +41,8 @@ sealed interface PhotoReplica {
     data class Proton(
         val nodeUid: String,
         val hasThumbnail: Boolean,
+        override val mediaKind: MediaKind = MediaKind.IMAGE,
+        val tags: Set<com.bownee.lenswave.proton.ProtonMediaTag> = emptySet(),
         override val isTrashed: Boolean = false,
     ) : PhotoReplica {
         override val source = PhotoSource.PROTON
@@ -61,6 +70,9 @@ data class GalleryAsset(
 
     val source: PhotoSource
         get() = primaryReplica.source
+
+    val mediaKind: MediaKind
+        get() = primaryReplica.mediaKind
 
     val deviceReplica: PhotoReplica.Device?
         get() = replicas.filterIsInstance<PhotoReplica.Device>().firstOrNull()
@@ -101,6 +113,9 @@ data class GalleryAsset(
     val isStoredInProton: Boolean
         get() = protonReplicas.isNotEmpty()
 
+    val isFavorite: Boolean
+        get() = protonReplicas.any { com.bownee.lenswave.proton.ProtonMediaTag.FAVORITES in it.tags }
+
     fun withReplicas(additionalReplicas: Iterable<PhotoReplica>): GalleryAsset {
         val mergedReplicas = (replicas + additionalReplicas).distinctBy { replica ->
             when (replica) {
@@ -120,6 +135,7 @@ data class GalleryAsset(
             collection: DeviceCollection,
             sizeBytes: Long,
             modifiedAtEpochMillis: Long,
+            mediaKind: MediaKind = MediaKind.IMAGE,
             isTrashed: Boolean = false,
         ): GalleryAsset {
             val replica = PhotoReplica.Device(
@@ -127,6 +143,7 @@ data class GalleryAsset(
                 collection = collection,
                 sizeBytes = sizeBytes,
                 modifiedAtEpochMillis = modifiedAtEpochMillis,
+                mediaKind = mediaKind,
                 isTrashed = isTrashed,
             )
             return GalleryAsset(
@@ -143,11 +160,15 @@ data class GalleryAsset(
             displayName: String = "",
             nodeUid: String,
             hasThumbnail: Boolean,
+            mediaKind: MediaKind = MediaKind.IMAGE,
+            tags: Set<com.bownee.lenswave.proton.ProtonMediaTag> = emptySet(),
             isTrashed: Boolean = false,
         ): GalleryAsset {
             val replica = PhotoReplica.Proton(
                 nodeUid = nodeUid,
                 hasThumbnail = hasThumbnail,
+                mediaKind = mediaKind,
+                tags = tags,
                 isTrashed = isTrashed,
             )
             return GalleryAsset(

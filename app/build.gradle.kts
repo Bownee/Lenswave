@@ -165,6 +165,8 @@ dependencies {
     implementation("androidx.exifinterface:exifinterface:1.4.1")
     implementation("androidx.fragment:fragment:1.9.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.10.0")
+    implementation("androidx.media3:media3-exoplayer:1.11.0")
+    implementation("androidx.media3:media3-ui:1.11.0")
     implementation("androidx.work:work-runtime-ktx:2.10.0")
     implementation("androidx.room:room-runtime:2.7.2")
     implementation("net.zetetic:sqlcipher-android:4.6.1")

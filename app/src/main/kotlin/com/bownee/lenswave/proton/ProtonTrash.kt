@@ -1,11 +1,14 @@
 package com.bownee.lenswave.proton
 
+import com.bownee.lenswave.gallery.MediaKind
+
 data class ProtonTrashPhoto(
     val nodeUid: String,
     val trashedAtEpochSeconds: Long,
     val hasThumbnail: Boolean,
     val displayName: String = "",
     val captureTimeEpochSeconds: Long = trashedAtEpochSeconds,
+    val mediaKind: MediaKind = MediaKind.IMAGE,
 )
 
 data class ProtonTrashState(

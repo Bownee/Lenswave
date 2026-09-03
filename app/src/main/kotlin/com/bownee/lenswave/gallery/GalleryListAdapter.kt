@@ -136,6 +136,7 @@ class GalleryListAdapter(
                 image.setImageDrawable(null)
                 cell.loading.visibility = View.GONE
                 cell.protonBadge.visibility = View.GONE
+                cell.videoBadge.visibility = View.GONE
                 cell.setOnClickListener(null)
                 cell.setOnLongClickListener(null)
                 continue
@@ -154,6 +155,7 @@ class GalleryListAdapter(
             }
             image.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             cell.protonBadge.visibility = if (showProtonBadge) View.VISIBLE else View.GONE
+            cell.videoBadge.visibility = if (photo.mediaKind == MediaKind.VIDEO) View.VISIBLE else View.GONE
             cell.setOnClickListener {
                 if (selected.isEmpty()) onPhotoClicked(photo) else toggleSelection(photo)
             }
@@ -313,6 +315,15 @@ class GalleryListAdapter(
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             visibility = View.GONE
         }
+        val videoBadge = TextView(context).apply {
+            text = "▶"
+            textSize = 13f
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            background = UiStyle.rounded(context, Color.argb(180, 12, 14, 19), 14)
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            visibility = View.GONE
+        }
 
         init {
             addView(image, LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
@@ -325,6 +336,7 @@ class GalleryListAdapter(
                 bottomMargin = context.dp(7)
                 marginEnd = context.dp(7)
             })
+            addView(videoBadge, LayoutParams(context.dp(28), context.dp(28), Gravity.CENTER))
         }
     }
 

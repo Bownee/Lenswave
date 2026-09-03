@@ -7,6 +7,8 @@ import com.bownee.lenswave.proton.ProtonAlbumReference
 import com.bownee.lenswave.proton.ProtonAlbumsState
 import com.bownee.lenswave.proton.ProtonGalleryPhoto
 import com.bownee.lenswave.proton.ProtonGalleryState
+import com.bownee.lenswave.proton.ProtonMediaTag
+import com.bownee.lenswave.proton.ProtonTagState
 import com.bownee.lenswave.proton.ProtonThumbnailWorkIssue
 import com.bownee.lenswave.proton.ProtonThumbnailWorkStatus
 import com.bownee.lenswave.proton.ProtonTrashState
@@ -527,6 +529,29 @@ class GalleryUiStateFactoryTest {
 
         assertFalse(state.isRefreshing)
         assertNotNull(state.emptyState)
+    }
+
+    @Test
+    fun `Proton tag filter returns matching media with video and favorite state`() {
+        val video = ProtonGalleryPhoto("volume~video", 42, hasThumbnail = true)
+        val state = factory.create(
+            GalleryUiInputs(
+                destination = GalleryDestination.ProtonTag(ProtonMediaTag.VIDEOS),
+                protonAccountStatus = ProtonAccountStatus.CONNECTED,
+                protonGallery = ProtonGalleryState(
+                    photos = listOf(video, ProtonGalleryPhoto("volume~image", 41, true)),
+                    hasLoaded = true,
+                    tags = mapOf(
+                        ProtonMediaTag.VIDEOS to ProtonTagState(listOf(video), hasLoaded = true),
+                        ProtonMediaTag.FAVORITES to ProtonTagState(listOf(video), hasLoaded = true),
+                    ),
+                ),
+            ),
+        )
+
+        val asset = state.visibleAssets.single()
+        assertEquals(MediaKind.VIDEO, asset.mediaKind)
+        assertTrue(asset.isFavorite)
     }
 
     private fun deviceAsset(

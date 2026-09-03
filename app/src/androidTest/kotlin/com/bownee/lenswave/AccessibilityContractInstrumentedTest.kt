@@ -23,10 +23,12 @@ class AccessibilityContractInstrumentedTest {
                     requestIsTrashed = false,
                     actions = PhotoViewerScreen.Actions(
                         gesturesEnabled = { true },
+                        gestureStartAllowed = { _, _ -> true },
                         onVerticalDrag = { _, _, _ -> },
                         onHorizontalDrag = { _, _ -> },
                         onBack = {},
                         onEdit = {},
+                        onFavorite = {},
                         onDelete = {},
                         onRetry = {},
                         onLayoutChanged = {},

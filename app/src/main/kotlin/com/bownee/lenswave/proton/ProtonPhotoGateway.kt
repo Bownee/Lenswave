@@ -11,12 +11,15 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import me.proton.core.domain.entity.UserId
 import me.proton.drive.sdk.entity.NodeResultPair
 import me.proton.drive.sdk.entity.NodeUid
+import me.proton.drive.sdk.entity.PhotoTagsUpdate
 
 /**
  * Application gateway for Proton Photos capabilities. Focused repositories own synchronization,
@@ -61,6 +64,16 @@ class ProtonPhotoGateway @Inject internal constructor(
         withContext(Dispatchers.IO) { sessionGuard.withActiveSession(userId) {
             timeline.syncMetadata(userId, forceRemote)
             reconcileTimelineThumbnailQueue(userId)
+            coroutineScope {
+                launch { timeline.syncTagMetadata(userId, ProtonMediaTag.VIDEOS, forceRemote) }
+                launch { timeline.syncTagMetadata(userId, ProtonMediaTag.FAVORITES, forceRemote) }
+            }
+            Unit
+        } }
+
+    override suspend fun syncTagMetadata(userId: UserId, tag: ProtonMediaTag, forceRemote: Boolean) =
+        withContext(Dispatchers.IO) { sessionGuard.withActiveSession(userId) {
+            timeline.syncTagMetadata(userId, tag, forceRemote)
         } }
 
     override suspend fun syncAlbumsMetadata(userId: UserId, forceRemote: Boolean) =
@@ -170,6 +183,33 @@ class ProtonPhotoGateway @Inject internal constructor(
                 failedCount = results.count { it is NodeResultPair.Failure },
             )
         } }
+    }
+
+    suspend fun setFavorite(
+        userId: UserId,
+        nodeUids: Collection<String>,
+        favorite: Boolean,
+    ): ProtonFavoriteResult = withContext(Dispatchers.IO) {
+        sessionGuard.withActiveSession(userId) {
+            val requested = nodeUids.distinct()
+            if (requested.isEmpty()) return@withActiveSession ProtonFavoriteResult()
+            timeline.syncTagMetadata(userId, ProtonMediaTag.FAVORITES, forceRemote = false)
+            val updates = requested.map { nodeUid ->
+                PhotoTagsUpdate(
+                    nodeUid = NodeUid(nodeUid),
+                    tagsToAdd = if (favorite) listOf(ProtonMediaTag.FAVORITES.sdkTag) else emptyList(),
+                    tagsToRemove = if (favorite) emptyList() else listOf(ProtonMediaTag.FAVORITES.sdkTag),
+                )
+            }
+            val results = clientProvider.get(userId).updatePhotos(updates).toList()
+            val successful = results.filterIsInstance<NodeResultPair.Success>()
+                .mapTo(mutableSetOf()) { result -> result.nodeUid.value }
+            timeline.setFavorite(userId, successful, favorite)
+            ProtonFavoriteResult(
+                updatedCount = successful.size,
+                failedCount = results.count { it is NodeResultPair.Failure },
+            )
+        }
     }
 
     suspend fun deletePhotosPermanently(

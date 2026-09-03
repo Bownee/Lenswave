@@ -275,6 +275,11 @@ class GalleryViewModel @Inject internal constructor(
                     protonRepository.syncTrashMetadata(userId)
                 }
             }
+            (destination as? GalleryDestination.ProtonTag)?.let { selected ->
+                withContext(Dispatchers.IO) {
+                    protonRepository.syncTagMetadata(userId, selected.tag)
+                }
+            }
             if (currentUserId == userId) {
                 protonThumbnailScheduler.restart(userId)
             }
@@ -302,6 +307,16 @@ class GalleryViewModel @Inject internal constructor(
                 withContext(Dispatchers.IO) {
                     refreshProtonSection(userId) {
                         protonRepository.syncTimelineMetadata(userId, forceRemote)
+                    }
+                }
+            }
+            is GalleryDestination.ProtonTag -> currentUserId?.let { userId ->
+                withContext(Dispatchers.IO) {
+                    refreshProtonSection(userId) {
+                        if (!protonRepository.state.value.hasLoaded) {
+                            protonRepository.syncTimelineMetadata(userId, forceRemote)
+                        }
+                        protonRepository.syncTagMetadata(userId, selectedDestination.tag, forceRemote)
                     }
                 }
             }
@@ -343,6 +358,7 @@ class GalleryViewModel @Inject internal constructor(
     private fun GalleryDestination.usesProton(): Boolean = when (this) {
         GalleryDestination.Combined,
         GalleryDestination.ProtonTimeline,
+        is GalleryDestination.ProtonTag,
         GalleryDestination.ProtonAlbums,
         is GalleryDestination.ProtonAlbumPhotos
         -> true
@@ -543,6 +559,7 @@ class GalleryViewModel @Inject internal constructor(
         savedStateHandle[STATE_TRASH_SOURCE] = stored.trashSource
         savedStateHandle[STATE_ALBUM_UID] = stored.albumUid
         savedStateHandle[STATE_ALBUM_NAME] = stored.albumName
+        savedStateHandle[STATE_PROTON_TAG] = stored.protonTag
         navigationStore.write(navigation)
     }
 
@@ -552,6 +569,7 @@ class GalleryViewModel @Inject internal constructor(
         const val STATE_TRASH_SOURCE = "gallery.trash-source"
         const val STATE_ALBUM_UID = "gallery.album-uid"
         const val STATE_ALBUM_NAME = "gallery.album-name"
+        const val STATE_PROTON_TAG = "gallery.proton-tag"
 
         fun restoreNavigation(state: SavedStateHandle): GalleryNavigationState? =
             GalleryNavigationCodec.decode(
@@ -561,6 +579,7 @@ class GalleryViewModel @Inject internal constructor(
                     trashSource = state[STATE_TRASH_SOURCE],
                     albumUid = state[STATE_ALBUM_UID],
                     albumName = state[STATE_ALBUM_NAME],
+                    protonTag = state[STATE_PROTON_TAG],
                 ),
             )
     }

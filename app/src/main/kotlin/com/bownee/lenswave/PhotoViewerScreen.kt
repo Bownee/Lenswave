@@ -15,7 +15,10 @@ import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.core.view.ViewCompat
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.ui.PlayerView
 
+@androidx.annotation.OptIn(markerClass = [UnstableApi::class])
 internal class PhotoViewerScreen(
     private val context: Context,
     requestIsTrashed: Boolean,
@@ -24,6 +27,7 @@ internal class PhotoViewerScreen(
     val root = PhotoViewerGestureLayout(context).apply {
         setBackgroundColor(Color.TRANSPARENT)
         gesturesEnabled = actions.gesturesEnabled
+        gestureStartAllowed = actions.gestureStartAllowed
         onVerticalDrag = actions.onVerticalDrag
         onHorizontalDrag = actions.onHorizontalDrag
     }
@@ -42,6 +46,11 @@ internal class PhotoViewerScreen(
         importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
     }
     val photoView = FullResolutionPhotoView(context)
+    val playerView = PlayerView(context).apply {
+        useController = true
+        visibility = View.GONE
+        setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
+    }
     val loadingPanel: LinearLayout
     val status: TextView
     val progress: ProgressBar
@@ -49,6 +58,7 @@ internal class PhotoViewerScreen(
     val backButton: ImageButton
     val actions: LinearLayout
     val editButton: ImageButton
+    val favoriteButton: ImageButton
     val deleteButton: ImageButton
     val detailsSheet: LinearLayout
     val detailsContent: LinearLayout
@@ -73,6 +83,7 @@ internal class PhotoViewerScreen(
 
         mediaFrame.addView(thumbnailPreview, photoLayoutParams())
         mediaFrame.addView(photoView, photoLayoutParams())
+        mediaFrame.addView(playerView, photoLayoutParams())
 
         progress = ProgressBar(context)
         status = TextView(context).apply {
@@ -145,6 +156,14 @@ internal class PhotoViewerScreen(
             isEnabled = false
             setOnClickListener { actions.onEdit() }
         }
+        favoriteButton = smallIconButton(
+            context.getString(R.string.add_to_favorites),
+            R.drawable.ic_favorite_border,
+        ).apply {
+            isEnabled = false
+            visibility = View.GONE
+            setOnClickListener { actions.onFavorite() }
+        }
         deleteButton = smallIconButton(
             context.getString(if (requestIsTrashed) R.string.delete_forever else R.string.delete),
             R.drawable.ic_delete,
@@ -156,6 +175,10 @@ internal class PhotoViewerScreen(
         val buttons = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
+            addView(favoriteButton, LinearLayout.LayoutParams(
+                context.dp(48),
+                context.dp(48),
+            ).apply { marginEnd = context.dp(8) })
             addView(editButton, LinearLayout.LayoutParams(
                 context.dp(48),
                 context.dp(48),
@@ -252,10 +275,12 @@ internal class PhotoViewerScreen(
 
     internal class Actions(
         val gesturesEnabled: () -> Boolean,
+        val gestureStartAllowed: (Float, Float) -> Boolean,
         val onVerticalDrag: (Float, Float, Boolean) -> Unit,
         val onHorizontalDrag: (Float, Boolean) -> Unit,
         val onBack: () -> Unit,
         val onEdit: () -> Unit,
+        val onFavorite: () -> Unit,
         val onDelete: () -> Unit,
         val onRetry: () -> Unit,
         val onLayoutChanged: (Int) -> Unit,

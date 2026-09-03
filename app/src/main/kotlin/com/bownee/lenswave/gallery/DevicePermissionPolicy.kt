@@ -9,9 +9,13 @@ internal object DevicePermissionPolicy {
     fun permissions(apiLevel: Int): Array<String> = when {
         apiLevel >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE -> arrayOf(
             Manifest.permission.READ_MEDIA_IMAGES,
+            Manifest.permission.READ_MEDIA_VIDEO,
             Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED,
         )
-        apiLevel >= Build.VERSION_CODES.TIRAMISU -> arrayOf(Manifest.permission.READ_MEDIA_IMAGES)
+        apiLevel >= Build.VERSION_CODES.TIRAMISU -> arrayOf(
+            Manifest.permission.READ_MEDIA_IMAGES,
+            Manifest.permission.READ_MEDIA_VIDEO,
+        )
         else -> arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
     }
 
@@ -20,8 +24,12 @@ internal object DevicePermissionPolicy {
         readMediaImagesGranted: Boolean,
         selectedPhotosGranted: Boolean,
         legacyReadGranted: Boolean,
+        readMediaVideosGranted: Boolean = readMediaImagesGranted,
     ): DeviceAccessLevel = when {
-        apiLevel >= Build.VERSION_CODES.TIRAMISU && readMediaImagesGranted -> DeviceAccessLevel.FULL
+        apiLevel >= Build.VERSION_CODES.TIRAMISU &&
+            readMediaImagesGranted && readMediaVideosGranted -> DeviceAccessLevel.FULL
+        apiLevel >= Build.VERSION_CODES.TIRAMISU &&
+            (readMediaImagesGranted || readMediaVideosGranted) -> DeviceAccessLevel.PARTIAL
         apiLevel >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && selectedPhotosGranted -> DeviceAccessLevel.PARTIAL
         apiLevel < Build.VERSION_CODES.TIRAMISU && legacyReadGranted -> DeviceAccessLevel.FULL
         else -> DeviceAccessLevel.NONE
