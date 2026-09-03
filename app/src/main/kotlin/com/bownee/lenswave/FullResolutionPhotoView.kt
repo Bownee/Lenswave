@@ -21,7 +21,7 @@ import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.view.View
 import android.view.ViewConfiguration
-import android.view.animation.DecelerateInterpolator
+import android.view.animation.PathInterpolator
 import androidx.exifinterface.media.ExifInterface
 import androidx.core.view.ViewCompat
 import java.io.Closeable
@@ -310,9 +310,8 @@ class FullResolutionPhotoView @JvmOverloads constructor(
         val startScale = scale
         val startOffsetX = offsetX
         val startOffsetY = offsetY
-        val inspectionScale = min(0.8f, max(minScale * 2.75f, minScale + 0.15f))
-            .coerceAtLeast(minScale)
-        val targetScale = if (scale > minScale * 1.5f) minScale else inspectionScale
+        val inspectionScale = (minScale * DOUBLE_TAP_ZOOM).coerceIn(minScale, maximumScale())
+        val targetScale = if (isAtFitScale()) inspectionScale else minScale
         scale = targetScale
         val ratio = targetScale / startScale
         offsetX = focusX - (focusX - offsetX) * ratio
@@ -326,8 +325,8 @@ class FullResolutionPhotoView @JvmOverloads constructor(
 
         zoomAnimator?.cancel()
         zoomAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
-            duration = 280L
-            interpolator = DecelerateInterpolator()
+            duration = DOUBLE_TAP_ZOOM_DURATION_MILLIS
+            interpolator = PathInterpolator(0.2f, 0f, 0f, 1f)
             addUpdateListener { animator ->
                 val progress = animator.animatedValue as Float
                 scale = startScale + (targetScale - startScale) * progress
@@ -603,6 +602,8 @@ class FullResolutionPhotoView @JvmOverloads constructor(
     }
 
     private companion object {
+        const val DOUBLE_TAP_ZOOM = 3f
+        const val DOUBLE_TAP_ZOOM_DURATION_MILLIS = 360L
         const val MAX_BASE_PIXELS = 4_000_000L
         const val AXIS_DOMINANCE = 1.15f
         const val VELOCITY_HISTORY_WEIGHT = 0.55f
