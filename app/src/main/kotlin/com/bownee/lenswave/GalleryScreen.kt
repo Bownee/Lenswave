@@ -107,7 +107,6 @@ internal class GalleryScreen(
             layoutParams = AbsListView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0)
         }
         list = GalleryListView(activity).apply {
-            applyDraggableFastScroll()
             divider = null
             dividerHeight = 0
             setHeaderDividersEnabled(false)
@@ -522,56 +521,15 @@ internal class GalleryScreen(
     }
 
     private fun pillButton(label: String, icon: Int, destructive: Boolean = false) =
-        Button(activity).apply {
-            text = label
-            textSize = 14f
-            typeface = UiStyle.medium
-            val tint = if (destructive) UiStyle.danger else UiStyle.text
-            setTextColor(tint)
-            isAllCaps = false
-            minWidth = 0
-            minimumWidth = 0
-            minHeight = 0
-            minimumHeight = 0
-            setCompoundDrawablesRelativeWithIntrinsicBounds(icon, 0, 0, 0)
-            TextViewCompat.setCompoundDrawableTintList(this, ColorStateList.valueOf(tint))
-            compoundDrawablePadding = activity.dp(6)
-            setPadding(activity.dp(14), 0, activity.dp(16), 0)
-            background = UiStyle.rippled(
-                UiStyle.rounded(activity, if (destructive) UiStyle.dangerSoft else UiStyle.surfaceRaised, 22),
-                tint,
-            )
-        }
+        UiStyle.pillButton(activity, label, icon, destructive)
 
-    private fun accentButton(label: String) = Button(activity).apply {
-        text = label
-        textSize = 15f
-        typeface = UiStyle.medium
-        setTextColor(UiStyle.onAccent)
-        isAllCaps = false
-        background = UiStyle.rippled(UiStyle.rounded(activity, UiStyle.accent, 25), UiStyle.onAccent)
-    }
+    private fun accentButton(label: String) = UiStyle.accentButton(activity, label)
 
-    private fun text(value: String, size: Float, color: Int) = TextView(activity).apply {
-        text = value
-        textSize = size
-        setTextColor(color)
-    }
+    private fun text(value: String, size: Float, color: Int) = UiStyle.label(activity, value, size, color)
 
-    private fun matchWrap() = LinearLayout.LayoutParams(
-        ViewGroup.LayoutParams.MATCH_PARENT,
-        ViewGroup.LayoutParams.WRAP_CONTENT,
-    )
+    private fun matchWrap() = UiStyle.matchWrap()
 
-    private fun bottomOverlayParams() = FrameLayout.LayoutParams(
-        ViewGroup.LayoutParams.MATCH_PARENT,
-        ViewGroup.LayoutParams.WRAP_CONTENT,
-        Gravity.BOTTOM,
-    ).apply {
-        marginStart = activity.dp(16)
-        marginEnd = activity.dp(16)
-        bottomMargin = activity.dp(12)
-    }
+    private fun bottomOverlayParams() = UiStyle.bottomOverlayParams(activity)
 
     /** A tab in the floating bottom bar: icon and label, tinted by selection state. */
     private class TabButton(
@@ -601,11 +559,7 @@ internal class GalleryScreen(
         }
 
         fun setSelectedTab(selected: Boolean) {
-            isSelected = selected
-            ViewCompat.setStateDescription(
-                this,
-                context.getString(if (selected) R.string.selected else R.string.not_selected),
-            )
+            UiStyle.setSelectedState(this, selected)
             val tint = if (selected) UiStyle.accent else UiStyle.muted
             iconView.imageTintList = ColorStateList.valueOf(tint)
             labelView.setTextColor(if (selected) UiStyle.text else UiStyle.muted)

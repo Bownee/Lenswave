@@ -227,14 +227,9 @@ class GalleryListAdapter(
             cell.favorite.visibility = if (showFavorite) View.VISIBLE else View.GONE
             cell.favorite.isEnabled = showFavorite && !favoriteUpdating
             cell.favorite.alpha = if (displayedFavorite) 1f else 0.82f
-            cell.favorite.setImageResource(
-                if (displayedFavorite) R.drawable.ic_favorite else R.drawable.ic_favorite_border,
-            )
+            UiStyle.applyFavoriteIcon(cell.favorite, displayedFavorite)
             cell.favorite.imageTintList = ColorStateList.valueOf(
                 if (displayedFavorite) UiStyle.accent else Color.WHITE,
-            )
-            cell.favorite.contentDescription = context.getString(
-                if (displayedFavorite) R.string.remove_from_favorites else R.string.add_to_favorites,
             )
             cell.favorite.setOnClickListener(
                 if (showFavorite && !favoriteUpdating) {
@@ -242,12 +237,8 @@ class GalleryListAdapter(
                 }
                 else null,
             )
-            cell.isSelected = isSelected
+            UiStyle.setSelectedState(cell, isSelected)
             cell.isActivated = isSelected
-            ViewCompat.setStateDescription(
-                cell,
-                context.getString(if (isSelected) R.string.selected else R.string.not_selected),
-            )
             cell.check.visibility = if (isSelected) View.VISIBLE else View.GONE
             cell.selectionScrim.visibility = if (isSelected) View.VISIBLE else View.GONE
             image.scaleX = if (isSelected) 0.9f else 1f

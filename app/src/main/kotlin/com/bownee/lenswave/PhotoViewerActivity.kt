@@ -122,7 +122,7 @@ class PhotoViewerActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
         request = PhotoRequest.from(intent)
         navigationRequests = PhotoRequest.navigationFrom(intent).ifEmpty { listOf(request) }
-        configureWindow()
+        configureEdgeToEdgeWindow()
         buildInterface()
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() = handleBack()
@@ -144,14 +144,6 @@ class PhotoViewerActivity : FragmentActivity() {
     override fun onStop() {
         player?.pause()
         super.onStop()
-    }
-
-    private fun configureWindow() {
-        WindowCompat.setDecorFitsSystemWindows(window, false)
-        WindowCompat.getInsetsController(window, window.decorView).apply {
-            isAppearanceLightStatusBars = false
-            isAppearanceLightNavigationBars = false
-        }
     }
 
     private fun buildInterface() {
@@ -751,12 +743,7 @@ class PhotoViewerActivity : FragmentActivity() {
         favoriteButton.visibility = if (supported) View.VISIBLE else View.GONE
         favoriteButton.isEnabled = supported && enabled && !favoriteInProgress
         favoriteButton.alpha = if (favoriteButton.isEnabled) 1f else 0.45f
-        favoriteButton.setImageResource(
-            if (request.isFavorite) R.drawable.ic_favorite else R.drawable.ic_favorite_border,
-        )
-        favoriteButton.contentDescription = getString(
-            if (request.isFavorite) R.string.remove_from_favorites else R.string.add_to_favorites,
-        )
+        UiStyle.applyFavoriteIcon(favoriteButton, request.isFavorite)
     }
 
     private fun toggleFavorite() {
@@ -1371,12 +1358,7 @@ class PhotoViewerActivity : FragmentActivity() {
             val safeArea: Insets = insets.getInsets(
                 WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
             )
-            (actions.layoutParams as FrameLayout.LayoutParams).apply {
-                leftMargin = dp(8) + safeArea.left
-                rightMargin = dp(8) + safeArea.right
-                bottomMargin = dp(8) + safeArea.bottom
-                actions.layoutParams = this
-            }
+            actions.applyBottomOverlayInsets(safeArea)
             mediaTitle.setPadding(
                 dp(16) + safeArea.left,
                 dp(10) + safeArea.top,

@@ -71,10 +71,7 @@ internal class PhotoViewerScreen(
     init {
         root.addView(backgroundScrim, matchParentFrame())
 
-        mediaTitle = TextView(context).apply {
-            textSize = 15f
-            typeface = UiStyle.medium
-            setTextColor(UiStyle.text)
+        mediaTitle = UiStyle.label(context, sizeSp = 15f, medium = true).apply {
             gravity = Gravity.CENTER
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
@@ -113,9 +110,7 @@ internal class PhotoViewerScreen(
         mediaFrame.addView(playerView, photoLayoutParams())
 
         progress = ProgressBar(context)
-        status = TextView(context).apply {
-            textSize = 13.5f
-            setTextColor(UiStyle.muted)
+        status = UiStyle.label(context, sizeSp = 13.5f, color = UiStyle.muted).apply {
             gravity = Gravity.CENTER
             visibility = View.GONE
         }
@@ -131,14 +126,8 @@ internal class PhotoViewerScreen(
                     ViewGroup.LayoutParams.WRAP_CONTENT,
                 ).apply { topMargin = context.dp(12) },
             )
-            retryButton = Button(context).apply {
-                setText(R.string.retry)
-                isAllCaps = false
-                textSize = 15f
-                typeface = UiStyle.medium
-                setTextColor(UiStyle.onAccent)
+            retryButton = UiStyle.accentButton(context, context.getString(R.string.retry), radiusDp = 24).apply {
                 setPadding(context.dp(24), 0, context.dp(24), 0)
-                background = UiStyle.rippled(UiStyle.rounded(context, UiStyle.accent, 24), UiStyle.onAccent)
                 visibility = View.GONE
                 setOnClickListener { actions.onRetry() }
             }
@@ -210,18 +199,7 @@ internal class PhotoViewerScreen(
             setPadding(context.dp(8), context.dp(6), context.dp(8), context.dp(8))
             addView(buttons, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
-        root.addView(
-            this.actions,
-            FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                Gravity.BOTTOM,
-            ).apply {
-                marginStart = context.dp(8)
-                marginEnd = context.dp(8)
-                bottomMargin = context.dp(8)
-            },
-        )
+        root.addView(this.actions, UiStyle.bottomOverlayParams(context, marginDp = 8, bottomMarginDp = 8))
 
         root.addOnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
             if (right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop) {
@@ -252,35 +230,21 @@ internal class PhotoViewerScreen(
                     background = UiStyle.rounded(context, UiStyle.border, 3)
                 }, FrameLayout.LayoutParams(context.dp(36), context.dp(4), Gravity.CENTER))
             }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, context.dp(26)))
-            addView(TextView(context).apply {
-                setText(R.string.photo_details)
-                textSize = 20f
-                typeface = UiStyle.medium
-                setTextColor(UiStyle.text)
-                ViewCompat.setAccessibilityHeading(this, true)
-            }, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            ))
+            addView(
+                UiStyle.label(context, context.getString(R.string.photo_details), 20f, medium = true).apply {
+                    ViewCompat.setAccessibilityHeading(this, true)
+                },
+                UiStyle.matchWrap(),
+            )
             addView(progress, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, context.dp(44)))
-            addView(content, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            ))
+            addView(content, UiStyle.matchWrap())
         }
         return DetailsSheet(container, progress, content)
     }
 
-    private fun photoLayoutParams() = FrameLayout.LayoutParams(
-        ViewGroup.LayoutParams.MATCH_PARENT,
-        ViewGroup.LayoutParams.MATCH_PARENT,
-        Gravity.CENTER,
-    )
+    private fun photoLayoutParams() = UiStyle.matchParentFrame(Gravity.CENTER)
 
-    private fun matchParentFrame() = FrameLayout.LayoutParams(
-        ViewGroup.LayoutParams.MATCH_PARENT,
-        ViewGroup.LayoutParams.MATCH_PARENT,
-    )
+    private fun matchParentFrame() = UiStyle.matchParentFrame()
 
     internal class Actions(
         val gesturesEnabled: () -> Boolean,

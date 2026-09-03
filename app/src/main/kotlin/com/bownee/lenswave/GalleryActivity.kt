@@ -127,7 +127,7 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         pendingUpdateVersionName = savedInstanceState?.getString(STATE_PENDING_UPDATE_VERSION)
-        configureWindow()
+        configureEdgeToEdgeWindow()
         deletionCoordinator = GalleryDeletionCoordinator(
             activity = this,
             deletionExecutor = photoDeletionExecutor,
@@ -172,14 +172,6 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
 
     override fun onUpdateSnoozed(versionName: String) {
         lifecycleScope.launch { appUpdateChecker.snooze(versionName) }
-    }
-
-    private fun configureWindow() {
-        WindowCompat.setDecorFitsSystemWindows(window, false)
-        WindowCompat.getInsetsController(window, window.decorView).apply {
-            isAppearanceLightStatusBars = false
-            isAppearanceLightNavigationBars = false
-        }
     }
 
     private fun buildInterface() {
@@ -592,20 +584,11 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
             list.setFastScrollEdgeInset(fastScrollEdgePadding)
             screen.applySafeArea(safeArea)
             updateNavigationVisibility(adapter.selectedPhotos().isNotEmpty())
-            updateBottomOverlayInsets(tabBar, safeArea)
-            updateBottomOverlayInsets(selectionBar, safeArea)
+            tabBar.applyBottomOverlayInsets(safeArea)
+            selectionBar.applyBottomOverlayInsets(safeArea)
             insets
         }
         ViewCompat.requestApplyInsets(root)
-    }
-
-    private fun updateBottomOverlayInsets(view: View, insets: Insets) {
-        (view.layoutParams as FrameLayout.LayoutParams).apply {
-            leftMargin = dp(8) + insets.left
-            rightMargin = dp(8) + insets.right
-            bottomMargin = dp(8) + insets.bottom
-            view.layoutParams = this
-        }
     }
 
     private fun showAuthenticationError() {

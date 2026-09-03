@@ -13,6 +13,18 @@ internal class GalleryListView @JvmOverloads constructor(
 ) : ListView(context, attributes, defaultStyleAttribute) {
     private val fastScroller = GalleryFastScroller(this, context)
 
+    init {
+        // The platform fast scroller is replaced by the drag handle; the plain scrollbar stays
+        // available for pages where the handle is disabled.
+        isVerticalScrollBarEnabled = false
+        scrollBarStyle = SCROLLBARS_INSIDE_OVERLAY
+        setVerticalScrollbarPosition(
+            if (layoutDirection == LAYOUT_DIRECTION_RTL) SCROLLBAR_POSITION_LEFT else SCROLLBAR_POSITION_RIGHT,
+        )
+        isFastScrollAlwaysVisible = false
+        isFastScrollEnabled = false
+    }
+
     fun setOnFastScrollInteractionListener(listener: (Boolean) -> Unit) {
         fastScroller.interactionListener = listener
     }
