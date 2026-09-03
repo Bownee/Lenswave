@@ -5,6 +5,8 @@ import com.bownee.lenswave.applyBottomOverlayInsets
 import com.bownee.lenswave.configureEdgeToEdgeWindow
 import com.bownee.lenswave.dp
 import com.bownee.lenswave.UiStyle
+import com.bownee.lenswave.LenswaveDiagnostics
+import com.bownee.lenswave.LenswaveOperation
 import com.bownee.lenswave.R
 import android.app.Activity
 import android.app.AlertDialog
@@ -474,6 +476,7 @@ class PhotoViewerActivity : FragmentActivity() {
             }
 
             override fun onPlayerError(error: PlaybackException) {
+                LenswaveDiagnostics.reportFailure(LenswaveOperation.VIDEO_PLAYBACK, error)
                 if (request.stableId == requestedStableId) {
                     handlePhotoLoadFailure(error, getString(R.string.could_not_play_video))
                 }

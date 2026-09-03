@@ -16,6 +16,7 @@ internal enum class LenswaveOperation(val tag: String) {
     APP_UPDATE_SNOOZE("app-update-snooze"),
     ORIGINAL_CACHE_STORE("original-cache-store"),
     ORIGINAL_DOWNLOAD("original-download"),
+    VIDEO_PLAYBACK("video-playback"),
     ORIGINAL_DOWNLOAD_PROGRESS("original-download-progress"),
     ORIGINAL_NAME_LOAD("original-name-load"),
     PROTON_CLIENT_CREATE("proton-client-create"),

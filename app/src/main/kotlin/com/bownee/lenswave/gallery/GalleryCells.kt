@@ -8,7 +8,6 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
-import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
@@ -18,7 +17,7 @@ import com.bownee.lenswave.R
 import com.bownee.lenswave.UiStyle
 import com.bownee.lenswave.dp
 
-/** A photo thumbnail in the grid with its selection, loading, video and favourite overlays. */
+/** A photo thumbnail in the grid with its selection, loading and video overlays. */
 internal class PhotoCell(context: Context) : FrameLayout(context) {
     val image = ImageView(context).apply {
         scaleType = ImageView.ScaleType.CENTER_CROP
@@ -50,18 +49,6 @@ internal class PhotoCell(context: Context) : FrameLayout(context) {
         importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         visibility = View.GONE
     }
-    val favorite = ImageButton(context).apply {
-        setPaddingRelative(
-            context.dp(22),
-            context.dp(8),
-            context.dp(8),
-            context.dp(22),
-        )
-        imageTintList = ColorStateList.valueOf(Color.WHITE)
-        background = null
-        visibility = View.GONE
-    }
-
     init {
         UiStyle.clipRounded(this, 10)
         setBackgroundColor(UiStyle.surface)
@@ -73,7 +60,6 @@ internal class PhotoCell(context: Context) : FrameLayout(context) {
             marginStart = context.dp(8)
         })
         addView(videoBadge, LayoutParams(context.dp(36), context.dp(36), Gravity.CENTER))
-        addView(favorite, LayoutParams(context.dp(48), context.dp(48), Gravity.TOP or Gravity.END))
     }
 }
 

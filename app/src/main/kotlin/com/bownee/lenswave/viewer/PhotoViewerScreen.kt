@@ -57,6 +57,13 @@ internal class PhotoViewerScreen(
     val photoView = FullResolutionPhotoView(context)
     val playerView = PlayerView(context).apply {
         useController = true
+        // Controls appear on tap only; showing them (and their dim scrim) while the video is still
+        // preparing hides the picture behind them. The shutter stays transparent so the thumbnail
+        // shows through until the first frame is decoded.
+        controllerAutoShow = false
+        controllerShowTimeoutMs = CONTROLS_TIMEOUT_MILLIS
+        controllerHideOnTouch = true
+        setShutterBackgroundColor(Color.TRANSPARENT)
         visibility = View.GONE
         setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
     }
@@ -299,4 +306,7 @@ internal class PhotoViewerScreen(
         val progress: ProgressBar,
         val content: LinearLayout,
     )
+    private companion object {
+        const val CONTROLS_TIMEOUT_MILLIS = 2_500
+    }
 }

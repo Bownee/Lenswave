@@ -1,8 +1,6 @@
 package com.bownee.lenswave.gallery
 
 import android.content.Context
-import android.content.res.ColorStateList
-import android.graphics.Color
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -21,19 +19,16 @@ class GalleryListAdapter(
     private val context: Context,
     private val thumbnailLoader: GalleryThumbnailLoader,
     private val onPhotoClicked: (GalleryAsset) -> Unit,
-    private val onFavoriteClicked: (GalleryAsset) -> Unit,
     private val onAlbumClicked: (ProtonAlbum) -> Unit,
     private val onLibraryAction: (LibraryAction) -> Unit,
     private val onSelectionChanged: (List<GalleryAsset>) -> Unit,
 ) : BaseAdapter() {
     private val selected = linkedMapOf<String, GalleryAsset>()
-    private val favoriteState = OptimisticFavoriteState()
     private var rows: List<GalleryRow> = emptyList()
     private var isFastScrolling = false
 
     fun submitPhotos(photos: List<GalleryAsset>) {
         val stableIds = photos.mapTo(mutableSetOf(), GalleryAsset::stableId)
-        favoriteState.reconcile(photos.associate { photo -> photo.stableId to photo.isFavorite })
         rows = GalleryGrouping.createRows(
             photos = photos,
             unknownDateLabel = context.getString(R.string.unknown_date),
@@ -45,7 +40,6 @@ class GalleryListAdapter(
 
     fun submitLibrary(sections: List<LibrarySection>) {
         rows = GalleryGrouping.createLibraryRows(sections)
-        favoriteState.clear()
         selected.clear()
         notifyDataSetChanged()
         notifySelectionChanged()
@@ -74,16 +68,6 @@ class GalleryListAdapter(
     }
 
     fun selectedPhotos(): List<GalleryAsset> = selected.values.toList()
-
-    fun beginFavoriteUpdate(stableId: String, favorite: Boolean) {
-        favoriteState.begin(stableId, favorite)
-        notifyDataSetChanged()
-    }
-
-    fun finishFavoriteUpdate(stableId: String, succeeded: Boolean) {
-        favoriteState.finish(stableId, succeeded, serverFavoriteState(stableId))
-        notifyDataSetChanged()
-    }
 
     fun dateLabelForPosition(position: Int): String? {
         for (index in position.coerceAtMost(rows.lastIndex) downTo 0) {
@@ -188,8 +172,6 @@ class GalleryListAdapter(
                 image.setImageDrawable(null)
                 cell.loading.visibility = View.GONE
                 cell.videoBadge.visibility = View.GONE
-                cell.favorite.visibility = View.GONE
-                cell.favorite.setOnClickListener(null)
                 cell.setOnClickListener(null)
                 cell.setOnLongClickListener(null)
                 continue
@@ -210,27 +192,6 @@ class GalleryListAdapter(
                 true
             }
             val isSelected = photo.stableId in selected
-            val showFavorite = selected.isEmpty()
-            val displayedFavorite = favoriteState.displayedValue(photo.stableId, photo.isFavorite)
-            val displayedPhoto = if (displayedFavorite == photo.isFavorite) {
-                photo
-            } else {
-                photo.withFavorite(displayedFavorite)
-            }
-            val favoriteUpdating = favoriteState.isUpdating(photo.stableId)
-            cell.favorite.visibility = if (showFavorite) View.VISIBLE else View.GONE
-            cell.favorite.isEnabled = showFavorite && !favoriteUpdating
-            cell.favorite.alpha = if (displayedFavorite) 1f else 0.82f
-            UiStyle.applyFavoriteIcon(cell.favorite, displayedFavorite)
-            cell.favorite.imageTintList = ColorStateList.valueOf(
-                if (displayedFavorite) UiStyle.accent else Color.WHITE,
-            )
-            cell.favorite.setOnClickListener(
-                if (showFavorite && !favoriteUpdating) {
-                    View.OnClickListener { onFavoriteClicked(displayedPhoto) }
-                }
-                else null,
-            )
             UiStyle.setSelectedState(cell, isSelected)
             cell.isActivated = isSelected
             cell.check.visibility = if (isSelected) View.VISIBLE else View.GONE
@@ -241,13 +202,6 @@ class GalleryListAdapter(
         }
         return container
     }
-
-    private fun serverFavoriteState(stableId: String): Boolean? = rows
-        .filterIsInstance<GalleryRow.Photos>()
-        .asSequence()
-        .flatMap { row -> row.items.asSequence() }
-        .firstOrNull { photo -> photo.stableId == stableId }
-        ?.isFavorite
 
     private fun createPhotoRow() = LinearLayout(context).apply {
         orientation = LinearLayout.HORIZONTAL

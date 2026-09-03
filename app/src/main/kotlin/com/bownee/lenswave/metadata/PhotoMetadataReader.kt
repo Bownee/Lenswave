@@ -147,7 +147,8 @@ class PhotoMetadataReader @Inject constructor() {
                     ).joinToString(" ").ifBlank { null },
                     lens = exif.attribute("LensModel"),
                     aperture = exif.decimalAttribute(ExifInterface.TAG_F_NUMBER),
-                    exposure = exif.attribute(ExifInterface.TAG_EXPOSURE_TIME),
+                    exposure = exif.getAttributeDouble(ExifInterface.TAG_EXPOSURE_TIME, -1.0)
+                        .let(ExifValueFormatter::exposureTime),
                     iso = exif.attribute("PhotographicSensitivity")
                         ?: exif.attribute("ISOSpeedRatings"),
                     focalLength = exif.decimalAttribute(ExifInterface.TAG_FOCAL_LENGTH),

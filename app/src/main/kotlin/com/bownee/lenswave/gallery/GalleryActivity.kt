@@ -8,7 +8,6 @@ import com.bownee.lenswave.dp
 import com.bownee.lenswave.R
 import android.app.Activity
 import android.os.Bundle
-import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.graphics.Insets
@@ -26,7 +25,6 @@ import com.bownee.lenswave.gallery.GalleryDeletionCoordinator
 import com.bownee.lenswave.gallery.GalleryDestination
 import com.bownee.lenswave.gallery.GalleryEmptyAction
 import com.bownee.lenswave.gallery.GalleryFastScrollLayoutPolicy
-import com.bownee.lenswave.gallery.GalleryFavoriteToggle
 import com.bownee.lenswave.gallery.GalleryNavigationPolicy
 import com.bownee.lenswave.gallery.GalleryNotificationPermissionPrompter
 import com.bownee.lenswave.gallery.GalleryScrollPosition
@@ -40,7 +38,6 @@ import com.bownee.lenswave.gallery.GalleryViewModel
 import com.bownee.lenswave.gallery.LibraryAction
 import com.bownee.lenswave.gallery.PhotoDeletionExecutor
 import com.bownee.lenswave.proton.ProtonAlbum
-import com.bownee.lenswave.gallery.ProtonPhotoMutations
 import com.bownee.lenswave.gallery.ProtonThumbnailImageSource
 import com.bownee.lenswave.update.AppUpdateChecker
 import com.bownee.lenswave.update.UpdateAvailableDialogFragment
@@ -58,7 +55,6 @@ import javax.inject.Inject
 class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listener {
     @Inject lateinit var accountManager: AccountManager
     @Inject lateinit var authOrchestrator: AuthOrchestrator
-    @Inject lateinit var photoMutations: ProtonPhotoMutations
     @Inject lateinit var thumbnailSource: ProtonThumbnailImageSource
     @Inject lateinit var photoDeletionExecutor: PhotoDeletionExecutor
     @Inject lateinit var observeUserSettings: ObserveUserSettings
@@ -78,7 +74,6 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
     private lateinit var authCoordinator: GalleryAuthCoordinator
     private lateinit var settingsPresenter: GallerySettingsPresenter
     private lateinit var updatePresenter: GalleryUpdatePresenter
-    private lateinit var favoriteToggle: GalleryFavoriteToggle
 
     private var currentUiState = GalleryUiState()
     private var renderedDestination: GalleryDestination? = null
@@ -128,15 +123,6 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
             onSelectionCleared = { adapter.clearSelection() },
         )
         buildInterface()
-        favoriteToggle = GalleryFavoriteToggle(
-            scope = lifecycleScope,
-            setFavorite = { userId, nodeUids, favorite ->
-                photoMutations.setFavorite(userId, nodeUids, favorite)
-            },
-            onBegin = adapter::beginFavoriteUpdate,
-            onFinish = adapter::finishFavoriteUpdate,
-            onError = ::showFavoriteError,
-        )
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() = handleBack()
         })
@@ -176,7 +162,6 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
             currentUserId = { currentUiState.currentUserId },
             actions = GalleryScreen.Actions(
                 onPhotoClicked = ::openPhoto,
-                onFavoriteClicked = ::toggleOverviewFavorite,
                 onAlbumClicked = ::openAlbum,
                 onLibraryAction = ::performLibraryAction,
                 onSelectionChanged = ::showSelection,
@@ -349,15 +334,6 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
                 baseClearance = dp(12),
             ),
         )
-    }
-
-    private fun toggleOverviewFavorite(photo: GalleryAsset) {
-        val userId = currentUiState.currentUserId ?: return
-        favoriteToggle.toggle(userId, photo)
-    }
-
-    private fun showFavoriteError() {
-        Toast.makeText(this, R.string.could_not_update_favorite, Toast.LENGTH_LONG).show()
     }
 
     private fun restorePendingScrollPosition(state: GalleryUiState) {

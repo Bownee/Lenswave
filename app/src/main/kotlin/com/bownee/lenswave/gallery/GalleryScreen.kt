@@ -82,7 +82,6 @@ internal class GalleryScreen(
                 protonUserId = currentUserId,
             ),
             onPhotoClicked = actions.onPhotoClicked,
-            onFavoriteClicked = actions.onFavoriteClicked,
             onAlbumClicked = actions.onAlbumClicked,
             onLibraryAction = actions.onLibraryAction,
             onSelectionChanged = actions.onSelectionChanged,
@@ -125,13 +124,13 @@ internal class GalleryScreen(
         }
         root.addView(list, UiStyle.matchParentFrame())
 
-        stickyDate = UiStyle.label(activity, sizeSp = 14f, medium = true).apply {
+        stickyDate = UiStyle.label(activity, sizeSp = 12.5f, medium = true).apply {
             gravity = Gravity.CENTER
-            setPadding(activity.dp(16), 0, activity.dp(16), 0)
+            setPadding(activity.dp(12), 0, activity.dp(12), 0)
             background = UiStyle.rounded(
                 activity,
                 UiStyle.withAlpha(UiStyle.surfaceRaised, 238),
-                18,
+                14,
                 UiStyle.border,
             )
             elevation = activity.dp(4).toFloat()
@@ -141,7 +140,7 @@ internal class GalleryScreen(
             stickyDate,
             FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
-                activity.dp(36),
+                activity.dp(28),
                 Gravity.TOP or Gravity.START,
             ),
         )
@@ -559,7 +558,6 @@ internal class GalleryScreen(
 
     internal class Actions(
         val onPhotoClicked: (GalleryAsset) -> Unit,
-        val onFavoriteClicked: (GalleryAsset) -> Unit,
         val onAlbumClicked: (ProtonAlbum) -> Unit,
         val onLibraryAction: (LibraryAction) -> Unit,
         val onSelectionChanged: (List<GalleryAsset>) -> Unit,

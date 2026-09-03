@@ -31,10 +31,12 @@ internal class ProtonProgressiveDataSource(
         }
         input = RandomAccessFile(stream.file, "r").apply { seek(dataSpec.position) }
         readPosition = dataSpec.position
+        // The SDK's progress total describes the encrypted transfer, not the decrypted file, so
+        // it must not bound the reads: a too-small total would end the stream early and fail the
+        // first playback. Only the finished file's real length is trusted.
         bytesRemaining = when {
             dataSpec.length != C.LENGTH_UNSET.toLong() -> dataSpec.length
-            stream.progress.value.totalBytes != null ->
-                requireNotNull(stream.progress.value.totalBytes) - dataSpec.position
+            state.complete -> state.availableBytes - dataSpec.position
             else -> C.LENGTH_UNSET.toLong()
         }
         if (bytesRemaining < 0L) {
