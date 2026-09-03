@@ -699,7 +699,7 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
         val height = GalleryFastScrollLayoutPolicy.footerHeight(
             navigationVisible = sourceBar.isVisible,
             bottomInset = safeBottom,
-            navigationClearance = dp(78),
+            navigationClearance = dp(74),
             baseClearance = dp(12),
         )
         val params = galleryFooter.layoutParams ?: AbsListView.LayoutParams(
@@ -718,12 +718,12 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
             button,
             getString(if (selected) R.string.selected else R.string.not_selected),
         )
-        button.setTextColor(if (selected) UiStyle.text else UiStyle.muted)
+        button.setTextColor(if (selected) UiStyle.text else UiStyle.navigationMuted)
         button.background = UiStyle.rounded(
             this,
-            if (selected) UiStyle.surfaceRaised else Color.TRANSPARENT,
+            if (selected) UiStyle.navigationSelected else Color.TRANSPARENT,
             15,
-            if (selected) UiStyle.border else Color.TRANSPARENT,
+            if (selected) UiStyle.navigationBorder else Color.TRANSPARENT,
         )
     }
 

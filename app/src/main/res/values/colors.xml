@@ -5,6 +5,10 @@
     <color name="lenswave_surface">#181B23</color>
     <color name="lenswave_surface_raised">#222631</color>
     <color name="lenswave_border">#353B49</color>
+    <color name="lenswave_navigation_surface">#202023</color>
+    <color name="lenswave_navigation_selected">#3A3A3F</color>
+    <color name="lenswave_navigation_border">#505057</color>
+    <color name="lenswave_navigation_muted">#B4B4BC</color>
     <color name="lenswave_text">#F4F6FC</color>
     <color name="lenswave_muted">#A6ADBE</color>
     <color name="lenswave_accent">#AA98FF</color>

@@ -408,8 +408,13 @@ internal class GalleryScreen(
         val container = LinearLayout(activity).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(activity.dp(5), activity.dp(5), activity.dp(5), activity.dp(5))
-            background = UiStyle.rounded(activity, Color.argb(246, 29, 33, 40), 22, UiStyle.border)
+            setPadding(activity.dp(3), activity.dp(3), activity.dp(3), activity.dp(3))
+            background = UiStyle.rounded(
+                activity,
+                UiStyle.navigationSurface,
+                20,
+                UiStyle.navigationBorder,
+            )
             addView(proton, LinearLayout.LayoutParams(0, activity.dp(48), 1f))
             addView(albums, LinearLayout.LayoutParams(0, activity.dp(48), 1f).apply {
                 marginStart = activity.dp(3)
