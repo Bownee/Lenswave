@@ -118,6 +118,7 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
     private var fastScrollEdgePadding = 0
     private var pendingUpdateVersionName: String? = null
     private var thumbnailCacheIdentity: GalleryThumbnailCacheIdentity? = null
+    private var notificationPermissionRequestInFlight = false
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -127,7 +128,12 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
 
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) {}
+    ) {
+        notificationPermissionRequestInFlight = false
+        getSharedPreferences("permissions", MODE_PRIVATE).edit {
+            putBoolean(KEY_THUMBNAIL_NOTIFICATION_PERMISSION_REQUESTED, true)
+        }
+    }
 
     private val viewerLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -397,12 +403,10 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
                 requestedBefore = preferences.getBoolean(
                     KEY_THUMBNAIL_NOTIFICATION_PERMISSION_REQUESTED,
                     false,
-                ),
+                ) || notificationPermissionRequestInFlight,
             )
         ) return
-        preferences.edit {
-            putBoolean(KEY_THUMBNAIL_NOTIFICATION_PERMISSION_REQUESTED, true)
-        }
+        notificationPermissionRequestInFlight = true
         notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 
@@ -858,7 +862,7 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
         const val SETTINGS_PHOTO_ACCESS = 3
         const val SETTINGS_PRIVACY = 4
         const val KEY_THUMBNAIL_NOTIFICATION_PERMISSION_REQUESTED =
-            "thumbnail-notification-permission-requested"
+            "thumbnail-notification-permission-requested-v2"
         const val SPACE_COMBINED = 10
         const val SPACE_PROTON = 11
         const val SPACE_DEVICE = 12
