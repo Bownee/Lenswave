@@ -4,14 +4,26 @@ updates:
     directory: /
     schedule:
       interval: weekly
+      day: monday
     open-pull-requests-limit: 5
+    labels: [dependencies, gradle]
+    commit-message:
+      prefix: "deps"
+    # Every Gradle bump also needs app/gradle.lockfile and gradle/verification-metadata.xml
+    # regenerated (see CONTRIBUTING.md); Dependabot cannot do that, so the PR is a prompt, not a merge.
     groups:
       proton:
         patterns: ["me.proton.*"]
       android-build:
         patterns: ["com.android.*", "org.jetbrains.kotlin.*", "com.google.devtools.ksp"]
+      androidx:
+        patterns: ["androidx.*"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+      day: monday
     open-pull-requests-limit: 5
+    labels: [dependencies, github-actions]
+    commit-message:
+      prefix: "ci"

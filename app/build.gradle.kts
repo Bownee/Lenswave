@@ -1,34 +1,20 @@
-import java.util.Properties
 import org.gradle.testing.jacoco.tasks.JacocoCoverageVerification
 import org.gradle.testing.jacoco.tasks.JacocoReport
 
 plugins {
-    id("com.android.application")
-    id("com.google.devtools.ksp")
-    id("com.google.dagger.hilt.android")
-    id("org.jetbrains.kotlin.plugin.compose")
-    id("androidx.room")
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.ksp)
+    alias(libs.plugins.hilt)
+    // Lenswave's own UI is built from Views. The Compose toolchain exists only because Proton
+    // Core's presentation-compose artifact needs an AppTheme binding (see LenswaveTheme).
+    alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.androidx.room)
     jacoco
 }
 
-val lenswaveVersionProperties = Properties().apply {
-    rootProject.file("version.properties").inputStream().use { input ->
-        load(input)
-    }
-}
-val lenswaveVersionName = requireNotNull(lenswaveVersionProperties.getProperty("VERSION_NAME")) {
-    "VERSION_NAME must be set in version.properties"
-}
-val lenswaveVersionCode = requireNotNull(lenswaveVersionProperties.getProperty("VERSION_CODE")) {
-    "VERSION_CODE must be set in version.properties"
-}.toInt()
-
-require(Regex("""\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?""").matches(lenswaveVersionName)) {
-    "VERSION_NAME must use semantic versioning"
-}
-require(lenswaveVersionCode > 0) {
-    "VERSION_CODE must be positive"
-}
+// Validated once in the root build script from version.properties.
+val lenswaveVersionName = rootProject.extra["lenswaveVersionName"] as String
+val lenswaveVersionCode = rootProject.extra["lenswaveVersionCode"] as Int
 
 val releaseStoreFile = providers.environmentVariable("LENSWAVE_SIGNING_STORE_FILE").orNull
 val releaseStorePassword = providers.environmentVariable("LENSWAVE_SIGNING_STORE_PASSWORD").orNull
@@ -40,6 +26,10 @@ val hasReleaseSigning = listOf(
     releaseKeyAlias,
     releaseKeyPassword,
 ).all { !it.isNullOrBlank() }
+
+// Build knobs used by CI (see .github/workflows/android.yml):
+//  -Plenswave.instrumentationBuildType=minified  runs device tests against the R8-optimised build
+//  -Plenswave.includeX86TestAbi=true             adds an x86_64 split for the emulator
 val instrumentationBuildType = providers.gradleProperty("lenswave.instrumentationBuildType")
     .orElse("debug")
     .get()
@@ -63,7 +53,6 @@ android {
         versionCode = lenswaveVersionCode
         versionName = lenswaveVersionName
         testInstrumentationRunner = "com.bownee.lenswave.LenswaveTestRunner"
-
     }
 
     signingConfigs {
@@ -103,6 +92,8 @@ android {
         }
     }
 
+    // Only 64-bit ARM ships: minSdk 29 devices are 64-bit and the Proton Drive SDK bundles a
+    // Rust native library per ABI, so every extra split adds tens of megabytes.
     splits {
         abi {
             isEnable = true
@@ -130,17 +121,16 @@ android {
     testOptions {
         execution = "ANDROIDX_TEST_ORCHESTRATOR"
         testBuildType = instrumentationBuildType
-        managedDevices {
-            localDevices {
-                create("pixel2Api29") {
-                    device = "Pixel 2"
-                    apiLevel = 29
-                    systemImageSource = "aosp"
-                    require64Bit = true
-                    testedAbi = "x86_64"
-                }
-            }
-        }
+    }
+
+    lint {
+        // lint.xml decides which checks are errors; this block decides what CI does with them.
+        abortOnError = true
+        warningsAsErrors = true
+        checkDependencies = false
+        sarifReport = true
+        htmlReport = true
+        xmlReport = false
     }
 }
 
@@ -155,62 +145,31 @@ configurations.configureEach {
 }
 
 dependencies {
-    androidTestImplementation("androidx.test:core:1.7.0")
-    androidTestImplementation("androidx.test.ext:junit:1.3.0")
-    androidTestImplementation("androidx.test:runner:1.7.0")
-    androidTestUtil("androidx.test:orchestrator:1.6.1")
+    implementation(libs.androidx.activity)
+    implementation(libs.androidx.compose.material3)
+    implementation(libs.androidx.exifinterface)
+    implementation(libs.androidx.fragment)
+    implementation(libs.androidx.lifecycle.viewmodel)
+    implementation(libs.androidx.media3.exoplayer)
+    implementation(libs.androidx.media3.ui)
+    implementation(libs.androidx.room.runtime)
+    implementation(libs.androidx.work.runtime)
+    implementation(libs.google.material)
+    implementation(libs.hilt.android)
+    implementation(libs.sqlcipher)
+    ksp(libs.hilt.compiler)
+    ksp(libs.androidx.room.compiler)
 
-    implementation("androidx.activity:activity:1.13.0")
-    implementation("androidx.compose.material3:material3:1.3.1")
-    implementation("androidx.exifinterface:exifinterface:1.4.1")
-    implementation("androidx.fragment:fragment:1.9.0")
-    implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.10.0")
-    implementation("androidx.media3:media3-exoplayer:1.11.0")
-    implementation("androidx.media3:media3-ui:1.11.0")
-    implementation("androidx.work:work-runtime-ktx:2.10.0")
-    implementation("androidx.room:room-runtime:2.7.2")
-    implementation("net.zetetic:sqlcipher-android:4.6.1")
-    implementation("com.google.android.material:material:1.12.0")
-    implementation("com.google.dagger:hilt-android:2.60.1")
-    ksp("com.google.dagger:hilt-android-compiler:2.60.1")
-    ksp("androidx.room:room-compiler:2.7.2")
+    implementation(libs.proton.drive.sdk)
+    implementation(libs.bundles.proton.core)
 
-    implementation("me.proton.drive:sdk:0.24.0-rust")
+    testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
 
-    val protonCoreVersion = "36.7.0"
-    implementation("me.proton.core:account:$protonCoreVersion")
-    implementation("me.proton.core:account-manager:$protonCoreVersion")
-    implementation("me.proton.core:account-recovery:$protonCoreVersion")
-    implementation("me.proton.core:auth:$protonCoreVersion")
-    implementation("me.proton.core:auth-fido:$protonCoreVersion")
-    implementation("me.proton.core:biometric:$protonCoreVersion")
-    implementation("me.proton.core:challenge:$protonCoreVersion")
-    implementation("me.proton.core:country:$protonCoreVersion")
-    implementation("me.proton.core:crypto:$protonCoreVersion")
-    implementation("me.proton.core:crypto-validator:$protonCoreVersion")
-    implementation("me.proton.core:data-room:$protonCoreVersion")
-    implementation("me.proton.core:domain:$protonCoreVersion")
-    implementation("me.proton.core:event-manager:$protonCoreVersion")
-    implementation("me.proton.core:feature-flag:$protonCoreVersion")
-    implementation("me.proton.core:human-verification:$protonCoreVersion")
-    implementation("me.proton.core:key:$protonCoreVersion")
-    implementation("me.proton.core:key-transparency:$protonCoreVersion")
-    implementation("me.proton.core:network:$protonCoreVersion")
-    implementation("me.proton.core:notification:$protonCoreVersion")
-    implementation("me.proton.core:observability:$protonCoreVersion")
-    implementation("me.proton.core:pass-validator:$protonCoreVersion")
-    implementation("me.proton.core:payment:$protonCoreVersion")
-    implementation("me.proton.core:plan:$protonCoreVersion")
-    implementation("me.proton.core:presentation-compose:$protonCoreVersion")
-    implementation("me.proton.core:proguard-rules:$protonCoreVersion")
-    implementation("me.proton.core:push:$protonCoreVersion")
-    implementation("me.proton.core:telemetry:$protonCoreVersion")
-    implementation("me.proton.core:user:$protonCoreVersion")
-    implementation("me.proton.core:user-settings:$protonCoreVersion")
-    implementation("me.proton.core:util-android-dagger:$protonCoreVersion")
-    implementation("me.proton.core:user-recovery:$protonCoreVersion")
-
-    testImplementation("junit:junit:4.13.2")
+    androidTestImplementation(libs.androidx.test.core)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestUtil(libs.androidx.test.orchestrator)
 }
 
 dependencyLocking {
@@ -218,9 +177,12 @@ dependencyLocking {
 }
 
 jacoco {
-    toolVersion = "0.8.13"
+    toolVersion = libs.versions.jacoco.get()
 }
 
+// AGP 9 compiles Kotlin with its built-in compiler and writes the classes to this intermediate
+// directory. The coverage tasks assert that it is non-empty so a future AGP change cannot make
+// the gate pass vacuously.
 val authoredDebugClasses = files(
     fileTree(layout.buildDirectory.dir("intermediates/built_in_kotlinc/debug/compileDebugKotlin/classes")) {
         include("com/bownee/lenswave/**")
@@ -236,8 +198,20 @@ val debugCoverageData = fileTree(layout.buildDirectory) {
     include("outputs/unit_test_code_coverage/debugUnitTest/testDebugUnitTest.exec")
 }
 
+fun Task.requireCoverageInputs() {
+    doFirst {
+        check(!authoredDebugClasses.asFileTree.isEmpty) {
+            "No compiled app classes found for coverage; the AGP intermediate class directory may have moved."
+        }
+        check(!debugCoverageData.isEmpty) {
+            "No JaCoCo execution data found; unit tests must run with coverage enabled."
+        }
+    }
+}
+
 tasks.register<JacocoReport>("jacocoDebugUnitTestReport") {
     dependsOn("testDebugUnitTest")
+    requireCoverageInputs()
     reports {
         xml.required.set(true)
         html.required.set(true)
@@ -250,28 +224,34 @@ tasks.register<JacocoReport>("jacocoDebugUnitTestReport") {
 
 tasks.register<JacocoCoverageVerification>("jacocoDebugCoverageVerification") {
     dependsOn("jacocoDebugUnitTestReport")
+    requireCoverageInputs()
     classDirectories.setFrom(authoredDebugClasses)
     sourceDirectories.setFrom(files("src/main/kotlin"))
     executionData.setFrom(debugCoverageData)
     violationRules {
-        // Full app-authored Kotlin baseline; generated Room/Proton classes are excluded above.
+        // Whole-app ratchet. Raise these when coverage grows; never lower them to make CI pass.
         rule {
             limit {
                 counter = "LINE"
                 value = "COVEREDRATIO"
-                minimum = "0.11".toBigDecimal()
+                minimum = "0.15".toBigDecimal()
             }
             limit {
                 counter = "BRANCH"
                 value = "COVEREDRATIO"
-                minimum = "0.11".toBigDecimal()
+                minimum = "0.16".toBigDecimal()
             }
         }
+        // Pure decision objects carry the app's testable logic and must stay close to fully covered.
         rule {
             element = "CLASS"
             includes = listOf(
+                "com.bownee.lenswave.*Policy",
                 "com.bownee.lenswave.proton.ProtonSessionGuard",
                 "com.bownee.lenswave.proton.ProtonAccountTransitionCoordinator",
+                "com.bownee.lenswave.proton.ProtonSnapshotCoordinator",
+                "com.bownee.lenswave.proton.ProtonThumbnailQueue",
+                "com.bownee.lenswave.gallery.GalleryUiStateFactory",
             )
             limit {
                 counter = "LINE"

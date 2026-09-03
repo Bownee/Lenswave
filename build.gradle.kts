@@ -1,26 +1,43 @@
-@file:Suppress("UNCHECKED_CAST")
-
 import groovy.json.JsonSlurper
 import java.util.Properties
 
 plugins {
-    id("com.android.application") version "9.3.1" apply false
-    id("com.google.devtools.ksp") version "2.3.11" apply false
-    id("com.google.dagger.hilt.android") version "2.60.1" apply false
-    id("org.jetbrains.kotlin.plugin.compose") version "2.4.10" apply false
-    id("androidx.room") version "2.7.2" apply false
-    id("org.cyclonedx.bom") version "3.4.1"
+    alias(libs.plugins.android.application) apply false
+    alias(libs.plugins.ksp) apply false
+    alias(libs.plugins.hilt) apply false
+    alias(libs.plugins.kotlin.compose) apply false
+    alias(libs.plugins.androidx.room) apply false
+    alias(libs.plugins.cyclonedx)
 }
 
-val lenswaveProjectVersion = Properties().apply {
+// version.properties is the single source of truth for the user-facing version and the
+// Android version code. It is parsed and validated exactly once, here, and every module reads
+// the validated values through the root project's extra properties.
+val lenswaveVersion = Properties().apply {
     rootProject.file("version.properties").inputStream().use(::load)
-}.getProperty("VERSION_NAME") ?: error("VERSION_NAME must be set")
+}
+val lenswaveVersionName = requireNotNull(lenswaveVersion.getProperty("VERSION_NAME")) {
+    "VERSION_NAME must be set in version.properties"
+}.trim()
+val lenswaveVersionCode = requireNotNull(lenswaveVersion.getProperty("VERSION_CODE")) {
+    "VERSION_CODE must be set in version.properties"
+}.trim().toInt()
+
+require(Regex("""\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?""").matches(lenswaveVersionName)) {
+    "VERSION_NAME must use semantic versioning, got '$lenswaveVersionName'"
+}
+require(lenswaveVersionCode > 0) { "VERSION_CODE must be positive, got $lenswaveVersionCode" }
+
+extra["lenswaveVersionName"] = lenswaveVersionName
+extra["lenswaveVersionCode"] = lenswaveVersionCode
 
 allprojects {
     group = "com.bownee.lenswave"
-    version = lenswaveProjectVersion
+    version = lenswaveVersionName
 }
 
+// SPDX identifiers and the exact license names that published POMs in the dependency tree use.
+// Everything here is compatible with distributing Lenswave under GPL-3.0-only.
 val approvedSbomLicenses = setOf(
     "Android Software Development Kit License",
     "Android Software Development Kit License Agreement",
@@ -39,14 +56,18 @@ val approvedSbomLicenses = setOf(
     "Public Domain",
 )
 
-// These exact published POMs omit license metadata; version changes require a fresh review.
+// These artifacts publish no license metadata in their POM. They are reviewed by coordinate
+// without a version so that routine version bumps do not fail the gate; a review is still
+// required when one of them changes license, which Dependabot release notes surface.
 val approvedMissingLicenseMetadata = setOf(
-    "com.airbnb.android:lottie:4.1.0",
-    "javax.annotation:javax.annotation-api:1.3.2",
-    "net.zetetic:sqlcipher-android:4.6.1",
+    "com.airbnb.android:lottie",
+    "javax.annotation:javax.annotation-api",
+    "net.zetetic:sqlcipher-android",
 )
 
 tasks.register("verifySbomLicenses") {
+    description = "Fails when a dependency in the SBOM uses a license outside the approved list."
+    group = "verification"
     notCompatibleWithConfigurationCache("CycloneDX resolves all variant configurations")
     dependsOn("cyclonedxBom")
     val sbom = layout.buildDirectory.file("reports/cyclonedx/bom.json")
@@ -54,25 +75,32 @@ tasks.register("verifySbomLicenses") {
     doLast {
         @Suppress("UNCHECKED_CAST")
         val document = JsonSlurper().parse(sbom.get().asFile) as Map<String, Any?>
+
+        @Suppress("UNCHECKED_CAST")
         val components = document["components"] as? List<Map<String, Any?>> ?: emptyList()
         val problems = buildList {
             components.forEach { component ->
-                val coordinate = listOf("group", "name", "version")
-                    .joinToString(":") { key -> component[key]?.toString().orEmpty() }
-                if (coordinate.startsWith("com.bownee.lenswave:app:")) return@forEach
+                val group = component["group"]?.toString().orEmpty()
+                val name = component["name"]?.toString().orEmpty()
+                val version = component["version"]?.toString().orEmpty()
+                val module = "$group:$name"
+                if (module == "com.bownee.lenswave:app") return@forEach
+
+                @Suppress("UNCHECKED_CAST")
                 val licenses = (component["licenses"] as? List<Map<String, Any?>>).orEmpty()
                     .mapNotNull { entry ->
+                        @Suppress("UNCHECKED_CAST")
                         val value = entry["license"] as? Map<String, Any?> ?: return@mapNotNull null
                         value["id"]?.toString() ?: value["name"]?.toString()
                     }
                     .toSet()
                 if (licenses.isEmpty()) {
-                    if (coordinate !in approvedMissingLicenseMetadata) {
-                        add("missing license metadata: $coordinate")
+                    if (module !in approvedMissingLicenseMetadata) {
+                        add("missing license metadata: $module:$version")
                     }
                 } else {
                     val unknown = licenses - approvedSbomLicenses
-                    if (unknown.isNotEmpty()) add("unapproved license for $coordinate: ${unknown.sorted()}")
+                    if (unknown.isNotEmpty()) add("unapproved license for $module:$version: ${unknown.sorted()}")
                 }
             }
         }

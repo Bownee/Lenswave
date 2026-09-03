@@ -15,113 +15,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
+  verify:
     name: Test, lint, and build all runtime modes
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-
-    steps:
-      - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Set up JDK 21.0.8
-        uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
-        with:
-          distribution: temurin
-          java-version: "21.0.8+9.0.LTS"
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5
-
-      - name: Install exact Android SDK tools
-        shell: bash
-        run: |
-          set +o pipefail
-          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
-            "platform-tools" "platforms;android-36" "build-tools;36.0.0" >/dev/null
-          set -o pipefail
-
-      - name: Read app version
-        id: app_version
-        shell: bash
-        run: |
-          version_name="$(grep '^VERSION_NAME=' version.properties | cut -d= -f2-)"
-          version_code="$(grep '^VERSION_CODE=' version.properties | cut -d= -f2-)"
-          test -n "$version_name"
-          test -n "$version_code"
-          echo "version_name=$version_name" >> "$GITHUB_OUTPUT"
-
-      - name: Test, lint, inventory, and assemble debug plus optimized variants
-        run: |
-          chmod +x gradlew
-          ./gradlew \
-            testDebugUnitTest \
-            jacocoDebugCoverageVerification \
-            assembleDebug assembleRelease assembleMinified \
-            verifySbomLicenses \
-            --no-configuration-cache \
-            --stacktrace
-          # AGP 9.3/Kotlin FIR lint analysis can race when debug and release UAST run concurrently.
-          ./gradlew lintDebug lintRelease \
-            --max-workers=1 \
-            --no-configuration-cache \
-            --stacktrace
-
-      - name: Verify minified instrumentation contract
-        shell: bash
-        run: |
-          seeds="app/build/outputs/mapping/minified/seeds.txt"
-          mapping="app/build/outputs/mapping/minified/mapping.txt"
-          test -s "$seeds"
-          test -s "$mapping"
-          grep -Fq \
-            'com.bownee.lenswave.LenswaveApplication: com.bownee.lenswave.LenswaveApplication$Companion Companion' \
-            "$seeds"
-          grep -Fq \
-            'com.bownee.lenswave.LenswaveApplication$Companion: void disableAccountSessionStartupForTests$app()' \
-            "$seeds"
-          for callback in \
-            onResponse onCallback onRead onWrite onSeek onYield onProgress \
-            onSendHttpRequest onHttpResponseRead onAccountRequest onRecordMetric \
-            onFeatureEnabled onSha1 onDispose; do
-            grep -Eq \
-              "me.proton.drive.sdk.internal.ProtonDriveSdkNativeClient: .* ${callback}\\(" \
-              "$seeds"
-          done
-          grep -Fq 'kotlin.coroutines.Continuation' "$seeds"
-          grep -Eq '^retrofit2.Response -> ' "$mapping"
-
-      - name: Prepare APK and verification artifacts
-        shell: bash
-        run: |
-          mkdir -p dist reports
-          maximum_bytes=$((65 * 1024 * 1024))
-          for abi in arm64-v8a; do
-            release_apk="app/build/outputs/apk/release/app-$abi-release-unsigned.apk"
-            release_bytes="$(stat -c%s "$release_apk")"
-            printf '%s %s bytes\n' "$abi" "$release_bytes" | tee -a reports/apk-sizes.txt
-            test "$release_bytes" -le "$maximum_bytes" || {
-              echo "$abi release APK exceeds the 65 MiB budget." >&2
-              exit 1
-            }
-            cp \
-              "app/build/outputs/apk/debug/app-$abi-debug.apk" \
-              "dist/Lenswave-v${{ steps.app_version.outputs.version_name }}-$abi-debug.apk"
-          done
-          cp build/reports/cyclonedx/bom.* reports/
-          cp -r app/build/reports/lint-results-*.html reports/ || true
-          cp -r app/build/reports/jacoco reports/coverage
-          cp -r app/build/test-results reports/unit-test-results
-
-      - name: Upload build evidence
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: lenswave-ci-${{ github.sha }}
-          path: |
-            dist/*.apk
-            reports/**
-          if-no-files-found: error
-          retention-days: 30
+    uses: ./.github/workflows/verify.yml
+    with:
+      assemble-debug: true
+      upload-name: lenswave-ci-${{ github.sha }}
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
+      security-events: write
 
   instrumentation:
     name: API 29 device contracts
@@ -131,31 +35,18 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Set up JDK 21.0.8
-        uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
         with:
-          distribution: temurin
-          java-version: "21.0.8+9.0.LTS"
+          persist-credentials: false
 
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5
-
-      - name: Install exact Android SDK tools
-        shell: bash
-        run: |
-          set +o pipefail
-          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
-            "platform-tools" "platforms;android-36" "build-tools;36.0.0" >/dev/null
-          set -o pipefail
+      - name: Set up Android build environment
+        uses: ./.github/actions/setup-android
 
       - name: Free emulator disk space
         shell: bash
         run: |
-          test "$ANDROID_SDK_ROOT" = "/usr/local/lib/android/sdk"
-          sudo rm -rf -- \
-            /usr/local/lib/android/sdk/ndk \
-            /usr/local/lib/android/sdk/cmake
+          # The NDK and CMake are not needed and free several gigabytes for the system image.
+          test -d "$ANDROID_SDK_ROOT"
+          sudo rm -rf -- "$ANDROID_SDK_ROOT/ndk" "$ANDROID_SDK_ROOT/cmake"
           df -h /
 
       - name: Enable KVM
@@ -164,6 +55,29 @@ jobs:
             | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
+
+      - name: Cache AVD
+        id: avd-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.android/avd/*
+            ~/.android/adb*
+          key: avd-api29-x86_64-pixel2-v1
+
+      - name: Create AVD snapshot
+        if: steps.avd-cache.outputs.cache-hit != 'true'
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: 29
+          arch: x86_64
+          target: default
+          profile: pixel_2
+          cores: 2
+          disk-size: 2G
+          force-avd-creation: false
+          emulator-options: -no-window -gpu software -noaudio -no-boot-anim -camera-back none
+          script: echo "Generated AVD snapshot for caching."
 
       - name: Run minimum-SDK device tests
         uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
@@ -174,8 +88,9 @@ jobs:
           profile: pixel_2
           cores: 2
           disk-size: 2G
+          force-avd-creation: false
           disable-animations: true
-          emulator-options: -no-window -gpu software -no-snapshot -noaudio -no-boot-anim
+          emulator-options: -no-window -gpu software -no-snapshot-save -noaudio -no-boot-anim -camera-back none
           script: |
             chmod +x gradlew
             ./gradlew connectedDebugAndroidTest -Plenswave.includeX86TestAbi=true --stacktrace

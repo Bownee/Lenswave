@@ -30,3 +30,6 @@ dist/
 # Operating-system files
 .DS_Store
 Thumbs.db
+
+# Codex PR validation scratch checkout
+.codex-pr-validation/
