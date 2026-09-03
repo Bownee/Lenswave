@@ -10,9 +10,6 @@ internal data class GalleryFastScrollTarget(
 )
 
 internal object GalleryFastScrollLayoutPolicy {
-    fun edgePadding(topInset: Int, bottomInset: Int, margin: Int): Int =
-        max(topInset, bottomInset) + margin
-
     fun shouldShow(canScrollBackward: Boolean, canScrollForward: Boolean): Boolean =
         canScrollBackward || canScrollForward
 
@@ -51,13 +48,7 @@ internal object GalleryFastScrollLayoutPolicy {
         return GalleryFastScrollTarget(position, offsetFraction)
     }
 
-    fun footerHeight(
-        navigationVisible: Boolean,
-        bottomInset: Int,
-        navigationClearance: Int,
-        baseClearance: Int,
-    ): Int {
-        val requiredClearance = if (navigationVisible) navigationClearance else baseClearance
-        return requiredClearance + bottomInset
-    }
+    /** Space below the last row so it clears the navigation bar and the selection bar when shown. */
+    fun footerHeight(selectionBarVisible: Boolean, bottomInset: Int, selectionClearance: Int, baseClearance: Int): Int =
+        max(if (selectionBarVisible) selectionClearance else baseClearance, 0) + bottomInset
 }

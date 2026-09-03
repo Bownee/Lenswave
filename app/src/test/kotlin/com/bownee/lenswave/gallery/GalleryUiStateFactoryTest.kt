@@ -120,11 +120,11 @@ class GalleryUiStateFactoryTest {
         )
 
         assertNull(state.emptyState)
-        assertEquals(listOf("media-types", "trash"), state.librarySectionKeys())
+        assertEquals(listOf("trash"), state.librarySectionKeys())
     }
 
     @Test
-    fun `library lists media types and trash when connected`() {
+    fun `library lists trash and no media types when connected`() {
         val state = factory.create(
             GalleryUiInputs(
                 destination = GalleryDestination.Library,
@@ -134,10 +134,7 @@ class GalleryUiStateFactoryTest {
         )
 
         val sections = (state.content as GalleryContent.Library).sections.associateBy { it.key }
-        assertEquals(
-            ProtonMediaTag.entries.map { GalleryDestination.Tag(it) },
-            sections.getValue("media-types").openedDestinations(),
-        )
+        assertFalse(sections.containsKey("media-types"))
         assertEquals(listOf(GalleryDestination.Trash), sections.getValue("trash").openedDestinations())
     }
 
@@ -180,7 +177,7 @@ class GalleryUiStateFactoryTest {
         val titles = listOf(
             GalleryDestination.Timeline to R.string.photos.toString(),
             GalleryDestination.Tag(ProtonMediaTag.VIDEOS) to R.string.proton_tag_videos.toString(),
-            GalleryDestination.Library to R.string.library.toString(),
+            GalleryDestination.Library to R.string.albums.toString(),
             GalleryDestination.AlbumPhotos(album) to "Trip",
             GalleryDestination.Trash to R.string.trash.toString(),
         )

@@ -2,13 +2,20 @@ package com.bownee.lenswave.gallery
 
 enum class GalleryTab {
     PHOTOS,
-    LIBRARY,
+    ALBUMS,
 }
 
+/**
+ * How destinations map onto the two top-level tabs. The Photos tab shows the timeline or one
+ * media-type filter of it; the Albums tab lists albums and Trash and opens them as sub-pages.
+ */
 object GalleryNavigationPolicy {
     fun tab(destination: GalleryDestination): GalleryTab = when (destination) {
-        GalleryDestination.Timeline -> GalleryTab.PHOTOS
-        else -> GalleryTab.LIBRARY
+        GalleryDestination.Timeline,
+        is GalleryDestination.Tag,
+        -> GalleryTab.PHOTOS
+
+        else -> GalleryTab.ALBUMS
     }
 
     /** The screen Back returns to, or null when the destination is a tab root. */
@@ -17,16 +24,29 @@ object GalleryNavigationPolicy {
         GalleryDestination.Library,
         -> null
 
+        is GalleryDestination.Tag -> GalleryDestination.Timeline
         else -> GalleryDestination.Library
     }
+
+    /** Sub-pages of the Albums tab replace the tab switch with a back button and a title. */
+    fun showsBack(destination: GalleryDestination): Boolean = when (destination) {
+        is GalleryDestination.AlbumPhotos,
+        GalleryDestination.Trash,
+        -> true
+
+        else -> false
+    }
+
+    /** Media-type filter chips belong to the Photos tab only. */
+    fun showsFilters(destination: GalleryDestination): Boolean = tab(destination) == GalleryTab.PHOTOS
 
     /** The tab root remembered across app restarts instead of a deep collection. */
     fun root(destination: GalleryDestination): GalleryDestination = when (tab(destination)) {
         GalleryTab.PHOTOS -> GalleryDestination.Timeline
-        GalleryTab.LIBRARY -> GalleryDestination.Library
+        GalleryTab.ALBUMS -> GalleryDestination.Library
     }
 
-    /** Where a destination lands once the account is gone: collections return to the Library. */
+    /** Where a destination lands once the account is gone: collections return to their tab root. */
     fun withoutAccount(destination: GalleryDestination): GalleryDestination =
         parent(destination) ?: destination
 }

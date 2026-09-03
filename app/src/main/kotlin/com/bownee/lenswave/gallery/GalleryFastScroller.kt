@@ -38,7 +38,8 @@ internal class GalleryFastScroller(
         ),
     ).mutate()
     private val handleBounds = Rect()
-    private var edgeInset = 0
+    private var topInset = 0
+    private var bottomInset = 0
     private var pointerOffset = 0f
     private val hideHandle = Runnable {
         if (isDragging) return@Runnable
@@ -62,8 +63,10 @@ internal class GalleryFastScroller(
 
     var interactionListener: ((Boolean) -> Unit)? = null
 
-    fun setEdgeInset(inset: Int) {
-        edgeInset = inset.coerceAtLeast(0)
+    /** The track runs from [top] below the list's top edge to [bottom] above its bottom edge. */
+    fun setEdgeInsets(top: Int, bottom: Int) {
+        topInset = top.coerceAtLeast(0)
+        bottomInset = bottom.coerceAtLeast(0)
         listView.invalidate()
     }
 
@@ -187,9 +190,9 @@ internal class GalleryFastScroller(
         }
     }
 
-    private fun trackStart(): Int = edgeInset
+    private fun trackStart(): Int = topInset
 
-    private fun trackEnd(): Int = (listView.height - edgeInset).coerceAtLeast(trackStart())
+    private fun trackEnd(): Int = (listView.height - bottomInset).coerceAtLeast(trackStart())
 
     private fun isRtl(): Boolean =
         listView.layoutDirection == View.LAYOUT_DIRECTION_RTL

@@ -8,14 +8,12 @@ import com.bownee.lenswave.dp
 import com.bownee.lenswave.R
 import android.app.Activity
 import android.os.Bundle
-import android.view.View
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.graphics.Insets
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
-import androidx.core.view.isVisible
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModelProvider
@@ -75,7 +73,6 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
     private val root get() = screen.root
     private val list get() = screen.list
     private val adapter get() = screen.adapter
-    private val tabBar get() = screen.tabBar
     private val selectionBar get() = screen.selectionBar
     private lateinit var deletionCoordinator: GalleryDeletionCoordinator
     private lateinit var authCoordinator: GalleryAuthCoordinator
@@ -186,12 +183,13 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
                 onBack = ::navigateUp,
                 onSettings = ::showSettingsMenu,
                 onDeleteAllTrash = ::confirmDeleteAllTrashPhotos,
-                onPhotosTab = ::openPhotosTab,
-                onLibraryTab = ::openLibrary,
+                onTabSelected = ::selectTab,
+                onFilterSelected = ::selectFilter,
                 onDeleteSelection = ::deleteSelectedPhotos,
             ),
         )
         setContentView(screen.root)
+        screen.onHeaderHeightChanged = { updateFastScrollTrack() }
 
         applySystemInsets()
         updateNavigationControls()
@@ -269,23 +267,23 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
         viewModel.openAlbum(album)
     }
 
-    /** Tapping the tab that is already showing its root page scrolls that page back to the top. */
-    private fun openPhotosTab() {
-        if (currentUiState.destination == GalleryDestination.Timeline) {
+    /** Tapping the tab that is already showing scrolls it back to the top; otherwise its root opens. */
+    private fun selectTab(tab: GalleryTab) {
+        val destination = currentUiState.destination
+        if (GalleryNavigationPolicy.tab(destination) == tab) {
             screen.scrollToTop()
             return
         }
-        clearSelectionForNavigation()
-        viewModel.openPhotosTab()
+        selectDestination(if (tab == GalleryTab.PHOTOS) GalleryDestination.Timeline else GalleryDestination.Library)
     }
 
-    private fun openLibrary() {
-        if (currentUiState.destination == GalleryDestination.Library) {
+    /** A filter chip switches the Photos tab to that media type; the active chip scrolls to the top. */
+    private fun selectFilter(destination: GalleryDestination) {
+        if (currentUiState.destination == destination) {
             screen.scrollToTop()
             return
         }
-        clearSelectionForNavigation()
-        viewModel.openLibrary()
+        selectDestination(destination)
     }
 
     private fun navigateUp() {
@@ -361,27 +359,18 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
     private fun updateNavigationControls() {
         val destination = currentUiState.destination
         val selecting = adapter.selectedPhotos().isNotEmpty()
-        screen.renderNavigation(
-            title = currentUiState.title,
-            tab = GalleryNavigationPolicy.tab(destination),
-            showBack = GalleryNavigationPolicy.parent(destination) != null,
-        )
-        // Only the long photo timeline gets the draggable handle; other pages use the platform scrollbar.
-        list.setFastScrollHandleEnabled(destination == GalleryDestination.Timeline)
-        updateNavigationVisibility(selecting)
+        screen.renderNavigation(destination, currentUiState.title)
+        // Every photo grid gets the draggable handle; the album list uses the platform scrollbar.
+        list.setFastScrollHandleEnabled(currentUiState.content is GalleryContent.Photos)
+        updateGalleryFooterHeight(selecting)
     }
 
-    private fun updateNavigationVisibility(selecting: Boolean) {
-        tabBar.visibility = if (selecting) View.GONE else View.VISIBLE
-        updateGalleryFooterHeight()
-    }
-
-    private fun updateGalleryFooterHeight() {
+    private fun updateGalleryFooterHeight(selecting: Boolean) {
         screen.setFooterHeight(
             GalleryFastScrollLayoutPolicy.footerHeight(
-                navigationVisible = tabBar.isVisible,
+                selectionBarVisible = selecting,
                 bottomInset = safeBottom,
-                navigationClearance = dp(GalleryScreen.TAB_BAR_HEIGHT_DP + 14),
+                selectionClearance = dp(GalleryScreen.SELECTION_BAR_HEIGHT_DP + 20),
                 baseClearance = dp(12),
             ),
         )
@@ -418,18 +407,18 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
                 WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
             )
             safeBottom = safeArea.bottom
-            val fastScrollEdgePadding = GalleryFastScrollLayoutPolicy.edgePadding(
-                topInset = safeArea.top,
-                bottomInset = safeArea.bottom,
-                margin = resources.getDimensionPixelSize(R.dimen.gallery_fast_scroll_edge_margin),
-            )
-            list.setFastScrollEdgeInset(fastScrollEdgePadding)
             screen.applySafeArea(safeArea)
-            updateNavigationVisibility(adapter.selectedPhotos().isNotEmpty())
-            tabBar.applyBottomOverlayInsets(safeArea)
+            updateFastScrollTrack()
+            updateGalleryFooterHeight(adapter.selectedPhotos().isNotEmpty())
             selectionBar.applyBottomOverlayInsets(safeArea)
             insets
         }
         ViewCompat.requestApplyInsets(root)
+    }
+
+    /** The handle travels between the pinned header and the navigation bar with the same gap at both ends. */
+    private fun updateFastScrollTrack() {
+        val gap = resources.getDimensionPixelSize(R.dimen.gallery_fast_scroll_edge_margin)
+        list.setFastScrollEdgeInsets(top = screen.headerHeight + gap, bottom = safeBottom + gap)
     }
 }

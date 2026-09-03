@@ -1,8 +1,5 @@
 package com.bownee.lenswave.gallery
 
-import com.bownee.lenswave.dp
-import com.bownee.lenswave.UiStyle
-import com.bownee.lenswave.R
 import android.content.Context
 import android.content.res.ColorStateList
 import android.graphics.Color
@@ -13,27 +10,29 @@ import android.view.ViewGroup
 import android.widget.AbsListView
 import android.widget.Button
 import android.widget.FrameLayout
+import android.widget.HorizontalScrollView
 import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.annotation.DrawableRes
 import androidx.core.graphics.Insets
 import androidx.core.graphics.drawable.toDrawable
 import androidx.core.view.ViewCompat
-import androidx.core.widget.TextViewCompat
-import com.bownee.lenswave.gallery.GalleryAsset
-import com.bownee.lenswave.gallery.GalleryListAdapter
-import com.bownee.lenswave.gallery.GalleryListView
-import com.bownee.lenswave.gallery.GalleryScrollPosition
-import com.bownee.lenswave.gallery.GalleryStickyDateController
-import com.bownee.lenswave.gallery.GalleryTab
-import com.bownee.lenswave.gallery.GalleryThumbnailLoader
-import com.bownee.lenswave.gallery.LibraryAction
+import androidx.core.view.isNotEmpty
+import com.bownee.lenswave.R
+import com.bownee.lenswave.UiStyle
+import com.bownee.lenswave.dp
 import com.bownee.lenswave.proton.ProtonAlbum
-import com.bownee.lenswave.gallery.ProtonThumbnailImageSource
+import com.bownee.lenswave.proton.ProtonMediaTag
 import kotlinx.coroutines.CoroutineScope
 import me.proton.core.domain.entity.UserId
 
+/**
+ * The gallery's view tree: a pinned header with the Photos | Albums switch (or a back button and
+ * title on sub-pages), the media-type filter chips under it on the Photos tab, the list below,
+ * and the floating selection bar.
+ */
 internal class GalleryScreen(
     private val activity: GalleryActivity,
     scope: CoroutineScope,
@@ -42,52 +41,39 @@ internal class GalleryScreen(
     private val actions: Actions,
 ) {
     val root = FrameLayout(activity).apply { setBackgroundColor(UiStyle.background) }
-    private val pageTitle: TextView
-    private val status: TextView
     val list: GalleryListView
+    val adapter: GalleryListAdapter
+    val selectionBar: LinearLayout
+    val settingsButton: ImageButton
+
+    /** Height of the pinned header including the status-bar inset; the list starts below it. */
+    val headerHeight: Int get() = stickyHeader.height
+    var onHeaderHeightChanged: ((Int) -> Unit)? = null
+
+    private val stickyHeader: LinearLayout
+    private val titleRow: LinearLayout
+    private val backButton: ImageButton
+    private val pageTitle: TextView
+    private val tabSwitch: LinearLayout
+    private val photosTab: TabLabel
+    private val albumsTab: TabLabel
+    private val filterRow: HorizontalScrollView
+    private val filterChips: Map<GalleryDestination, FilterChip>
     private val galleryHeader: LinearLayout
     private val galleryFooter: View
+    private val status: TextView
+    private val trashDeleteAllButton: Button
     private val emptyPanel: LinearLayout
     private val emptyTitle: TextView
     private val emptyMessage: TextView
     private val emptyAction: Button
-    val adapter: GalleryListAdapter
     private val stickyDate: TextView
     private val stickyDateController: GalleryStickyDateController
-    val tabBar: LinearLayout
-    val selectionBar: LinearLayout
     private val selectionCount: TextView
     private val selectionDeleteButton: Button
-    val settingsButton: ImageButton
-    private val backButton: ImageButton
-    private val trashDeleteAllButton: Button
-    private val photosTab: TabButton
-    private val libraryTab: TabButton
-    private val titleRow: LinearLayout
-    /** Hosts the title row above the list on sub-pages so it stays put while the list scrolls. */
-    private val stickyHeader: FrameLayout
-    private var headerSticky = false
     private var safeArea = Insets.NONE
 
     init {
-        val header = buildGalleryHeader()
-        galleryHeader = header.container
-        pageTitle = header.pageTitle
-        status = header.status
-        settingsButton = header.settingsButton
-        backButton = header.backButton
-        trashDeleteAllButton = header.trashDeleteAllButton
-        emptyPanel = header.emptyPanel
-        emptyTitle = header.emptyTitle
-        emptyMessage = header.emptyMessage
-        emptyAction = header.emptyAction
-        titleRow = header.titleRow
-        stickyHeader = FrameLayout(activity).apply {
-            setBackgroundColor(UiStyle.withAlpha(UiStyle.background, 240))
-            visibility = View.GONE
-            isClickable = true
-        }
-
         adapter = GalleryListAdapter(
             context = activity,
             thumbnailLoader = GalleryThumbnailLoader(
@@ -101,6 +87,28 @@ internal class GalleryScreen(
             onLibraryAction = actions.onLibraryAction,
             onSelectionChanged = actions.onSelectionChanged,
         )
+
+        val header = buildStickyHeader()
+        stickyHeader = header.container
+        titleRow = header.titleRow
+        backButton = header.backButton
+        pageTitle = header.pageTitle
+        tabSwitch = header.tabSwitch
+        photosTab = header.photosTab
+        albumsTab = header.albumsTab
+        settingsButton = header.settingsButton
+        filterRow = header.filterRow
+        filterChips = header.filterChips
+
+        val listHeader = buildListHeader()
+        galleryHeader = listHeader.container
+        status = listHeader.status
+        trashDeleteAllButton = listHeader.trashDeleteAllButton
+        emptyPanel = listHeader.empty.container
+        emptyTitle = listHeader.empty.title
+        emptyMessage = listHeader.empty.message
+        emptyAction = listHeader.empty.action
+
         galleryFooter = View(activity).apply {
             layoutParams = AbsListView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0)
         }
@@ -115,17 +123,10 @@ internal class GalleryScreen(
             addFooterView(galleryFooter, null, false)
             adapter = this@GalleryScreen.adapter
         }
-        root.addView(
-            list,
-            FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT,
-            ),
-        )
+        root.addView(list, UiStyle.matchParentFrame())
 
-        stickyDate = text("", 14f, UiStyle.text).apply {
+        stickyDate = UiStyle.label(activity, sizeSp = 14f, medium = true).apply {
             gravity = Gravity.CENTER
-            typeface = UiStyle.medium
             setPadding(activity.dp(16), 0, activity.dp(16), 0)
             background = UiStyle.rounded(
                 activity,
@@ -145,6 +146,7 @@ internal class GalleryScreen(
             ),
         )
         stickyDateController = GalleryStickyDateController(list, adapter, stickyDate)
+
         root.addView(
             stickyHeader,
             FrameLayout.LayoutParams(
@@ -153,20 +155,21 @@ internal class GalleryScreen(
                 Gravity.TOP,
             ),
         )
-
-        val tabs = buildTabBar()
-        tabBar = tabs.container
-        photosTab = tabs.photos
-        libraryTab = tabs.library
-        root.addView(tabBar, bottomOverlayParams())
+        stickyHeader.addOnLayoutChangeListener { _, _, top, _, bottom, _, oldTop, _, oldBottom ->
+            if (bottom - top != oldBottom - oldTop) layoutBelowHeader()
+        }
 
         val selection = buildSelectionBar()
         selectionBar = selection.container.apply { visibility = View.GONE }
         selectionCount = selection.count
         selectionDeleteButton = selection.delete
-        root.addView(selectionBar, bottomOverlayParams())
+        root.addView(selectionBar, UiStyle.bottomOverlayParams(activity))
 
-        attachScrollListeners()
+        list.setOnFastScrollInteractionListener { active ->
+            adapter.setFastScrolling(active)
+            if (!active) stickyDateController.schedule(list.firstVisiblePosition)
+        }
+        stickyDateController.attach()
     }
 
     fun dispose() {
@@ -210,7 +213,7 @@ internal class GalleryScreen(
         trashDeleteAllButton.alpha = if (refreshing) 0.5f else 1f
     }
 
-    /** Sizes the list footer that keeps the last rows clear of the floating bottom bar. */
+    /** Sizes the list footer that keeps the last rows clear of the floating selection bar. */
     fun setFooterHeight(height: Int) {
         val params = galleryFooter.layoutParams ?: AbsListView.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
@@ -221,12 +224,22 @@ internal class GalleryScreen(
         galleryFooter.layoutParams = params
     }
 
-    fun renderNavigation(title: String, tab: GalleryTab, showBack: Boolean) {
-        if (title.isNotEmpty()) pageTitle.text = title
+    /**
+     * Sub-pages show a back button and their title; tab roots show the Photos | Albums switch,
+     * and the Photos tab adds the filter chips with the current destination highlighted.
+     */
+    fun renderNavigation(destination: GalleryDestination, title: String) {
+        val showBack = GalleryNavigationPolicy.showsBack(destination)
         backButton.visibility = if (showBack) View.VISIBLE else View.GONE
+        pageTitle.visibility = if (showBack) View.VISIBLE else View.GONE
+        tabSwitch.visibility = if (showBack) View.GONE else View.VISIBLE
+        if (showBack && title.isNotEmpty()) pageTitle.text = title
+        val tab = GalleryNavigationPolicy.tab(destination)
         photosTab.setSelectedTab(tab == GalleryTab.PHOTOS)
-        libraryTab.setSelectedTab(tab == GalleryTab.LIBRARY)
-        setHeaderSticky(showBack)
+        albumsTab.setSelectedTab(tab == GalleryTab.ALBUMS)
+        filterRow.visibility = if (GalleryNavigationPolicy.showsFilters(destination)) View.VISIBLE else View.GONE
+        filterChips.forEach { (target, chip) -> chip.setSelectedChip(target == destination) }
+        filterChips[destination]?.let(::revealChip)
     }
 
     /** Scrolls back to the top, jumping most of the way first so long lists do not crawl. */
@@ -235,48 +248,17 @@ internal class GalleryScreen(
         list.post { list.smoothScrollToPositionFromTop(0, 0) }
     }
 
-    /** Applies the window's safe area to the header, the list and the overlays that track them. */
+    /** Applies the window's safe area to the pinned header and everything laid out under it. */
     fun applySafeArea(insets: Insets) {
         safeArea = insets
-        layoutHeader()
-    }
-
-    private fun setHeaderSticky(sticky: Boolean) {
-        if (headerSticky == sticky) return
-        headerSticky = sticky
-        (titleRow.parent as? ViewGroup)?.removeView(titleRow)
-        if (sticky) {
-            stickyHeader.addView(titleRow, FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            ))
-        } else {
-            galleryHeader.addView(titleRow, 0, matchWrap())
-        }
-        stickyHeader.visibility = if (sticky) View.VISIBLE else View.GONE
-        layoutHeader()
-    }
-
-    private fun layoutHeader() {
-        val horizontalStart = activity.dp(16) + safeArea.left
-        val horizontalEnd = activity.dp(16) + safeArea.right
-        stickyHeader.setPadding(horizontalStart, activity.dp(10) + safeArea.top, horizontalEnd, activity.dp(6))
-        val stickyHeight = if (headerSticky) activity.dp(TITLE_ROW_HEIGHT_DP + 16) else 0
-        list.setPadding(0, safeArea.top + stickyHeight, 0, 0)
-        galleryHeader.setPadding(
-            horizontalStart,
-            if (headerSticky) activity.dp(4) else activity.dp(10),
-            horizontalEnd,
-            activity.dp(10),
+        stickyHeader.setPadding(
+            activity.dp(16) + insets.left,
+            activity.dp(6) + insets.top,
+            activity.dp(16) + insets.right,
+            activity.dp(8),
         )
-        updateStickyDateMargins(
-            top = activity.dp(8) + safeArea.top + stickyHeight,
-            start = activity.dp(8) + if (root.layoutDirection == View.LAYOUT_DIRECTION_RTL) {
-                safeArea.right
-            } else {
-                safeArea.left
-            },
-        )
+        galleryHeader.setPadding(activity.dp(16) + insets.left, activity.dp(4), activity.dp(16) + insets.right, activity.dp(10))
+        layoutBelowHeader()
     }
 
     fun showContent() {
@@ -308,29 +290,34 @@ internal class GalleryScreen(
         selectionBar.visibility = if (selecting) View.VISIBLE else View.GONE
     }
 
-    private fun updateStickyDateMargins(top: Int, start: Int) {
+    private fun layoutBelowHeader() {
+        val headerHeight = stickyHeader.height
+        if (list.paddingTop != headerHeight) list.setPadding(0, headerHeight, 0, 0)
         (stickyDate.layoutParams as FrameLayout.LayoutParams).apply {
-            topMargin = top
-            marginStart = start
+            topMargin = headerHeight + activity.dp(8)
+            marginStart = activity.dp(8) + if (root.layoutDirection == View.LAYOUT_DIRECTION_RTL) {
+                safeArea.right
+            } else {
+                safeArea.left
+            }
             stickyDate.layoutParams = this
         }
+        onHeaderHeightChanged?.invoke(headerHeight)
     }
 
-    private fun attachScrollListeners() {
-        list.setOnFastScrollInteractionListener { active ->
-            adapter.setFastScrolling(active)
-            if (!active) {
-                stickyDateController.schedule(list.firstVisiblePosition)
+    private fun revealChip(chip: FilterChip) {
+        filterRow.post {
+            val left = chip.left - activity.dp(16)
+            val right = chip.right + activity.dp(16)
+            if (left < filterRow.scrollX) {
+                filterRow.smoothScrollTo(left, 0)
+            } else if (right > filterRow.scrollX + filterRow.width) {
+                filterRow.smoothScrollTo(right - filterRow.width, 0)
             }
         }
-        stickyDateController.attach()
     }
 
-    private fun buildGalleryHeader(): Header {
-        val container = LinearLayout(activity).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(activity.dp(16), activity.dp(12), activity.dp(16), activity.dp(6))
-        }
+    private fun buildStickyHeader(): StickyHeader {
         val titleRow = LinearLayout(activity).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -344,33 +331,94 @@ internal class GalleryScreen(
         titleRow.addView(back, LinearLayout.LayoutParams(activity.dp(TITLE_ROW_HEIGHT_DP), activity.dp(TITLE_ROW_HEIGHT_DP)).apply {
             marginEnd = activity.dp(10)
         })
-        val title = text(activity.getString(R.string.photos), 28f, UiStyle.text).apply {
-            typeface = UiStyle.medium
+        val pageTitle = UiStyle.label(activity, sizeSp = 24f, medium = true).apply {
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
+            visibility = View.GONE
             ViewCompat.setAccessibilityHeading(this, true)
         }
-        titleRow.addView(title, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        titleRow.addView(pageTitle, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+
+        val photos = TabLabel(activity, activity.getString(R.string.photos)).apply {
+            setOnClickListener { actions.onTabSelected(GalleryTab.PHOTOS) }
+        }
+        val albums = TabLabel(activity, activity.getString(R.string.albums)).apply {
+            setOnClickListener { actions.onTabSelected(GalleryTab.ALBUMS) }
+        }
+        val divider = View(activity).apply { setBackgroundColor(UiStyle.border) }
+        val tabSwitch = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(activity.dp(4), 0, 0, 0)
+            addView(photos, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, activity.dp(TITLE_ROW_HEIGHT_DP)))
+            addView(divider, LinearLayout.LayoutParams(activity.dp(1), activity.dp(22)).apply {
+                marginStart = activity.dp(6)
+                marginEnd = activity.dp(6)
+            })
+            addView(albums, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, activity.dp(TITLE_ROW_HEIGHT_DP)))
+        }
+        titleRow.addView(tabSwitch, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+
         val settings = UiStyle.iconButton(
             activity,
             R.drawable.ic_settings,
             activity.getString(R.string.settings),
         ).apply { setOnClickListener { actions.onSettings() } }
         titleRow.addView(settings, LinearLayout.LayoutParams(activity.dp(TITLE_ROW_HEIGHT_DP), activity.dp(TITLE_ROW_HEIGHT_DP)))
-        container.addView(titleRow, matchWrap())
 
+        val chips = linkedMapOf<GalleryDestination, FilterChip>()
+        val chipRow = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        fun addChip(destination: GalleryDestination, label: String, @DrawableRes icon: Int) {
+            val chip = FilterChip(activity, label, icon).apply {
+                setOnClickListener { actions.onFilterSelected(destination) }
+            }
+            chips[destination] = chip
+            chipRow.addView(chip, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, activity.dp(CHIP_HEIGHT_DP)).apply {
+                if (chipRow.isNotEmpty()) marginStart = activity.dp(8)
+            })
+        }
+        addChip(GalleryDestination.Timeline, activity.getString(R.string.all_photos), R.drawable.ic_photo)
+        ProtonMediaTag.entries.forEach { tag ->
+            addChip(GalleryDestination.Tag(tag), activity.getString(tag.labelRes), tag.iconRes())
+        }
+        val filterRow = HorizontalScrollView(activity).apply {
+            isHorizontalScrollBarEnabled = false
+            overScrollMode = View.OVER_SCROLL_NEVER
+            clipToPadding = false
+            addView(chipRow, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
+
+        val container = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(UiStyle.withAlpha(UiStyle.background, 244))
+            isClickable = true
+            addView(titleRow, UiStyle.matchWrap())
+            addView(filterRow, UiStyle.matchWrap().apply { topMargin = activity.dp(8) })
+        }
+        return StickyHeader(container, titleRow, back, pageTitle, tabSwitch, photos, albums, settings, filterRow, chips)
+    }
+
+    private fun buildListHeader(): ListHeader {
+        val container = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(activity.dp(16), activity.dp(4), activity.dp(16), activity.dp(10))
+        }
         val statusRow = LinearLayout(activity).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             minimumHeight = activity.dp(28)
         }
-        val status = text("", 13.5f, UiStyle.muted).apply {
+        val status = UiStyle.label(activity, sizeSp = 13.5f, color = UiStyle.muted).apply {
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
             accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
         }
         statusRow.addView(status, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        val deleteAll = pillButton(
+        val deleteAll = UiStyle.pillButton(
+            activity,
             activity.getString(R.string.delete_all),
             R.drawable.ic_delete,
             destructive = true,
@@ -384,26 +432,14 @@ internal class GalleryScreen(
                 marginEnd = activity.dp(16)
             },
         )
-        container.addView(statusRow, matchWrap().apply {
-            topMargin = activity.dp(2)
-            bottomMargin = activity.dp(4)
-        })
+        container.addView(statusRow, UiStyle.matchWrap().apply { bottomMargin = activity.dp(4) })
 
         val empty = buildEmptyPanel()
-        container.addView(empty.container, matchWrap().apply {
+        container.addView(empty.container, UiStyle.matchWrap().apply {
             topMargin = activity.dp(14)
             bottomMargin = activity.dp(12)
         })
-        return Header(
-            container,
-            titleRow,
-            title,
-            status,
-            settings,
-            back,
-            deleteAll,
-            empty,
-        )
+        return ListHeader(container, status, deleteAll, empty)
     }
 
     private fun buildEmptyPanel(): EmptyPanel {
@@ -414,15 +450,14 @@ internal class GalleryScreen(
             background = UiStyle.circle(activity, UiStyle.accentSoft)
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
-        val title = text("", 20f, UiStyle.text).apply {
-            gravity = Gravity.CENTER
-            typeface = UiStyle.medium
-        }
-        val message = text("", 14f, UiStyle.muted).apply {
+        val title = UiStyle.label(activity, sizeSp = 20f, medium = true).apply { gravity = Gravity.CENTER }
+        val message = UiStyle.label(activity, sizeSp = 14f, color = UiStyle.muted).apply {
             gravity = Gravity.CENTER
             setLineSpacing(0f, 1.15f)
         }
-        val action = accentButton(activity.getString(R.string.continue_action)).apply { visibility = View.GONE }
+        val action = UiStyle.accentButton(activity, activity.getString(R.string.continue_action)).apply {
+            visibility = View.GONE
+        }
         val container = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
@@ -432,8 +467,8 @@ internal class GalleryScreen(
             addView(icon, LinearLayout.LayoutParams(activity.dp(64), activity.dp(64)).apply {
                 bottomMargin = activity.dp(16)
             })
-            addView(title, matchWrap())
-            addView(message, matchWrap().apply { topMargin = activity.dp(8) })
+            addView(title, UiStyle.matchWrap())
+            addView(message, UiStyle.matchWrap().apply { topMargin = activity.dp(8) })
             addView(action, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, activity.dp(50)).apply {
                 topMargin = activity.dp(20)
             })
@@ -441,41 +476,18 @@ internal class GalleryScreen(
         return EmptyPanel(container, title, message, action)
     }
 
-    private fun buildTabBar(): TabBar {
-        val photos = TabButton(activity, R.drawable.ic_photo, activity.getString(R.string.photos)).apply {
-            setOnClickListener { actions.onPhotosTab() }
-        }
-        val library = TabButton(activity, R.drawable.ic_library, activity.getString(R.string.library)).apply {
-            setOnClickListener { actions.onLibraryTab() }
-        }
-        val container = LinearLayout(activity).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(activity.dp(4), activity.dp(4), activity.dp(4), activity.dp(4))
-            background = UiStyle.rounded(
-                activity,
-                UiStyle.withAlpha(UiStyle.surface, 242),
-                24,
-                UiStyle.border,
-            )
-            elevation = activity.dp(10).toFloat()
-            addView(photos, LinearLayout.LayoutParams(0, activity.dp(TAB_HEIGHT_DP), 1f))
-            addView(library, LinearLayout.LayoutParams(0, activity.dp(TAB_HEIGHT_DP), 1f).apply {
-                marginStart = activity.dp(4)
-            })
-        }
-        return TabBar(container, photos, library)
-    }
-
     private fun buildSelectionBar(): SelectionBar {
-        val count = text(activity.resources.getQuantityString(R.plurals.selected_photo_count, 0, 0), 16f, UiStyle.text).apply {
-            typeface = UiStyle.medium
+        val count = UiStyle.label(
+            activity,
+            activity.resources.getQuantityString(R.plurals.selected_photo_count, 0, 0),
+            16f,
+            medium = true,
+        ).apply {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(activity.dp(12), 0, activity.dp(8), 0)
         }
-        val delete = pillButton(activity.getString(R.string.delete), R.drawable.ic_delete, destructive = true).apply {
-            setOnClickListener { actions.onDeleteSelection() }
-        }
+        val delete = UiStyle.pillButton(activity, activity.getString(R.string.delete), R.drawable.ic_delete, destructive = true)
+            .apply { setOnClickListener { actions.onDeleteSelection() } }
         val close = UiStyle.iconButton(
             activity,
             R.drawable.ic_close,
@@ -499,32 +511,50 @@ internal class GalleryScreen(
         return SelectionBar(container, count, delete)
     }
 
-    private fun pillButton(label: String, icon: Int, destructive: Boolean = false) =
-        UiStyle.pillButton(activity, label, icon, destructive)
+    @DrawableRes
+    private fun ProtonMediaTag.iconRes(): Int = when (this) {
+        ProtonMediaTag.FAVORITES -> R.drawable.ic_favorite_border
+        ProtonMediaTag.SCREENSHOTS -> R.drawable.ic_screenshot
+        ProtonMediaTag.VIDEOS -> R.drawable.ic_play
+        ProtonMediaTag.LIVE_PHOTOS -> R.drawable.ic_live
+        ProtonMediaTag.MOTION_PHOTOS -> R.drawable.ic_motion
+        ProtonMediaTag.SELFIES -> R.drawable.ic_person
+        ProtonMediaTag.PORTRAITS -> R.drawable.ic_portrait
+        ProtonMediaTag.BURSTS -> R.drawable.ic_burst
+        ProtonMediaTag.PANORAMAS -> R.drawable.ic_panorama
+        ProtonMediaTag.RAW -> R.drawable.ic_camera
+    }
 
-    private fun accentButton(label: String) = UiStyle.accentButton(activity, label)
+    /** One half of the Photos | Albums switch: a large title that dims when not selected. */
+    private class TabLabel(context: Context, label: String) : FrameLayout(context) {
+        private val labelView = UiStyle.label(context, label, 24f, medium = true).apply {
+            gravity = Gravity.CENTER
+        }
 
-    private fun text(value: String, size: Float, color: Int) = UiStyle.label(activity, value, size, color)
+        init {
+            isClickable = true
+            isFocusable = true
+            contentDescription = label
+            setPadding(context.dp(8), 0, context.dp(8), 0)
+            background = UiStyle.rippled(UiStyle.rounded(context, Color.TRANSPARENT, 12), UiStyle.accent)
+            addView(labelView, LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            ViewCompat.setAccessibilityHeading(this, true)
+            setSelectedTab(false)
+        }
 
-    private fun matchWrap() = UiStyle.matchWrap()
+        fun setSelectedTab(selected: Boolean) {
+            UiStyle.setSelectedState(this, selected)
+            labelView.setTextColor(if (selected) UiStyle.text else UiStyle.muted)
+        }
+    }
 
-    private fun bottomOverlayParams() = UiStyle.bottomOverlayParams(activity)
-
-    /** A tab in the floating bottom bar: icon and label, tinted by selection state. */
-    private class TabButton(
-        context: Context,
-        icon: Int,
-        label: String,
-    ) : LinearLayout(context) {
+    /** A media-type filter: icon and label in a pill that fills when selected. */
+    private class FilterChip(context: Context, label: String, @DrawableRes icon: Int) : LinearLayout(context) {
         private val iconView = ImageView(context).apply {
             setImageResource(icon)
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
-        private val labelView = TextView(context).apply {
-            text = label
-            textSize = 14f
-            typeface = UiStyle.medium
-        }
+        private val labelView = UiStyle.label(context, label, 14f, medium = true)
 
         init {
             orientation = HORIZONTAL
@@ -532,18 +562,19 @@ internal class GalleryScreen(
             isClickable = true
             isFocusable = true
             contentDescription = label
-            addView(iconView, LayoutParams(context.dp(20), context.dp(20)).apply { marginEnd = context.dp(8) })
+            setPadding(context.dp(12), 0, context.dp(14), 0)
+            addView(iconView, LayoutParams(context.dp(18), context.dp(18)).apply { marginEnd = context.dp(7) })
             addView(labelView, LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-            setSelectedTab(false)
+            setSelectedChip(false)
         }
 
-        fun setSelectedTab(selected: Boolean) {
+        fun setSelectedChip(selected: Boolean) {
             UiStyle.setSelectedState(this, selected)
-            val tint = if (selected) UiStyle.accent else UiStyle.muted
+            val tint = if (selected) UiStyle.text else UiStyle.muted
             iconView.imageTintList = ColorStateList.valueOf(tint)
-            labelView.setTextColor(if (selected) UiStyle.text else UiStyle.muted)
+            labelView.setTextColor(tint)
             background = UiStyle.rippled(
-                UiStyle.rounded(context, if (selected) UiStyle.accentSoft else Color.TRANSPARENT, 20),
+                UiStyle.rounded(context, if (selected) UiStyle.surfaceRaised else Color.TRANSPARENT, 12),
                 UiStyle.accent,
             )
         }
@@ -558,8 +589,8 @@ internal class GalleryScreen(
         val onBack: () -> Unit,
         val onSettings: () -> Unit,
         val onDeleteAllTrash: () -> Unit,
-        val onPhotosTab: () -> Unit,
-        val onLibraryTab: () -> Unit,
+        val onTabSelected: (GalleryTab) -> Unit,
+        val onFilterSelected: (GalleryDestination) -> Unit,
         val onDeleteSelection: () -> Unit,
     )
 
@@ -570,26 +601,24 @@ internal class GalleryScreen(
         val action: Button,
     )
 
-    private data class Header(
+    private data class StickyHeader(
         val container: LinearLayout,
         val titleRow: LinearLayout,
-        val pageTitle: TextView,
-        val status: TextView,
-        val settingsButton: ImageButton,
         val backButton: ImageButton,
+        val pageTitle: TextView,
+        val tabSwitch: LinearLayout,
+        val photosTab: TabLabel,
+        val albumsTab: TabLabel,
+        val settingsButton: ImageButton,
+        val filterRow: HorizontalScrollView,
+        val filterChips: Map<GalleryDestination, FilterChip>,
+    )
+
+    private data class ListHeader(
+        val container: LinearLayout,
+        val status: TextView,
         val trashDeleteAllButton: Button,
         val empty: EmptyPanel,
-    ) {
-        val emptyPanel get() = empty.container
-        val emptyTitle get() = empty.title
-        val emptyMessage get() = empty.message
-        val emptyAction get() = empty.action
-    }
-
-    private data class TabBar(
-        val container: LinearLayout,
-        val photos: TabButton,
-        val library: TabButton,
     )
 
     private data class SelectionBar(
@@ -599,10 +628,10 @@ internal class GalleryScreen(
     )
 
     companion object {
-        /** Height of the floating tab bar including its padding, used to keep the list clear of it. */
-        const val TAB_BAR_HEIGHT_DP = 48
-        private const val TAB_HEIGHT_DP = 40
+        /** Height of the floating selection bar including padding, used to keep the list clear of it. */
+        const val SELECTION_BAR_HEIGHT_DP = 60
         private const val TITLE_ROW_HEIGHT_DP = 44
+        private const val CHIP_HEIGHT_DP = 38
         private const val SCROLL_TO_TOP_JUMP_ROWS = 12
     }
 }

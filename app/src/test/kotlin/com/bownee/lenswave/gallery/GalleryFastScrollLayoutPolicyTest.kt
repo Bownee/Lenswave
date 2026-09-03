@@ -7,12 +7,6 @@ import org.junit.Test
 
 class GalleryFastScrollLayoutPolicyTest {
     @Test
-    fun `handle uses one symmetric edge padding`() {
-        assertEquals(92, GalleryFastScrollLayoutPolicy.edgePadding(24, 18, 68))
-        assertEquals(92, GalleryFastScrollLayoutPolicy.edgePadding(18, 24, 68))
-    }
-
-    @Test
     fun `handle is shown only when the list can move`() {
         assertFalse(GalleryFastScrollLayoutPolicy.shouldShow(false, false))
         assertTrue(GalleryFastScrollLayoutPolicy.shouldShow(false, true))
@@ -49,22 +43,22 @@ class GalleryFastScrollLayoutPolicyTest {
     }
 
     @Test
-    fun `footer preserves navigation clearance without shortening track`() {
+    fun `footer clears the selection bar only while it is shown`() {
         assertEquals(
             102,
             GalleryFastScrollLayoutPolicy.footerHeight(
-                navigationVisible = true,
+                selectionBarVisible = true,
                 bottomInset = 24,
-                navigationClearance = 78,
+                selectionClearance = 78,
                 baseClearance = 12,
             ),
         )
         assertEquals(
             36,
             GalleryFastScrollLayoutPolicy.footerHeight(
-                navigationVisible = false,
+                selectionBarVisible = false,
                 bottomInset = 24,
-                navigationClearance = 78,
+                selectionClearance = 78,
                 baseClearance = 12,
             ),
         )

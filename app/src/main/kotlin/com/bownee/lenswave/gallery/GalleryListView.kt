@@ -29,8 +29,8 @@ internal class GalleryListView @JvmOverloads constructor(
         fastScroller.interactionListener = listener
     }
 
-    fun setFastScrollEdgeInset(inset: Int) {
-        fastScroller.setEdgeInset(inset)
+    fun setFastScrollEdgeInsets(top: Int, bottom: Int) {
+        fastScroller.setEdgeInsets(top, bottom)
     }
 
     /** Switches between the draggable handle and the platform scrollbar. */

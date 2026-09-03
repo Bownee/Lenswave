@@ -45,7 +45,7 @@ internal class PhotoCell(context: Context) : FrameLayout(context) {
     val videoBadge = ImageView(context).apply {
         setImageResource(R.drawable.ic_play)
         imageTintList = ColorStateList.valueOf(Color.WHITE)
-        setPadding(context.dp(6))
+        setPadding(context.dp(8))
         background = UiStyle.circle(context, Color.argb(150, 10, 12, 18))
         importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         visibility = View.GONE
@@ -72,10 +72,7 @@ internal class PhotoCell(context: Context) : FrameLayout(context) {
             topMargin = context.dp(8)
             marginStart = context.dp(8)
         })
-        addView(videoBadge, LayoutParams(context.dp(28), context.dp(28), Gravity.BOTTOM or Gravity.START).apply {
-            bottomMargin = context.dp(6)
-            marginStart = context.dp(6)
-        })
+        addView(videoBadge, LayoutParams(context.dp(36), context.dp(36), Gravity.CENTER))
         addView(favorite, LayoutParams(context.dp(48), context.dp(48), Gravity.TOP or Gravity.END))
     }
 }

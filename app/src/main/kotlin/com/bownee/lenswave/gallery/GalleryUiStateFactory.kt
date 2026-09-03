@@ -132,36 +132,12 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
                 ProtonAccountStatus.CONNECTING,
                 ProtonAccountStatus.CONNECTED,
                 -> {
+                    // The tab itself is titled Albums, so the grid needs no heading of its own.
                     if (albums.albums.isNotEmpty()) add(
                         LibrarySection(
                             key = "albums",
-                            title = text.string(R.string.albums),
+                            title = "",
                             items = albums.albums.map(LibraryItem::Album),
-                        ),
-                    )
-                    add(
-                        LibrarySection(
-                            key = "media-types",
-                            title = text.string(R.string.media_types),
-                            items = ProtonMediaTag.entries.map { tag ->
-                                entry(
-                                    key = "tag:${tag.name}",
-                                    label = text.string(tag.labelRes),
-                                    iconRes = when (tag) {
-                                        ProtonMediaTag.FAVORITES -> R.drawable.ic_favorite
-                                        ProtonMediaTag.SCREENSHOTS -> R.drawable.ic_screenshot
-                                        ProtonMediaTag.VIDEOS -> R.drawable.ic_play
-                                        ProtonMediaTag.LIVE_PHOTOS -> R.drawable.ic_live
-                                        ProtonMediaTag.MOTION_PHOTOS -> R.drawable.ic_motion
-                                        ProtonMediaTag.SELFIES -> R.drawable.ic_person
-                                        ProtonMediaTag.PORTRAITS -> R.drawable.ic_portrait
-                                        ProtonMediaTag.BURSTS -> R.drawable.ic_burst
-                                        ProtonMediaTag.PANORAMAS -> R.drawable.ic_panorama
-                                        ProtonMediaTag.RAW -> R.drawable.ic_camera
-                                    },
-                                    action = LibraryAction.Open(GalleryDestination.Tag(tag)),
-                                )
-                            },
                         ),
                     )
                     add(
@@ -321,7 +297,7 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
 
     private fun title(destination: GalleryDestination): String = when (destination) {
         GalleryDestination.Timeline -> text.string(R.string.photos)
-        GalleryDestination.Library -> text.string(R.string.library)
+        GalleryDestination.Library -> text.string(R.string.albums)
         is GalleryDestination.Tag -> text.string(destination.tag.labelRes)
         is GalleryDestination.AlbumPhotos -> destination.album.name
         GalleryDestination.Trash -> text.string(R.string.trash)
