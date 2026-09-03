@@ -122,6 +122,23 @@ data class GalleryAsset(
     val isFavorite: Boolean
         get() = protonReplicas.any { com.bownee.lenswave.proton.ProtonMediaTag.FAVORITES in it.tags }
 
+    fun withFavorite(favorite: Boolean): GalleryAsset {
+        fun update(replica: PhotoReplica): PhotoReplica = when (replica) {
+            is PhotoReplica.Device -> replica
+            is PhotoReplica.Proton -> replica.copy(
+                tags = if (favorite) {
+                    replica.tags + com.bownee.lenswave.proton.ProtonMediaTag.FAVORITES
+                } else {
+                    replica.tags - com.bownee.lenswave.proton.ProtonMediaTag.FAVORITES
+                },
+            )
+        }
+        return copy(
+            primaryReplica = update(primaryReplica),
+            replicas = replicas.map(::update),
+        )
+    }
+
     fun withReplicas(additionalReplicas: Iterable<PhotoReplica>): GalleryAsset {
         val mergedReplicas = (replicas + additionalReplicas).distinctBy { replica ->
             when (replica) {

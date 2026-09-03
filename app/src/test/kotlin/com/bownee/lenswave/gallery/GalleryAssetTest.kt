@@ -1,5 +1,6 @@
 package com.bownee.lenswave.gallery
 
+import com.bownee.lenswave.proton.ProtonMediaTag
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -75,6 +76,27 @@ class GalleryAssetTest {
 
         assertFalse(local.canFavoriteInProton)
         assertFalse(trashed.canFavoriteInProton)
+    }
+
+    @Test
+    fun `favorite state is applied to every Proton replica`() {
+        val asset = GalleryAsset.device(
+            stableId = "device-photo",
+            capturedAtEpochMillis = 1,
+            displayName = "photo.jpg",
+            uri = "content://photos/1",
+            collection = DeviceCollection.CAMERA,
+            sizeBytes = 100,
+            modifiedAtEpochMillis = 2,
+        ).withReplicas(listOf(protonReplica("first"), protonReplica("second")))
+
+        val favorite = asset.withFavorite(true)
+        val restored = favorite.withFavorite(false)
+
+        assertTrue(favorite.isFavorite)
+        assertTrue(favorite.protonReplicas.all { ProtonMediaTag.FAVORITES in it.tags })
+        assertFalse(restored.isFavorite)
+        assertTrue(restored.protonReplicas.all { ProtonMediaTag.FAVORITES !in it.tags })
     }
 
     private fun protonReplica(nodeUid: String) = PhotoReplica.Proton(

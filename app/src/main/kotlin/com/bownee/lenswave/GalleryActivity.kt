@@ -788,11 +788,13 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
         val nodeUids = photo.protonReplicaNodeUids.distinct()
         if (nodeUids.isEmpty()) return
         val favorite = !photo.isFavorite
-        adapter.setFavoriteUpdateInProgress(photo.stableId, true)
+        adapter.beginFavoriteUpdate(photo.stableId, favorite)
         lifecycleScope.launch {
+            var succeeded = false
             try {
                 val result = protonRepository.setFavorite(userId, nodeUids, favorite)
-                if (result.updatedCount != nodeUids.size) {
+                succeeded = result.updatedCount == nodeUids.size
+                if (!succeeded) {
                     Toast.makeText(
                         this@GalleryActivity,
                         R.string.could_not_update_favorite,
@@ -808,7 +810,7 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
                     Toast.LENGTH_LONG,
                 ).show()
             } finally {
-                adapter.setFavoriteUpdateInProgress(photo.stableId, false)
+                adapter.finishFavoriteUpdate(photo.stableId, succeeded)
             }
         }
     }

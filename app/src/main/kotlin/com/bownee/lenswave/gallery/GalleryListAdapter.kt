@@ -33,24 +33,25 @@ class GalleryListAdapter(
     private val currentDestination: () -> GalleryDestination,
 ) : BaseAdapter() {
     private val selected = linkedMapOf<String, GalleryAsset>()
-    private val favoriteUpdates = mutableSetOf<String>()
+    private val favoriteState = OptimisticFavoriteState()
     private var rows: List<GalleryRow> = emptyList()
     private var isFastScrolling = false
 
     fun submitPhotos(photos: List<GalleryAsset>) {
         val stableIds = photos.mapTo(mutableSetOf(), GalleryAsset::stableId)
+        favoriteState.reconcile(photos.associate { photo -> photo.stableId to photo.isFavorite })
         rows = GalleryGrouping.createRows(
             photos = photos,
             unknownDateLabel = context.getString(R.string.unknown_date),
         )
         selected.keys.retainAll(stableIds)
-        favoriteUpdates.retainAll(stableIds)
         notifyDataSetChanged()
         notifySelectionChanged()
     }
 
     fun submitAlbums(albums: List<ProtonAlbum>) {
         rows = GalleryGrouping.createAlbumRows(albums)
+        favoriteState.clear()
         selected.clear()
         notifyDataSetChanged()
         notifySelectionChanged()
@@ -80,9 +81,14 @@ class GalleryListAdapter(
 
     fun selectedPhotos(): List<GalleryAsset> = selected.values.toList()
 
-    fun setFavoriteUpdateInProgress(stableId: String, inProgress: Boolean) {
-        val changed = if (inProgress) favoriteUpdates.add(stableId) else favoriteUpdates.remove(stableId)
-        if (changed) notifyDataSetChanged()
+    fun beginFavoriteUpdate(stableId: String, favorite: Boolean) {
+        favoriteState.begin(stableId, favorite)
+        notifyDataSetChanged()
+    }
+
+    fun finishFavoriteUpdate(stableId: String, succeeded: Boolean) {
+        favoriteState.finish(stableId, succeeded, serverFavoriteState(stableId))
+        notifyDataSetChanged()
     }
 
     fun dateLabelForPosition(position: Int): String? {
@@ -177,18 +183,26 @@ class GalleryListAdapter(
             }
             val isSelected = photo.stableId in selected
             val showFavorite = selected.isEmpty() && photo.canFavoriteInProton
-            val favoriteUpdating = photo.stableId in favoriteUpdates
+            val displayedFavorite = favoriteState.displayedValue(photo.stableId, photo.isFavorite)
+            val displayedPhoto = if (displayedFavorite == photo.isFavorite) {
+                photo
+            } else {
+                photo.withFavorite(displayedFavorite)
+            }
+            val favoriteUpdating = favoriteState.isUpdating(photo.stableId)
             cell.favorite.visibility = if (showFavorite) View.VISIBLE else View.GONE
             cell.favorite.isEnabled = showFavorite && !favoriteUpdating
-            cell.favorite.alpha = if (favoriteUpdating) 0.5f else 1f
+            cell.favorite.alpha = 1f
             cell.favorite.setImageResource(
-                if (photo.isFavorite) R.drawable.ic_favorite else R.drawable.ic_favorite_border,
+                if (displayedFavorite) R.drawable.ic_favorite else R.drawable.ic_favorite_border,
             )
             cell.favorite.contentDescription = context.getString(
-                if (photo.isFavorite) R.string.remove_from_favorites else R.string.add_to_favorites,
+                if (displayedFavorite) R.string.remove_from_favorites else R.string.add_to_favorites,
             )
             cell.favorite.setOnClickListener(
-                if (showFavorite && !favoriteUpdating) View.OnClickListener { onFavoriteClicked(photo) }
+                if (showFavorite && !favoriteUpdating) {
+                    View.OnClickListener { onFavoriteClicked(displayedPhoto) }
+                }
                 else null,
             )
             cell.isSelected = isSelected
@@ -203,6 +217,13 @@ class GalleryListAdapter(
         }
         return container
     }
+
+    private fun serverFavoriteState(stableId: String): Boolean? = rows
+        .filterIsInstance<GalleryRow.Photos>()
+        .asSequence()
+        .flatMap { row -> row.items.asSequence() }
+        .firstOrNull { photo -> photo.stableId == stableId }
+        ?.isFavorite
 
     private fun createPhotoRow() = LinearLayout(context).apply {
         orientation = LinearLayout.HORIZONTAL
@@ -350,7 +371,12 @@ class GalleryListAdapter(
             visibility = View.GONE
         }
         val favorite = ImageButton(context).apply {
-            setPadding(context.dp(18))
+            setPaddingRelative(
+                context.dp(30),
+                context.dp(8),
+                context.dp(8),
+                context.dp(30),
+            )
             imageTintList = ColorStateList.valueOf(Color.WHITE)
             background = null
             visibility = View.GONE
@@ -369,8 +395,8 @@ class GalleryListAdapter(
             })
             addView(videoBadge, LayoutParams(context.dp(28), context.dp(28), Gravity.CENTER))
             addView(favorite, LayoutParams(context.dp(48), context.dp(48), Gravity.TOP or Gravity.END).apply {
-                topMargin = context.dp(1)
-                marginEnd = context.dp(1)
+                topMargin = 0
+                marginEnd = 0
             })
         }
     }
