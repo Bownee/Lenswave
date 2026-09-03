@@ -540,7 +540,7 @@ class PhotoViewerActivity : FragmentActivity() {
         animateMediaTranslationX(0f, 160L)
         if (peekPreview.isVisible) {
             peekPreview.animate()
-                .translationX(peekOffset * root.width.toFloat())
+                .translationX(peekOffset * peekDistance())
                 .setDuration(160L)
                 .withEndAction(::hidePeek)
                 .start()
@@ -570,9 +570,12 @@ class PhotoViewerActivity : FragmentActivity() {
         positionPeek(dragDistance)
     }
 
+    /** How far the neighbour rests from the current photo: one screen plus a small gap. */
+    private fun peekDistance(): Float = root.width + dp(PEEK_GAP_DP).toFloat()
+
     private fun positionPeek(dragDistance: Float) {
         peekPreview.animate().cancel()
-        peekPreview.translationX = -dragDistance + peekOffset * root.width.toFloat()
+        peekPreview.translationX = -dragDistance + peekOffset * peekDistance()
     }
 
     private fun hidePeek() {
@@ -622,7 +625,7 @@ class PhotoViewerActivity : FragmentActivity() {
         }
         val activeMedia = activeMediaView()
         activeMedia.animate()
-            .translationX(-offset * root.width.toFloat())
+            .translationX(-offset * peekDistance())
             .setDuration(160L)
             .withEndAction {
                 thumbnailPreview.animate().cancel()
@@ -636,21 +639,21 @@ class PhotoViewerActivity : FragmentActivity() {
             }
             .start()
         if (activeMedia !== photoView) {
-            photoView.animate().translationX(-offset * root.width.toFloat()).setDuration(160L).start()
+            photoView.animate().translationX(-offset * peekDistance()).setDuration(160L).start()
         }
         if (activeMedia !== playerView) {
-            playerView.animate().translationX(-offset * root.width.toFloat()).setDuration(160L).start()
+            playerView.animate().translationX(-offset * peekDistance()).setDuration(160L).start()
         }
         thumbnailPreview.animate()
-            .translationX(-offset * root.width.toFloat())
+            .translationX(-offset * peekDistance())
             .setDuration(160L)
             .start()
         loadingPanel.animate()
-            .translationX(-offset * root.width.toFloat())
+            .translationX(-offset * peekDistance())
             .setDuration(160L)
             .start()
         mediaTitle.animate()
-            .translationX(-offset * root.width.toFloat())
+            .translationX(-offset * peekDistance())
             .setDuration(160L)
             .start()
     }
@@ -1415,6 +1418,7 @@ class PhotoViewerActivity : FragmentActivity() {
         private const val DETAILS_MINIMUM_HEIGHT_FRACTION = 0.55f
         private const val DETAILS_FALLBACK_OFFSET_FRACTION = 0.55f
         private const val MEDIA_ACTION_GAP_DP = 8
+        private const val PEEK_GAP_DP = 10
         private const val VIDEO_CONTROLS_HEIGHT_DP = 80
         private const val FULL_QUALITY_CROSSFADE_MILLIS = 180L
         private const val LOADING_PANEL_DELAY_MILLIS = 300L
