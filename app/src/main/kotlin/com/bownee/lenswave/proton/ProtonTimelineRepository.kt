@@ -1,10 +1,8 @@
 package com.bownee.lenswave.proton
 
-import com.bownee.lenswave.LenswaveDiagnostics
 import com.bownee.lenswave.LenswaveOperation
 import javax.inject.Inject
 import javax.inject.Singleton
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -18,7 +16,7 @@ import me.proton.core.domain.entity.UserId
 internal class ProtonTimelineRepository @Inject constructor(
     private val clientProvider: ProtonPhotosClientProvider,
     private val cache: ProtonTimelineCache,
-    private val snapshots: ProtonSnapshotCoordinator,
+    private val snapshotSync: ProtonSnapshotSync,
     private val tagListings: ProtonTagListingClient,
 ) {
     private val syncMutex = Mutex()
@@ -47,104 +45,105 @@ internal class ProtonTimelineRepository @Inject constructor(
     suspend fun syncMetadata(userId: UserId, forceRemote: Boolean) = syncMutex.withLock {
         val existing = cache.readIndex(userId.id)
         val hasCachedSnapshot = cache.hasTimelineSnapshot(userId.id)
-        try {
-            val shouldEnumerate = snapshots.shouldEnumerate(
-                userId.id,
-                ProtonSyncSource.TIMELINE,
-                ProtonSyncKeys.TIMELINE,
-                forceRemote,
-                hasCachedSnapshot,
-            )
-            if (!shouldEnumerate) {
-                emit(userId, existing, hasLoaded = true, syncing = false)
-                return@withLock
-            }
-            emit(userId, existing, hasLoaded = hasCachedSnapshot, syncing = true)
-            val photosClient = clientProvider.get(userId)
-            val photos = photosClient.enumerateTimeline().toList().map { item ->
-                ProtonGalleryPhoto(
-                    nodeUid = item.nodeUid.value,
-                    captureTimeEpochSeconds = item.captureTime.epochSecond,
-                    hasThumbnail = cache.thumbnailExists(userId.id, item.nodeUid.value),
+        snapshotSync.sync(
+            userId = userId.id,
+            source = ProtonSyncSource.TIMELINE,
+            syncKey = ProtonSyncKeys.TIMELINE,
+            forceRemote = forceRemote,
+            hasSnapshot = hasCachedSnapshot,
+            operation = LenswaveOperation.TIMELINE_SYNC,
+            publishFresh = { emit(userId, existing, hasLoaded = true, syncing = false) },
+            publishSyncing = { emit(userId, existing, hasLoaded = hasCachedSnapshot, syncing = true) },
+            enumerate = {
+                clientProvider.get(userId).enumerateTimeline().toList().map { item ->
+                    ProtonGalleryPhoto(
+                        nodeUid = item.nodeUid.value,
+                        captureTimeEpochSeconds = item.captureTime.epochSecond,
+                        hasThumbnail = cache.thumbnailExists(userId.id, item.nodeUid.value),
+                    )
+                }
+            },
+            commit = { photos ->
+                cache.reconcilePhotos(
+                    userId = userId.id,
+                    cachedNodeUids = existing.map(ProtonGalleryPhoto::nodeUid),
+                    remoteNodeUids = photos.map(ProtonGalleryPhoto::nodeUid),
                 )
-            }
-            cache.reconcilePhotos(
-                userId = userId.id,
-                cachedNodeUids = existing.map(ProtonGalleryPhoto::nodeUid),
-                remoteNodeUids = photos.map(ProtonGalleryPhoto::nodeUid),
-            )
-            cache.writeIndex(userId.id, photos)
-            snapshots.commit(userId.id, ProtonSyncKeys.TIMELINE)
-            val remoteNodeUids = photos.mapTo(mutableSetOf(), ProtonGalleryPhoto::nodeUid)
-            val reconciledTags = mutableState.value.tags.mapValues { (_, tagState) ->
-                tagState.copy(photos = tagState.photos.filter { it.nodeUid in remoteNodeUids })
-            }
-            emit(userId, photos, hasLoaded = true, syncing = false, tags = reconciledTags)
-        } catch (error: CancellationException) {
-            mutableState.value = mutableState.value.copy(syncing = false)
-            throw error
-        } catch (error: Throwable) {
-            LenswaveDiagnostics.reportFailure(LenswaveOperation.TIMELINE_SYNC, error)
-            mutableState.value = mutableState.value.copy(
-                syncing = false,
-                refreshFailed = true,
-            )
-        }
+                cache.writeIndex(userId.id, photos)
+            },
+            publishResult = { photos ->
+                val remoteNodeUids = photos.mapTo(mutableSetOf(), ProtonGalleryPhoto::nodeUid)
+                val reconciledTags = mutableState.value.tags.mapValues { (_, tagState) ->
+                    tagState.copy(photos = tagState.photos.filter { it.nodeUid in remoteNodeUids })
+                }
+                emit(userId, photos, hasLoaded = true, syncing = false, tags = reconciledTags)
+            },
+            publishCancelled = { mutableState.value = mutableState.value.copy(syncing = false) },
+            publishFailed = {
+                mutableState.value = mutableState.value.copy(
+                    syncing = false,
+                    refreshFailed = true,
+                )
+            },
+        )
     }
 
     suspend fun syncTagMetadata(userId: UserId, tag: ProtonMediaTag, forceRemote: Boolean) =
         tagMutexes.getValue(tag).withLock {
             val existing = cache.readTag(userId.id, tag)
             val hasCachedSnapshot = cache.hasTagSnapshot(userId.id, tag)
-            val syncKey = ProtonSyncKeys.timelineTag(tag)
-            try {
-                val shouldEnumerate = snapshots.shouldEnumerate(
-                    userId.id,
-                    ProtonSyncSource.TIMELINE,
-                    syncKey,
-                    forceRemote,
-                    hasCachedSnapshot,
-                )
-                if (!shouldEnumerate) {
-                    updateTag(tag, ProtonTagState(existing, hasLoaded = true))
-                    return@withLock
-                }
-                updateTag(tag, ProtonTagState(existing, hasLoaded = hasCachedSnapshot, syncing = true))
-                val volumeId = volumeId(existing) ?: volumeId(mutableState.value.photos)
-                val photos = if (volumeId == null && mutableState.value.hasLoaded &&
-                    mutableState.value.photos.isEmpty()
-                ) {
-                    emptyList()
-                } else {
-                    tagListings.list(
-                        userId,
-                        requireNotNull(volumeId) { "Cannot determine the Proton Photos volume" },
+            snapshotSync.sync(
+                userId = userId.id,
+                source = ProtonSyncSource.TIMELINE,
+                syncKey = ProtonSyncKeys.timelineTag(tag),
+                forceRemote = forceRemote,
+                hasSnapshot = hasCachedSnapshot,
+                operation = LenswaveOperation.tagSync(tag),
+                publishFresh = { updateTag(tag, ProtonTagState(existing, hasLoaded = true)) },
+                publishSyncing = {
+                    updateTag(tag, ProtonTagState(existing, hasLoaded = hasCachedSnapshot, syncing = true))
+                },
+                enumerate = { listTag(userId, tag, existing) },
+                commit = { photos -> cache.writeTag(userId.id, tag, photos) },
+                publishResult = { photos -> updateTag(tag, ProtonTagState(photos, hasLoaded = true)) },
+                publishCancelled = {
+                    updateTag(
                         tag,
-                    ).map { photo ->
-                        photo.copy(hasThumbnail = cache.thumbnailExists(userId.id, photo.nodeUid))
-                    }
-                }
-                cache.writeTag(userId.id, tag, photos)
-                snapshots.commit(userId.id, syncKey)
-                updateTag(tag, ProtonTagState(photos, hasLoaded = true))
-            } catch (error: CancellationException) {
-                updateTag(
-                    tag,
-                    mutableState.value.tags[tag]?.copy(syncing = false) ?: ProtonTagState(),
-                )
-                throw error
-            } catch (error: Throwable) {
-                LenswaveDiagnostics.reportFailure(LenswaveOperation.tagSync(tag), error)
-                updateTag(
-                    tag,
-                    ProtonTagState(
-                        photos = existing,
-                        hasLoaded = hasCachedSnapshot,
-                        refreshFailed = true,
-                    ),
-                )
-            }
+                        mutableState.value.tags[tag]?.copy(syncing = false) ?: ProtonTagState(),
+                    )
+                },
+                // Unlike the other listings, a failed tag sync republishes the cached photos rather
+                // than copying whatever tag state is currently published.
+                publishFailed = {
+                    updateTag(
+                        tag,
+                        ProtonTagState(
+                            photos = existing,
+                            hasLoaded = hasCachedSnapshot,
+                            refreshFailed = true,
+                        ),
+                    )
+                },
+            )
         }
+
+    private suspend fun listTag(
+        userId: UserId,
+        tag: ProtonMediaTag,
+        existing: List<ProtonGalleryPhoto>,
+    ): List<ProtonGalleryPhoto> {
+        val volumeId = volumeId(existing) ?: volumeId(mutableState.value.photos)
+        if (volumeId == null && mutableState.value.hasLoaded && mutableState.value.photos.isEmpty()) {
+            return emptyList()
+        }
+        return tagListings.list(
+            userId,
+            requireNotNull(volumeId) { "Cannot determine the Proton Photos volume" },
+            tag,
+        ).map { photo ->
+            photo.copy(hasThumbnail = cache.thumbnailExists(userId.id, photo.nodeUid))
+        }
+    }
 
     internal fun markThumbnailsAvailable(userId: UserId, nodeUids: Set<String>) {
         markThumbnails(userId, nodeUids, available = true)

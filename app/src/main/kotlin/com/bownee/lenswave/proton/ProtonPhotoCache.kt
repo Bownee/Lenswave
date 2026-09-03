@@ -39,6 +39,8 @@ internal class ProtonPhotoCache @Inject constructor(
 
     override fun loadThumbnail(userId: String, nodeUid: String) = thumbnails.load(userId, nodeUid)
 
+    override fun peekThumbnail(userId: String, nodeUid: String) = thumbnails.peek(userId, nodeUid)
+
     override fun writeThumbnail(userId: String, nodeUid: String, bytes: ByteArray) {
         thumbnails.write(userId, nodeUid, bytes)
     }

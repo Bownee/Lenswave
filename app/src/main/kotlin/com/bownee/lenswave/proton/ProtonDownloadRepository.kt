@@ -135,6 +135,9 @@ internal class ProtonDownloadRepository @Inject constructor(
     fun loadThumbnail(userId: UserId, nodeUid: String): Bitmap? =
         cache.loadThumbnail(userId.id, nodeUid)
 
+    fun peekThumbnail(userId: UserId, nodeUid: String): Bitmap? =
+        cache.peekThumbnail(userId.id, nodeUid)
+
     internal suspend fun downloadThumbnails(
         userId: UserId,
         nodeUids: Collection<String>,

@@ -37,6 +37,8 @@ interface ProtonAlbumCache {
 
 interface ProtonMediaCache {
     fun loadThumbnail(userId: String, nodeUid: String): Bitmap?
+    /** In-memory thumbnail only; never reads disk, so it is safe on the main thread. */
+    fun peekThumbnail(userId: String, nodeUid: String): Bitmap?
     fun writeThumbnail(userId: String, nodeUid: String, bytes: ByteArray)
     fun removeThumbnail(userId: String, nodeUid: String)
     fun thumbnailCount(userId: String): Int

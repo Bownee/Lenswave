@@ -1,7 +1,6 @@
 package com.bownee.lenswave.gallery
 
 import android.graphics.Bitmap
-import android.util.LruCache
 import com.bownee.lenswave.proton.ProtonAlbum
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -11,14 +10,16 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import me.proton.core.domain.entity.UserId
 
+/**
+ * Binds decoded thumbnails to gallery cells. Decoded bitmaps live only in the Proton thumbnail
+ * store's memory cache; this class peeks that cache synchronously so visible cells bind in the same
+ * frame, and coalesces the asynchronous loads for everything else.
+ */
 class GalleryThumbnailLoader(
     private val scope: CoroutineScope,
     private val protonRepository: ProtonThumbnailImageSource,
     private val protonUserId: () -> UserId?,
 ) {
-    private val bitmaps = object : LruCache<String, Bitmap>(cacheSize()) {
-        override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount / 1_024
-    }
     private val loadingKeys = mutableSetOf<String>()
     private val callbacks = mutableMapOf<String, MutableList<(Bitmap?) -> Unit>>()
     private val loadingJobs = mutableMapOf<String, Job>()
@@ -32,6 +33,7 @@ class GalleryThumbnailLoader(
             key = "asset:${asset.stableId}:${protonUserId()?.id}:${asset.hasThumbnail}",
             isAvailable = asset.hasThumbnail,
             allowSourceRead = allowSourceRead,
+            peek = { peekProtonThumbnail(asset.nodeUid) },
             read = { loadProtonThumbnail(asset.nodeUid) },
             onLoaded = onLoaded,
         )
@@ -50,15 +52,14 @@ class GalleryThumbnailLoader(
             key = key,
             isAvailable = coverNodeUid != null && album.hasCoverThumbnail,
             allowSourceRead = allowSourceRead,
-            read = {
-                loadProtonThumbnail(requireNotNull(coverNodeUid))
-            },
+            peek = { peekProtonThumbnail(requireNotNull(coverNodeUid)) },
+            read = { loadProtonThumbnail(requireNotNull(coverNodeUid)) },
             onLoaded = onLoaded,
         )
     }
 
+    /** Drops pending loads; decoded bitmaps are owned by the thumbnail store, not this loader. */
     fun clear() {
-        bitmaps.evictAll()
         cancelPendingLoads()
     }
 
@@ -73,12 +74,15 @@ class GalleryThumbnailLoader(
         key: String,
         isAvailable: Boolean,
         allowSourceRead: Boolean,
+        peek: () -> Bitmap?,
         read: suspend () -> Bitmap?,
         onLoaded: (Bitmap?) -> Unit,
     ) {
-        bitmaps.get(key)?.let {
-            onLoaded(it)
-            return
+        if (isAvailable) {
+            peek()?.let {
+                onLoaded(it)
+                return
+            }
         }
         onLoaded(null)
         if (!isAvailable || !allowSourceRead) return
@@ -88,19 +92,19 @@ class GalleryThumbnailLoader(
             val bitmap = withContext(Dispatchers.IO) { runCatching { read() }.getOrNull() }
             loadingJobs.remove(key)
             loadingKeys.remove(key)
-            if (bitmap != null) bitmaps.put(key, bitmap)
             callbacks.remove(key).orEmpty().forEach { callback -> callback(bitmap) }
         }
         loadingJobs[key] = job
         job.start()
     }
 
+    private fun peekProtonThumbnail(nodeUid: String): Bitmap? {
+        val userId = protonUserId() ?: return null
+        return protonRepository.peekThumbnail(userId, nodeUid)
+    }
+
     private suspend fun loadProtonThumbnail(nodeUid: String): Bitmap? {
         val userId = protonUserId() ?: return null
         return protonRepository.loadThumbnail(userId, nodeUid)
     }
-
-    private fun cacheSize(): Int = (Runtime.getRuntime().maxMemory() / 1_024 / 12)
-        .coerceIn(8 * 1_024, 48 * 1_024)
-        .toInt()
 }

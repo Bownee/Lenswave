@@ -144,6 +144,13 @@ class ProtonPhotoGateway @Inject internal constructor(
         }
     }
 
+    override fun peekThumbnail(userId: UserId, nodeUid: String): Bitmap? {
+        // Synchronous by design: the in-memory peek must not wait on the session guard, so an
+        // inactive account simply reports no cached thumbnail.
+        if (!sessionGuard.isActive(userId)) return null
+        return downloads.peekThumbnail(userId, nodeUid)
+    }
+
     override suspend fun trashPhotos(userId: UserId, nodeUids: Collection<String>): ProtonTrashResult {
         return withContext(Dispatchers.IO) { sessionGuard.withActiveSession(userId) {
             val requested = nodeUids.distinct()

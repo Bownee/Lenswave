@@ -1,11 +1,8 @@
 package com.bownee.lenswave.proton
 
-import com.bownee.lenswave.LenswaveDiagnostics
 import com.bownee.lenswave.LenswaveOperation
-
 import javax.inject.Inject
 import javax.inject.Singleton
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -21,7 +18,7 @@ import me.proton.drive.sdk.entity.NodeUid
 internal class ProtonAlbumRepository @Inject constructor(
     private val clientProvider: ProtonPhotosClientProvider,
     private val cache: ProtonAlbumCache,
-    private val snapshots: ProtonSnapshotCoordinator,
+    private val snapshotSync: ProtonSnapshotSync,
 ) {
     private val albumsSyncMutex = Mutex()
     private val albumPhotosSyncMutex = Mutex()
@@ -54,43 +51,36 @@ internal class ProtonAlbumRepository @Inject constructor(
     suspend fun syncMetadata(userId: UserId, forceRemote: Boolean) = albumsSyncMutex.withLock {
         val existing = cache.readAlbums(userId.id)
         val hasCachedSnapshot = cache.hasAlbumsSnapshot(userId.id)
-        try {
-            val shouldEnumerate = snapshots.shouldEnumerate(
-                userId.id,
-                ProtonSyncSource.ALBUMS,
-                ProtonSyncKeys.ALBUMS,
-                forceRemote,
-                hasCachedSnapshot,
-            )
-            if (!shouldEnumerate) {
-                emitAlbums(userId, existing, syncing = false, hasLoaded = true)
-                return@withLock
-            }
-            emitAlbums(userId, existing, syncing = true, hasLoaded = hasCachedSnapshot)
-            val photosClient = clientProvider.get(userId)
-            val sharedNodeUids = photosClient.enumerateSharedWithMeNodeUids().toList()
-            val albums = (photosClient.enumerateAlbumNodeUids().toList() + sharedNodeUids)
-                .distinctBy(NodeUid::value)
-                .map { nodeUid -> loadAlbum(photosClient, userId, nodeUid) }
-                .sortedByDescending(ProtonAlbum::lastActivityEpochSeconds)
-                .toMutableList()
-                .also { remoteAlbums ->
-                    cache.reconcileAlbums(userId.id, remoteAlbums.map(ProtonAlbum::nodeUid))
-                    cache.writeAlbums(userId.id, remoteAlbums)
-                    snapshots.commit(userId.id, ProtonSyncKeys.ALBUMS)
-                }
-
-            emitAlbums(userId, albums, syncing = false)
-        } catch (error: CancellationException) {
-            mutableAlbumsState.value = mutableAlbumsState.value.copy(syncing = false)
-            throw error
-        } catch (error: Throwable) {
-            LenswaveDiagnostics.reportFailure(LenswaveOperation.ALBUM_SYNC, error)
-            mutableAlbumsState.value = mutableAlbumsState.value.copy(
-                syncing = false,
-                refreshFailed = true,
-            )
-        }
+        snapshotSync.sync(
+            userId = userId.id,
+            source = ProtonSyncSource.ALBUMS,
+            syncKey = ProtonSyncKeys.ALBUMS,
+            forceRemote = forceRemote,
+            hasSnapshot = hasCachedSnapshot,
+            operation = LenswaveOperation.ALBUM_SYNC,
+            publishFresh = { emitAlbums(userId, existing, syncing = false, hasLoaded = true) },
+            publishSyncing = { emitAlbums(userId, existing, syncing = true, hasLoaded = hasCachedSnapshot) },
+            enumerate = {
+                val photosClient = clientProvider.get(userId)
+                val sharedNodeUids = photosClient.enumerateSharedWithMeNodeUids().toList()
+                (photosClient.enumerateAlbumNodeUids().toList() + sharedNodeUids)
+                    .distinctBy(NodeUid::value)
+                    .map { nodeUid -> loadAlbum(photosClient, userId, nodeUid) }
+                    .sortedByDescending(ProtonAlbum::lastActivityEpochSeconds)
+            },
+            commit = { albums ->
+                cache.reconcileAlbums(userId.id, albums.map(ProtonAlbum::nodeUid))
+                cache.writeAlbums(userId.id, albums)
+            },
+            publishResult = { albums -> emitAlbums(userId, albums, syncing = false) },
+            publishCancelled = { mutableAlbumsState.value = mutableAlbumsState.value.copy(syncing = false) },
+            publishFailed = {
+                mutableAlbumsState.value = mutableAlbumsState.value.copy(
+                    syncing = false,
+                    refreshFailed = true,
+                )
+            },
+        )
     }
 
     suspend fun syncAlbumPhotoMetadata(
@@ -100,45 +90,46 @@ internal class ProtonAlbumRepository @Inject constructor(
     ) = albumPhotosSyncMutex.withLock {
         val existing = cache.readAlbumPhotos(userId.id, album.nodeUid)
         val hasCachedSnapshot = cache.hasAlbumPhotosSnapshot(userId.id, album.nodeUid)
-        try {
-            val syncKey = ProtonSyncKeys.albumPhotos(album.nodeUid)
-            val shouldEnumerate = snapshots.shouldEnumerate(
-                userId.id,
-                ProtonSyncSource.ALBUM_PHOTOS,
-                syncKey,
-                forceRemote,
-                hasCachedSnapshot,
-            )
-            if (!shouldEnumerate) {
-                emitAlbumPhotos(userId, album, existing, hasLoaded = true, syncing = false)
-                return@withLock
-            }
-            emitAlbumPhotos(userId, album, existing, hasLoaded = hasCachedSnapshot, syncing = true)
-            val photosClient = clientProvider.get(userId)
-            val photos = photosClient.enumerateAlbum(NodeUid(album.nodeUid)).toList().map { item ->
-                ProtonGalleryPhoto(
-                    nodeUid = item.nodeUid.value,
-                    captureTimeEpochSeconds = item.captureTime.epochSecond,
-                    hasThumbnail = cache.thumbnailExists(userId.id, item.nodeUid.value),
-                )
-            }.sortedByDescending(ProtonGalleryPhoto::captureTimeEpochSeconds)
-            cache.writeAlbumPhotos(userId.id, album.nodeUid, photos)
-            snapshots.commit(userId.id, syncKey)
-            emitAlbumPhotos(userId, album, photos, hasLoaded = true, syncing = false)
-        } catch (error: CancellationException) {
-            if (mutableAlbumPhotosState.value.albumUid == album.nodeUid) {
-                mutableAlbumPhotosState.value = mutableAlbumPhotosState.value.copy(syncing = false)
-            }
-            throw error
-        } catch (error: Throwable) {
-            LenswaveDiagnostics.reportFailure(LenswaveOperation.ALBUM_PHOTO_SYNC, error)
-            if (mutableAlbumPhotosState.value.albumUid == album.nodeUid) {
-                mutableAlbumPhotosState.value = mutableAlbumPhotosState.value.copy(
-                    syncing = false,
-                    refreshFailed = true,
-                )
-            }
-        }
+        snapshotSync.sync(
+            userId = userId.id,
+            source = ProtonSyncSource.ALBUM_PHOTOS,
+            syncKey = ProtonSyncKeys.albumPhotos(album.nodeUid),
+            forceRemote = forceRemote,
+            hasSnapshot = hasCachedSnapshot,
+            operation = LenswaveOperation.ALBUM_PHOTO_SYNC,
+            publishFresh = { emitAlbumPhotos(userId, album, existing, hasLoaded = true, syncing = false) },
+            publishSyncing = {
+                emitAlbumPhotos(userId, album, existing, hasLoaded = hasCachedSnapshot, syncing = true)
+            },
+            enumerate = {
+                clientProvider.get(userId).enumerateAlbum(NodeUid(album.nodeUid)).toList().map { item ->
+                    ProtonGalleryPhoto(
+                        nodeUid = item.nodeUid.value,
+                        captureTimeEpochSeconds = item.captureTime.epochSecond,
+                        hasThumbnail = cache.thumbnailExists(userId.id, item.nodeUid.value),
+                    )
+                }.sortedByDescending(ProtonGalleryPhoto::captureTimeEpochSeconds)
+            },
+            commit = { photos -> cache.writeAlbumPhotos(userId.id, album.nodeUid, photos) },
+            publishResult = { photos ->
+                emitAlbumPhotos(userId, album, photos, hasLoaded = true, syncing = false)
+            },
+            // The album-photo state may already belong to another album by the time the sync
+            // settles; only the album that is still open reflects the outcome.
+            publishCancelled = {
+                if (mutableAlbumPhotosState.value.albumUid == album.nodeUid) {
+                    mutableAlbumPhotosState.value = mutableAlbumPhotosState.value.copy(syncing = false)
+                }
+            },
+            publishFailed = {
+                if (mutableAlbumPhotosState.value.albumUid == album.nodeUid) {
+                    mutableAlbumPhotosState.value = mutableAlbumPhotosState.value.copy(
+                        syncing = false,
+                        refreshFailed = true,
+                    )
+                }
+            },
+        )
     }
 
     internal fun markCoverThumbnailsAvailable(userId: UserId, nodeUids: Set<String>) {

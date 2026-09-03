@@ -39,9 +39,13 @@ internal class ProtonThumbnailStore @Inject constructor(
         }
     }
 
+    /** The decoded bitmap when it is already in memory; never touches disk or blocks on a decode. */
+    fun peek(userId: String, nodeUid: String): Bitmap? =
+        bitmaps.get(ThumbnailKey(userId, nodeUid))?.takeUnless(Bitmap::isRecycled)
+
     fun load(userId: String, nodeUid: String): Bitmap? {
         val key = ThumbnailKey(userId, nodeUid)
-        bitmaps.get(key)?.takeUnless(Bitmap::isRecycled)?.let { return it }
+        peek(userId, nodeUid)?.let { return it }
         return synchronized(lock(key)) {
             bitmaps.get(key)?.takeUnless(Bitmap::isRecycled) ?: loadFromDisk(key)
         }
@@ -164,8 +168,9 @@ internal class ProtonThumbnailStore @Inject constructor(
     private fun isStalePartial(file: File): Boolean =
         file.extension == "part" && isExpired(file, ProtonStorageLayout.STALE_PART_TTL_MILLIS)
 
-    private fun bitmapCacheSize(): Int = (Runtime.getRuntime().maxMemory() / 1_024 / 16)
-        .coerceIn(8 * 1_024, 32 * 1_024)
+    /** The only decoded-thumbnail cache in the process, so it must hold a whole gallery screen. */
+    private fun bitmapCacheSize(): Int = (Runtime.getRuntime().maxMemory() / 1_024 / 12)
+        .coerceIn(8 * 1_024, 48 * 1_024)
         .toInt()
 
     private data class ThumbnailKey(val userId: String, val nodeUid: String)

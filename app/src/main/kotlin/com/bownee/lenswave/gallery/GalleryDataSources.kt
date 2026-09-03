@@ -43,6 +43,12 @@ interface ProtonSessionLifecycle {
 interface ProtonThumbnailImageSource {
     /** Null when no thumbnail is stored; the gateway re-queues it for download. */
     suspend fun loadThumbnail(userId: UserId, nodeUid: String): Bitmap?
+
+    /**
+     * The thumbnail only if it is already decoded in memory. Never touches disk or suspends, so
+     * grid cells can bind it in the same frame; null means [loadThumbnail] must be called.
+     */
+    fun peekThumbnail(userId: UserId, nodeUid: String): Bitmap?
 }
 
 /** Full-resolution media for the viewer. */
