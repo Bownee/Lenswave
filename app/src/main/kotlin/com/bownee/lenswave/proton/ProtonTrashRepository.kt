@@ -1,6 +1,7 @@
 package com.bownee.lenswave.proton
 
 import com.bownee.lenswave.LenswaveDiagnostics
+import com.bownee.lenswave.LenswaveOperation
 
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -43,7 +44,7 @@ internal class ProtonTrashRepository @Inject constructor(
             val shouldEnumerate = snapshots.shouldEnumerate(
                 userId.id,
                 ProtonSyncSource.TRASH,
-                SYNC_KEY,
+                ProtonSyncKeys.TRASH,
                 forceRemote,
                 hasCachedSnapshot,
             )
@@ -61,7 +62,7 @@ internal class ProtonTrashRepository @Inject constructor(
                 )
             }.sortedByDescending(ProtonTrashPhoto::trashedAtEpochSeconds).toMutableList().also {
                 cache.writeTrash(userId.id, it)
-                snapshots.commit(userId.id, SYNC_KEY)
+                snapshots.commit(userId.id, ProtonSyncKeys.TRASH)
             }
 
             emit(userId, photos, syncing = false)
@@ -69,7 +70,7 @@ internal class ProtonTrashRepository @Inject constructor(
             mutableState.value = mutableState.value.copy(syncing = false)
             throw error
         } catch (error: Throwable) {
-            LenswaveDiagnostics.reportFailure("trash-sync", error)
+            LenswaveDiagnostics.reportFailure(LenswaveOperation.TRASH_SYNC, error)
             mutableState.value = mutableState.value.copy(
                 syncing = false,
                 refreshFailed = true,
@@ -78,36 +79,25 @@ internal class ProtonTrashRepository @Inject constructor(
     }
 
     internal fun markThumbnailsAvailable(userId: UserId, nodeUids: Set<String>) {
-        if (nodeUids.isEmpty()) return
-        mutableState.update { state ->
-            if (state.userId != userId.id) return@update state
-            var completedCount = 0
-            val photos = state.photos.map { photo ->
-                if (photo.nodeUid !in nodeUids || photo.hasThumbnail) return@map photo
-                completedCount++
-                photo.copy(hasThumbnail = true)
-            }
-            if (completedCount == 0) return@update state
-            state.copy(
-                photos = photos,
-            )
-        }
+        markThumbnails(userId, nodeUids, available = true)
     }
 
     internal fun markThumbnailsUnavailable(userId: UserId, nodeUids: Set<String>) {
+        markThumbnails(userId, nodeUids, available = false)
+    }
+
+    private fun markThumbnails(userId: UserId, nodeUids: Set<String>, available: Boolean) {
         if (nodeUids.isEmpty()) return
         mutableState.update { state ->
             if (state.userId != userId.id) return@update state
-            var invalidatedCount = 0
-            val photos = state.photos.map { photo ->
-                if (photo.nodeUid !in nodeUids || !photo.hasThumbnail) return@map photo
-                invalidatedCount++
-                photo.copy(hasThumbnail = false)
-            }
-            if (invalidatedCount == 0) return@update state
-            state.copy(
-                photos = photos,
-            )
+            val photos = state.photos.withThumbnailAvailability(
+                nodeUids,
+                available,
+                nodeUid = ProtonTrashPhoto::nodeUid,
+                hasThumbnail = ProtonTrashPhoto::hasThumbnail,
+                copy = { photo, hasThumbnail -> photo.copy(hasThumbnail = hasThumbnail) },
+            ) ?: return@update state
+            state.copy(photos = photos)
         }
     }
 
@@ -147,9 +137,5 @@ internal class ProtonTrashRepository @Inject constructor(
             hasLoaded = hasLoaded,
             syncing = syncing,
         )
-    }
-
-    private companion object {
-        const val SYNC_KEY = "trash"
     }
 }

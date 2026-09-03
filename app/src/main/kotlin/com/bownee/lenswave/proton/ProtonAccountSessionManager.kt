@@ -1,6 +1,7 @@
 package com.bownee.lenswave.proton
 
 import com.bownee.lenswave.LenswaveDiagnostics
+import com.bownee.lenswave.LenswaveOperation
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -57,7 +58,7 @@ class ProtonAccountSessionManager @Inject constructor(
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Throwable) {
-                LenswaveDiagnostics.reportFailure("account-observer", error)
+                LenswaveDiagnostics.reportFailure(LenswaveOperation.ACCOUNT_OBSERVER, error)
                 delay(retryDelayMillis)
                 retryDelayMillis = (retryDelayMillis * 2).coerceAtMost(MAX_RETRY_MILLIS)
             }
@@ -95,7 +96,7 @@ class ProtonAccountSessionManager @Inject constructor(
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Throwable) {
-                LenswaveDiagnostics.reportFailure("account-transition", error)
+                LenswaveDiagnostics.reportFailure(LenswaveOperation.ACCOUNT_TRANSITION, error)
                 mutableState.value = mutableState.value.copy(transitioning = true)
                 delay(retryDelayMillis)
                 retryDelayMillis = (retryDelayMillis * 2).coerceAtMost(MAX_RETRY_MILLIS)

@@ -3,6 +3,7 @@ package com.bownee.lenswave.proton
 import android.content.Context
 import androidx.core.content.edit
 import com.bownee.lenswave.LenswaveDiagnostics
+import com.bownee.lenswave.LenswaveOperation
 import com.bownee.lenswave.storage.AtomicFileStore
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.nio.channels.WritableByteChannel
@@ -61,7 +62,7 @@ class ProtonPhotosClientProvider @Inject constructor(
     } catch (error: CancellationException) {
         throw error
     } catch (error: Throwable) {
-        LenswaveDiagnostics.reportFailure("proton-client-create", error)
+        LenswaveDiagnostics.reportFailure(LenswaveOperation.PROTON_CLIENT_CREATE, error)
         throw error
     }
 
@@ -95,7 +96,7 @@ class ProtonPhotosClientProvider @Inject constructor(
                         } catch (error: CancellationException) {
                             throw error
                         } catch (error: Throwable) {
-                            LenswaveDiagnostics.reportFailure("original-download-progress", error)
+                            LenswaveDiagnostics.reportFailure(LenswaveOperation.ORIGINAL_DOWNLOAD_PROGRESS, error)
                         }
                     }
                     try {

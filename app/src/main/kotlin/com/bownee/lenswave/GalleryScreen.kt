@@ -1,5 +1,6 @@
 package com.bownee.lenswave
 
+import android.content.Context
 import android.content.res.ColorStateList
 import android.graphics.Color
 import android.text.TextUtils
@@ -21,18 +22,19 @@ import com.bownee.lenswave.gallery.GalleryAsset
 import com.bownee.lenswave.gallery.GalleryListAdapter
 import com.bownee.lenswave.gallery.GalleryListView
 import com.bownee.lenswave.gallery.GalleryScrollPosition
+import com.bownee.lenswave.gallery.GalleryStickyDateController
 import com.bownee.lenswave.gallery.GalleryTab
 import com.bownee.lenswave.gallery.GalleryThumbnailLoader
 import com.bownee.lenswave.gallery.LibraryAction
 import com.bownee.lenswave.proton.ProtonAlbum
-import com.bownee.lenswave.proton.ProtonPhotoGateway
+import com.bownee.lenswave.gallery.ProtonThumbnailImageSource
 import kotlinx.coroutines.CoroutineScope
 import me.proton.core.domain.entity.UserId
 
 internal class GalleryScreen(
     private val activity: GalleryActivity,
     scope: CoroutineScope,
-    repository: ProtonPhotoGateway,
+    repository: ProtonThumbnailImageSource,
     currentUserId: () -> UserId?,
     private val actions: Actions,
 ) {
@@ -40,21 +42,22 @@ internal class GalleryScreen(
     private val pageTitle: TextView
     private val status: TextView
     val list: GalleryListView
-    val galleryHeader: LinearLayout
-    val galleryFooter: View
+    private val galleryHeader: LinearLayout
+    private val galleryFooter: View
     private val emptyPanel: LinearLayout
     private val emptyTitle: TextView
     private val emptyMessage: TextView
     private val emptyAction: Button
     val adapter: GalleryListAdapter
-    val stickyDate: TextView
+    private val stickyDate: TextView
+    private val stickyDateController: GalleryStickyDateController
     val tabBar: LinearLayout
     val selectionBar: LinearLayout
     private val selectionCount: TextView
     private val selectionDeleteButton: Button
     val settingsButton: ImageButton
     private val backButton: ImageButton
-    val trashDeleteAllButton: Button
+    private val trashDeleteAllButton: Button
     private val photosTab: TabButton
     private val libraryTab: TabButton
     private val titleRow: LinearLayout
@@ -63,14 +66,6 @@ internal class GalleryScreen(
     private var headerSticky = false
     private var safeArea = Insets.NONE
 
-    private var pendingStickyDatePosition: Int? = null
-    private var stickyDateUpdatePosted = false
-    private val stickyDateUpdate = Runnable {
-        stickyDateUpdatePosted = false
-        val position = pendingStickyDatePosition ?: return@Runnable
-        pendingStickyDatePosition = null
-        updateStickyDate(position)
-    }
     init {
         val header = buildGalleryHeader()
         galleryHeader = header.container
@@ -146,6 +141,7 @@ internal class GalleryScreen(
                 Gravity.TOP or Gravity.START,
             ),
         )
+        stickyDateController = GalleryStickyDateController(list, adapter, stickyDate)
         root.addView(
             stickyHeader,
             FrameLayout.LayoutParams(
@@ -171,9 +167,7 @@ internal class GalleryScreen(
     }
 
     fun dispose() {
-        list.removeCallbacks(stickyDateUpdate)
-        pendingStickyDatePosition = null
-        stickyDateUpdatePosted = false
+        stickyDateController.dispose()
     }
 
     fun captureScrollPosition(): GalleryScrollPosition? {
@@ -194,16 +188,34 @@ internal class GalleryScreen(
             )
             list.post {
                 if (!isCurrentDestination()) return@post
-                scheduleStickyDateUpdate(list.firstVisiblePosition)
+                stickyDateController.schedule(list.firstVisiblePosition)
             }
         }
     }
 
-    fun renderHeader(statusText: String, showDeleteAll: Boolean, refreshing: Boolean) {
+    fun renderHeader(statusText: String) {
         status.text = statusText
-        trashDeleteAllButton.visibility = if (showDeleteAll) View.VISIBLE else View.GONE
+    }
+
+    /**
+     * The single owner of the "Delete all" button's state: shown only while the trash offers it
+     * and nothing is selected, and disabled while a refresh is in flight.
+     */
+    fun renderTrashActions(showDeleteAll: Boolean, refreshing: Boolean, selecting: Boolean) {
+        trashDeleteAllButton.visibility = if (showDeleteAll && !selecting) View.VISIBLE else View.GONE
         trashDeleteAllButton.isEnabled = !refreshing
         trashDeleteAllButton.alpha = if (refreshing) 0.5f else 1f
+    }
+
+    /** Sizes the list footer that keeps the last rows clear of the floating bottom bar. */
+    fun setFooterHeight(height: Int) {
+        val params = galleryFooter.layoutParams ?: AbsListView.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            height,
+        )
+        if (params.height == height) return
+        params.height = height
+        galleryFooter.layoutParams = params
     }
 
     fun renderNavigation(title: String, tab: GalleryTab, showBack: Boolean) {
@@ -282,7 +294,7 @@ internal class GalleryScreen(
         emptyAction.setOnClickListener(if (onAction == null) null else View.OnClickListener { onAction() })
     }
 
-    fun renderSelection(selectedCount: Int, viewingTrash: Boolean, showDeleteAll: Boolean) {
+    fun renderSelection(selectedCount: Int, viewingTrash: Boolean) {
         val selecting = selectedCount > 0
         selectionCount.text = activity.resources.getQuantityString(
             R.plurals.selected_photo_count,
@@ -290,9 +302,6 @@ internal class GalleryScreen(
             selectedCount,
         )
         selectionDeleteButton.setText(if (viewingTrash) R.string.delete_forever else R.string.delete)
-        if (viewingTrash) {
-            trashDeleteAllButton.visibility = if (!selecting && showDeleteAll) View.VISIBLE else View.GONE
-        }
         selectionBar.visibility = if (selecting) View.VISIBLE else View.GONE
     }
 
@@ -308,43 +317,10 @@ internal class GalleryScreen(
         list.setOnFastScrollInteractionListener { active ->
             adapter.setFastScrolling(active)
             if (!active) {
-                scheduleStickyDateUpdate(list.firstVisiblePosition)
+                stickyDateController.schedule(list.firstVisiblePosition)
             }
         }
-        list.setOnScrollListener(object : AbsListView.OnScrollListener {
-            override fun onScrollStateChanged(view: AbsListView?, scrollState: Int) = Unit
-
-            override fun onScroll(
-                view: AbsListView?,
-                firstVisibleItem: Int,
-                visibleItemCount: Int,
-                totalItemCount: Int,
-            ) {
-                scheduleStickyDateUpdate(firstVisibleItem)
-            }
-        })
-    }
-
-    private fun scheduleStickyDateUpdate(firstVisibleItem: Int) {
-        pendingStickyDatePosition = firstVisibleItem
-        if (stickyDateUpdatePosted) return
-        stickyDateUpdatePosted = true
-        list.postOnAnimation(stickyDateUpdate)
-    }
-
-    private fun updateStickyDate(firstVisibleItem: Int) {
-        if (firstVisibleItem < list.headerViewsCount) {
-            stickyDate.visibility = View.GONE
-            return
-        }
-        val position = firstVisibleItem - list.headerViewsCount
-        val label = adapter.dateLabelForPosition(position)
-        if (label == null) {
-            stickyDate.visibility = View.GONE
-        } else {
-            stickyDate.text = label
-            stickyDate.visibility = View.VISIBLE
-        }
+        stickyDateController.attach()
     }
 
     private fun buildGalleryHeader(): Header {
@@ -533,7 +509,7 @@ internal class GalleryScreen(
 
     /** A tab in the floating bottom bar: icon and label, tinted by selection state. */
     private class TabButton(
-        context: android.content.Context,
+        context: Context,
         icon: Int,
         label: String,
     ) : LinearLayout(context) {

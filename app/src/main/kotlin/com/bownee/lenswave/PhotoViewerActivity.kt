@@ -1,30 +1,23 @@
 package com.bownee.lenswave
 
-import android.animation.ValueAnimator
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
-import android.graphics.Color
+import android.graphics.Bitmap
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
 import android.text.format.DateFormat
 import android.text.format.Formatter
-import android.view.View
 import android.view.KeyEvent
-import android.view.ViewGroup
-import android.view.animation.PathInterpolator
+import android.view.View
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
-import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.core.graphics.Insets
-import androidx.core.net.toUri
 import androidx.core.view.ViewCompat
-import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.isVisible
 import androidx.fragment.app.FragmentActivity
@@ -38,15 +31,15 @@ import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import com.bownee.lenswave.gallery.GalleryAsset
 import com.bownee.lenswave.gallery.MediaKind
 import com.bownee.lenswave.gallery.PhotoDeletionDecision
+import com.bownee.lenswave.gallery.PhotoDeletionExecutor
 import com.bownee.lenswave.gallery.PhotoDeletionOperation
 import com.bownee.lenswave.gallery.PhotoDeletionPolicy
-import com.bownee.lenswave.gallery.PhotoDeletionExecutor
-import com.bownee.lenswave.metadata.PhotoMetadataItem
-import com.bownee.lenswave.metadata.PhotoMetadataAction
 import com.bownee.lenswave.metadata.PhotoMetadataReader
-import com.bownee.lenswave.proton.ProtonPhotoGateway
 import com.bownee.lenswave.proton.ProtonOriginalDownloadProgress
 import com.bownee.lenswave.proton.ProtonOriginalStream
+import com.bownee.lenswave.gallery.ProtonOriginalMediaSource
+import com.bownee.lenswave.gallery.ProtonPhotoMutations
+import com.bownee.lenswave.gallery.ProtonThumbnailImageSource
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -54,24 +47,28 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import me.proton.core.domain.entity.UserId
-import javax.inject.Inject
 import java.time.ZoneId
 import java.util.Locale
-import kotlin.math.abs
-import kotlin.math.max
+import javax.inject.Inject
 import kotlin.math.min
 import kotlin.math.roundToInt
-import kotlin.math.roundToLong
 
+/**
+ * Shows one photo or video from the gallery. The Activity owns the current [request], the
+ * navigation list and the `photoTransitioning`/`dismissing` flags, and handles loading, favourites
+ * and deletion itself; gestures are delegated to [ViewerSwipeController],
+ * [ViewerDismissController] and [ViewerDetailsSheetController].
+ */
 @AndroidEntryPoint
 class PhotoViewerActivity : FragmentActivity() {
-    @Inject lateinit var protonRepository: ProtonPhotoGateway
+    @Inject lateinit var originalMedia: ProtonOriginalMediaSource
+    @Inject lateinit var thumbnailSource: ProtonThumbnailImageSource
+    @Inject lateinit var photoMutations: ProtonPhotoMutations
     @Inject lateinit var metadataReader: PhotoMetadataReader
     @Inject lateinit var photoDeletionExecutor: PhotoDeletionExecutor
 
     private lateinit var screen: PhotoViewerScreen
     private val root get() = screen.root
-    private val backgroundScrim get() = screen.backgroundScrim
     private val photoDetailsScroll get() = screen.photoDetailsScroll
     private val mediaFrame get() = screen.mediaFrame
     private val thumbnailPreview get() = screen.thumbnailPreview
@@ -87,23 +84,19 @@ class PhotoViewerActivity : FragmentActivity() {
     private val favoriteButton get() = screen.favoriteButton
     private val deleteButton get() = screen.deleteButton
     private val detailsSheet get() = screen.detailsSheet
-    private val detailsContent get() = screen.detailsContent
-    private val detailsProgress get() = screen.detailsProgress
+    private lateinit var mediaTransform: ViewerMediaTransform
+    private lateinit var details: ViewerDetailsSheetController
+    private lateinit var dismiss: ViewerDismissController
+    private lateinit var swipe: ViewerSwipeController
     private lateinit var request: PhotoRequest
     private var navigationRequests: List<PhotoRequest> = emptyList()
     private var resolvedUri: Uri? = null
-    private var detailsShown = false
-    private var metadataLoaded = false
     private var photoTransitioning = false
     private var deletionInProgress = false
     private var favoriteInProgress = false
     private var dismissing = false
     private var photoReady = false
     private var previewStableId: String? = null
-    private var peekStableId: String? = null
-    private var peekOffset = 0
-    private var peekDragDistance = 0f
-    private var peekJob: Job? = null
     private var navigationFallback: NavigationFallback? = null
     private var photoLoadJob: Job? = null
     private var videoProgressJob: Job? = null
@@ -111,11 +104,6 @@ class PhotoViewerActivity : FragmentActivity() {
     private var pendingPreviewClear: Runnable? = null
     /** Accumulates what the gallery must refresh; a later result must not drop an earlier flag. */
     private val resultIntent = Intent()
-    private var detailsScrollAnimator: ValueAnimator? = null
-    private var detailsDragStartOffset: Int? = null
-    private var detailsDragStartedShown = false
-    private var detailsSheetAttachmentOffset = 0
-    private val verticalSettleInterpolator = PathInterpolator(0.2f, 0f, 0f, 1f)
     private var player: ExoPlayer? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -132,10 +120,10 @@ class PhotoViewerActivity : FragmentActivity() {
 
     override fun onDestroy() {
         photoLoadJob?.cancel()
-        detailsScrollAnimator?.cancel()
+        details.release()
         cancelLoadingPanelDelay()
         clearThumbnailPreview()
-        hidePeek()
+        swipe.release()
         photoView.close()
         releasePlayer()
         super.onDestroy()
@@ -150,7 +138,7 @@ class PhotoViewerActivity : FragmentActivity() {
         screen = PhotoViewerScreen(
             context = this,
             requestIsTrashed = request.isTrashed,
-            actions = PhotoViewerScreen.Actions(
+            callbacks = PhotoViewerScreen.Actions(
                 gesturesEnabled = {
                     this::screen.isInitialized &&
                         !photoTransitioning &&
@@ -163,19 +151,92 @@ class PhotoViewerActivity : FragmentActivity() {
                         y < mediaFrame.top - photoDetailsScroll.scrollY + playerView.bottom -
                             dp(VIDEO_CONTROLS_HEIGHT_DP)
                 },
-                onVerticalDrag = ::handleDetailsDrag,
-                onHorizontalDrag = ::handleHorizontalPhotoDrag,
+                onVerticalDrag = { distance, velocity, finished ->
+                    details.handleDetailsDrag(distance, velocity, finished)
+                },
+                onHorizontalDrag = { distance, finished ->
+                    swipe.handleHorizontalPhotoDrag(distance, finished)
+                },
                 onFavorite = ::toggleFavorite,
                 onDelete = ::deletePhoto,
                 onRetry = ::loadPhoto,
                 onLayoutChanged = ::updatePhotoDetailsLayout,
             ),
         )
+        buildCollaborators()
         setContentView(screen.root)
         actions.addOnLayoutChangeListener { _, _, top, _, bottom, _, oldTop, _, oldBottom ->
             if (top != oldTop || bottom != oldBottom) updateMediaBounds()
         }
         applySystemInsets()
+    }
+
+    private fun buildCollaborators() {
+        mediaTransform = ViewerMediaTransform(
+            photoView = photoView,
+            playerView = playerView,
+            thumbnailPreview = thumbnailPreview,
+            loadingPanel = loadingPanel,
+            mediaTitle = mediaTitle,
+        )
+        dismiss = ViewerDismissController(
+            activity = this,
+            screen = screen,
+            mediaTransform = mediaTransform,
+            host = object : ViewerDismissController.Host {
+                override val gesturesBlocked: Boolean get() = photoTransitioning || dismissing
+                override val dismissing: Boolean get() = this@PhotoViewerActivity.dismissing
+                override val detailsShown: Boolean get() = details.shown
+                override fun activeMediaView(): View = this@PhotoViewerActivity.activeMediaView()
+
+                override fun beginDismiss() {
+                    this@PhotoViewerActivity.dismissing = true
+                    setActionsEnabled(false)
+                }
+            },
+        )
+        details = ViewerDetailsSheetController(
+            context = this,
+            screen = screen,
+            metadataReader = metadataReader,
+            scope = lifecycleScope,
+            host = object : ViewerDetailsSheetController.Host {
+                override val request: PhotoRequest get() = this@PhotoViewerActivity.request
+                override val resolvedUri: Uri? get() = this@PhotoViewerActivity.resolvedUri
+                override val gesturesBlocked: Boolean get() = photoTransitioning || dismissing
+                override fun fittedMediaBottom(): Float? = this@PhotoViewerActivity.fittedMediaBottom()
+
+                override fun handlePhotoDismissDrag(distance: Float, velocity: Float, finished: Boolean) =
+                    dismiss.handlePhotoDismissDrag(distance, velocity, finished)
+
+                override fun resetPhotoDismiss() = dismiss.resetPhotoDismiss()
+            },
+        )
+        swipe = ViewerSwipeController(
+            screen = screen,
+            mediaTransform = mediaTransform,
+            scope = lifecycleScope,
+            loadThumbnail = { photo -> thumbnailSource.loadThumbnail(UserId(photo.userId), photo.nodeUid) },
+            host = object : ViewerSwipeController.Host {
+                override val request: PhotoRequest get() = this@PhotoViewerActivity.request
+                override val navigationRequests: List<PhotoRequest>
+                    get() = this@PhotoViewerActivity.navigationRequests
+                override val gesturesBlocked: Boolean
+                    get() = details.shown || photoTransitioning || dismissing
+                override fun activeMediaView(): View = this@PhotoViewerActivity.activeMediaView()
+                override fun beginNavigation() = this@PhotoViewerActivity.beginNavigation()
+                override fun commitNavigation(adjacent: PhotoRequest) =
+                    this@PhotoViewerActivity.commitNavigation(adjacent)
+                override fun adoptPreview(bitmap: Bitmap) = this@PhotoViewerActivity.adoptPreview(bitmap)
+            },
+        )
+    }
+
+    /** The single place the current request changes, so the intent and labels never lag it. */
+    private fun setCurrentRequest(value: PhotoRequest) {
+        request = value
+        request.writeTo(intent)
+        screen.setDeleteLabel(request.isTrashed)
     }
 
     private fun updatePhotoDetailsLayout(availableHeight: Int) {
@@ -192,7 +253,7 @@ class PhotoViewerActivity : FragmentActivity() {
         }
         detailsSheet.minimumHeight = (availableHeight * DETAILS_MINIMUM_HEIGHT_FRACTION).roundToInt()
         mediaFrame.post(::updateMediaBounds)
-        photoDetailsScroll.post(::synchronizeDetailsSheetWithImage)
+        photoDetailsScroll.post(details::synchronizeWithImage)
     }
 
     private fun loadPhoto() {
@@ -217,7 +278,7 @@ class PhotoViewerActivity : FragmentActivity() {
                     val userId = UserId(requestedPhoto.userId)
                     val nodeUid = requestedPhoto.nodeUid
                     if (requestedPhoto.mediaKind == MediaKind.VIDEO) {
-                        protonRepository.downloadOriginalProgressively(userId, nodeUid) { stream ->
+                        originalMedia.downloadOriginalProgressively(userId, nodeUid) { stream ->
                             withContext(Dispatchers.Main.immediate) {
                                 if (request.stableId != requestedPhoto.stableId) {
                                     throw CancellationException("Viewer moved to different media")
@@ -226,7 +287,7 @@ class PhotoViewerActivity : FragmentActivity() {
                             }
                         }
                     } else {
-                        protonRepository.downloadOriginal(userId, nodeUid)
+                        originalMedia.downloadOriginal(userId, nodeUid)
                     }
                 }
                 if (request.stableId != requestedPhoto.stableId) return@launch
@@ -254,15 +315,14 @@ class PhotoViewerActivity : FragmentActivity() {
     private fun resolveDisplayName(requestedPhoto: PhotoRequest) {
         lifecycleScope.launch {
             val name = withContext(Dispatchers.IO) {
-                protonRepository.getOriginalFileName(UserId(requestedPhoto.userId), requestedPhoto.nodeUid)
+                originalMedia.getOriginalFileName(UserId(requestedPhoto.userId), requestedPhoto.nodeUid)
             }.orEmpty()
             if (name.isBlank()) return@launch
             navigationRequests = navigationRequests.map { item ->
                 if (item.stableId == requestedPhoto.stableId) item.copy(displayName = name) else item
             }
             if (request.stableId != requestedPhoto.stableId) return@launch
-            request = request.copy(displayName = name)
-            request.writeTo(intent)
+            setCurrentRequest(request.copy(displayName = name))
             photoView.contentDescription = getString(
                 if (request.mediaKind == MediaKind.VIDEO) R.string.video_description
                 else R.string.photo_image_description,
@@ -278,7 +338,7 @@ class PhotoViewerActivity : FragmentActivity() {
             photoView.alpha = 0f
             return
         }
-        val bitmap = protonRepository.loadThumbnail(
+        val bitmap = thumbnailSource.loadThumbnail(
             UserId(requestedPhoto.userId),
             requestedPhoto.nodeUid,
         )
@@ -303,7 +363,7 @@ class PhotoViewerActivity : FragmentActivity() {
         thumbnailPreview.translationX = photoView.translationX
         // Shown at full opacity straight away: fading it up from black reads as a brightness dip.
         thumbnailPreview.alpha = 1f
-        photoDetailsScroll.post(::synchronizeDetailsSheetWithImage)
+        photoDetailsScroll.post(details::synchronizeWithImage)
     }
 
     private fun showPhoto(uri: Uri) {
@@ -312,7 +372,7 @@ class PhotoViewerActivity : FragmentActivity() {
         releasePlayer()
         playerView.visibility = View.GONE
         photoView.visibility = View.VISIBLE
-        if (detailsShown) ensureMetadataLoaded()
+        if (details.shown) details.ensureMetadataLoaded()
         photoView.load(uri) { result ->
             if (request.stableId != requestedStableId) return@load
             result.onSuccess {
@@ -320,9 +380,9 @@ class PhotoViewerActivity : FragmentActivity() {
                 photoReady = true
                 hideLoadingPanel()
                 setActionsEnabled(true)
-                if (detailsShown) ensureMetadataLoaded()
+                if (details.shown) details.ensureMetadataLoaded()
                 photoDetailsScroll.post {
-                    if (request.stableId == requestedStableId) synchronizeDetailsSheetWithImage()
+                    if (request.stableId == requestedStableId) details.synchronizeWithImage()
                 }
                 if (thumbnailPreview.isVisible) {
                     // The full image fades in over the opaque thumbnail, which is only removed
@@ -371,7 +431,7 @@ class PhotoViewerActivity : FragmentActivity() {
     ) {
         val requestedStableId = request.stableId
         resolvedUri = uri
-        if (detailsShown && dataSourceFactory == null) ensureMetadataLoaded()
+        if (details.shown && dataSourceFactory == null) details.ensureMetadataLoaded()
         photoView.clear()
         photoView.visibility = View.GONE
         releasePlayer()
@@ -390,7 +450,7 @@ class PhotoViewerActivity : FragmentActivity() {
                 videoProgressJob = null
                 hideLoadingPanel()
                 setActionsEnabled(true)
-                if (detailsShown) ensureMetadataLoaded()
+                if (details.shown) details.ensureMetadataLoaded()
                 playerView.animate().cancel()
                 playerView.alpha = 0f
                 playerView.animate()
@@ -507,154 +567,34 @@ class PhotoViewerActivity : FragmentActivity() {
         loadingPanelRunnable = null
     }
 
-    private fun handleHorizontalPhotoDrag(distance: Float, finished: Boolean) {
-        if (detailsShown || photoTransitioning || dismissing) return
-        if (distance == 0f) {
-            if (finished) resetHorizontalPhotoDrag()
-            return
-        }
-
-        val offset = if (distance > 0f) 1 else -1
-        val adjacent = adjacentTo(request.stableId, offset)
-        if (adjacent == null) {
-            resetHorizontalPhotoDrag()
-            return
-        }
-        if (!finished) {
-            cancelMediaAnimations()
-            val boundedDistance = distance.coerceIn(-root.width.toFloat(), root.width.toFloat())
-            setMediaTranslationX(-boundedDistance)
-            showPeek(adjacent, offset, boundedDistance)
-            return
-        }
-
-        val threshold = max(root.width * 0.1f, dp(40).toFloat())
-        if (abs(distance) >= threshold) navigatePhoto(offset) else resetHorizontalPhotoDrag()
-    }
-
-    private fun resetHorizontalPhotoDrag() {
-        cancelMediaAnimations()
-        animateMediaTranslationX(0f, 160L)
-        if (peekPreview.isVisible) {
-            val settledPeek = peekStableId
-            peekPreview.animate()
-                .translationX(peekOffset * peekDistance())
-                .setDuration(160L)
-                // A new drag may have started a different peek before this one settled.
-                .withEndAction { if (peekStableId == settledPeek) hidePeek() }
-                .start()
-        } else {
-            hidePeek()
-        }
-    }
-
-    /** Positions the neighbour's thumbnail one screen away in the drag direction, loading it first. */
-    private fun showPeek(adjacent: PhotoRequest, offset: Int, dragDistance: Float) {
-        peekDragDistance = dragDistance
-        if (peekStableId != adjacent.stableId || peekOffset != offset) {
-            peekJob?.cancel()
-            peekStableId = adjacent.stableId
-            peekOffset = offset
-            peekPreview.setImageDrawable(null)
-            peekPreview.visibility = View.GONE
-            peekJob = lifecycleScope.launch {
-                val bitmap = protonRepository.loadThumbnail(UserId(adjacent.userId), adjacent.nodeUid)
-                if (bitmap == null || peekStableId != adjacent.stableId) return@launch
-                peekPreview.setImageBitmap(bitmap)
-                peekPreview.alpha = 1f
-                peekPreview.visibility = View.VISIBLE
-                positionPeek(peekDragDistance)
-            }
-        }
-        positionPeek(dragDistance)
-    }
-
-    /** How far the neighbour rests from the current photo: one screen plus a small gap. */
-    private fun peekDistance(): Float = root.width + dp(PEEK_GAP_DP).toFloat()
-
-    private fun positionPeek(dragDistance: Float) {
-        peekPreview.animate().cancel()
-        peekPreview.translationX = -dragDistance + peekOffset * peekDistance()
-    }
-
-    private fun hidePeek() {
-        peekJob?.cancel()
-        peekJob = null
-        peekStableId = null
-        peekOffset = 0
-        peekPreview.animate().cancel()
-        peekPreview.setImageDrawable(null)
-        peekPreview.visibility = View.GONE
-        peekPreview.translationX = 0f
-    }
-
-    /**
-     * After a completed swipe the peek is already showing the new photo's thumbnail at rest, so it
-     * becomes the preview directly instead of reloading it through a black frame.
-     */
-    private fun adoptPeekAsPreview() {
-        val bitmap = (peekPreview.drawable as? android.graphics.drawable.BitmapDrawable)?.bitmap
-        if (bitmap == null || peekStableId != request.stableId) {
-            hidePeek()
-            return
-        }
-        previewStableId = request.stableId
-        thumbnailPreview.setImageBitmap(bitmap)
-        thumbnailPreview.alpha = 1f
-        thumbnailPreview.translationX = 0f
-        thumbnailPreview.visibility = View.VISIBLE
-        photoView.alpha = 0f
-        hidePeek()
-        photoDetailsScroll.post(::synchronizeDetailsSheetWithImage)
-    }
-
-    private fun navigatePhoto(offset: Int) {
-        if (detailsShown || photoTransitioning || dismissing) return
-        val adjacent = adjacentTo(request.stableId, offset) ?: return
-
+    /** Called by the swipe controller before the current media slides away. */
+    private fun beginNavigation() {
         val previousRequest = request
         photoTransitioning = true
         photoLoadJob?.cancel()
         cancelLoadingPanelDelay()
         navigationFallback = NavigationFallback(previousRequest, resolvedUri)
         setActionsEnabled(false)
-        cancelMediaAnimations()
-        if (peekPreview.isVisible && peekStableId == adjacent.stableId) {
-            peekPreview.animate().translationX(0f).setDuration(160L).start()
-        }
-        val activeMedia = activeMediaView()
-        activeMedia.animate()
-            .translationX(-offset * peekDistance())
-            .setDuration(160L)
-            .withEndAction {
-                thumbnailPreview.animate().cancel()
-                loadingPanel.animate().cancel()
-                request = adjacent
-                request.writeTo(intent)
-                resetPhotoStateForNavigation()
-                adoptPeekAsPreview()
-                photoTransitioning = false
-                loadPhoto()
-            }
-            .start()
-        if (activeMedia !== photoView) {
-            photoView.animate().translationX(-offset * peekDistance()).setDuration(160L).start()
-        }
-        if (activeMedia !== playerView) {
-            playerView.animate().translationX(-offset * peekDistance()).setDuration(160L).start()
-        }
-        thumbnailPreview.animate()
-            .translationX(-offset * peekDistance())
-            .setDuration(160L)
-            .start()
-        loadingPanel.animate()
-            .translationX(-offset * peekDistance())
-            .setDuration(160L)
-            .start()
-        mediaTitle.animate()
-            .translationX(-offset * peekDistance())
-            .setDuration(160L)
-            .start()
+    }
+
+    /** Called by the swipe controller once the current media has slid away. */
+    private fun commitNavigation(adjacent: PhotoRequest) {
+        setCurrentRequest(adjacent)
+        resetPhotoStateForNavigation()
+        swipe.adoptPeekAsPreview()
+        photoTransitioning = false
+        loadPhoto()
+    }
+
+    /** Installs the peek's bitmap as this request's thumbnail stand-in after a completed swipe. */
+    private fun adoptPreview(bitmap: Bitmap) {
+        previewStableId = request.stableId
+        thumbnailPreview.setImageBitmap(bitmap)
+        thumbnailPreview.alpha = 1f
+        thumbnailPreview.translationX = 0f
+        thumbnailPreview.visibility = View.VISIBLE
+        photoView.alpha = 0f
+        photoDetailsScroll.post(details::synchronizeWithImage)
     }
 
     private fun resetPhotoStateForNavigation() {
@@ -664,13 +604,7 @@ class PhotoViewerActivity : FragmentActivity() {
         photoView.clear()
         resolvedUri = null
         photoReady = false
-        metadataLoaded = false
-        detailsContent.removeAllViews()
-        detailsProgress.visibility = View.VISIBLE
-        detailsSheetAttachmentOffset = 0
-        detailsSheet.translationY = 0f
-        detailsSheet.alpha = 0f
-        detailsSheet.visibility = View.INVISIBLE
+        details.resetForNavigation()
         loadingPanel.visibility = View.GONE
         loadingPanel.translationX = 0f
         loadingPanel.translationY = 0f
@@ -699,8 +633,7 @@ class PhotoViewerActivity : FragmentActivity() {
         if (fallback != null) {
             clearThumbnailPreview()
             releasePlayer()
-            request = fallback.request
-            request.writeTo(intent)
+            setCurrentRequest(fallback.request)
             updateMediaTitle()
             resolvedUri = null
             photoTransitioning = false
@@ -755,7 +688,7 @@ class PhotoViewerActivity : FragmentActivity() {
         updateFavoriteButton()
         lifecycleScope.launch {
             try {
-                val result = protonRepository.setFavorite(userId, nodeUids, favorite)
+                val result = photoMutations.setFavorite(userId, nodeUids, favorite)
                 if (result.updatedCount != 1) {
                     Toast.makeText(
                         this@PhotoViewerActivity,
@@ -764,8 +697,7 @@ class PhotoViewerActivity : FragmentActivity() {
                     ).show()
                     return@launch
                 }
-                request = request.withFavorite(favorite)
-                request.writeTo(intent)
+                setCurrentRequest(request.withFavorite(favorite))
                 navigationRequests = navigationRequests.map { item ->
                     if (item.stableId == request.stableId) item.withFavorite(favorite) else item
                 }
@@ -790,399 +722,27 @@ class PhotoViewerActivity : FragmentActivity() {
      * ready file. Nothing is downloaded: only originals already in the encrypted cache qualify.
      */
     private fun prefetchAdjacentOriginals(stableId: String) {
-        val neighbours = listOfNotNull(adjacentTo(stableId, -1), adjacentTo(stableId, 1))
+        val neighbours = listOfNotNull(swipe.adjacentTo(stableId, -1), swipe.adjacentTo(stableId, 1))
             .filter { it.mediaKind != MediaKind.VIDEO }
         if (neighbours.isEmpty()) return
         lifecycleScope.launch(Dispatchers.IO) {
             neighbours.forEach { neighbour ->
                 runCatching {
-                    protonRepository.prepareCachedOriginal(UserId(neighbour.userId), neighbour.nodeUid)
+                    originalMedia.prepareCachedOriginal(UserId(neighbour.userId), neighbour.nodeUid)
                 }
             }
         }
     }
 
-    private fun adjacentTo(stableId: String, offset: Int): PhotoRequest? {
-        val index = navigationRequests.indexOfFirst { it.stableId == stableId }
-        return if (index < 0) null else navigationRequests.getOrNull(index + offset)
-    }
-
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean = when (keyCode) {
-        KeyEvent.KEYCODE_DPAD_LEFT -> { navigatePhoto(-1); true }
-        KeyEvent.KEYCODE_DPAD_RIGHT -> { navigatePhoto(1); true }
+        KeyEvent.KEYCODE_DPAD_LEFT -> { swipe.navigatePhoto(-1); true }
+        KeyEvent.KEYCODE_DPAD_RIGHT -> { swipe.navigatePhoto(1); true }
         KeyEvent.KEYCODE_PLUS, KeyEvent.KEYCODE_EQUALS, KeyEvent.KEYCODE_NUMPAD_ADD -> {
             photoView.zoomIn(); true
         }
         KeyEvent.KEYCODE_MINUS, KeyEvent.KEYCODE_NUMPAD_SUBTRACT -> { photoView.zoomOut(); true }
         KeyEvent.KEYCODE_0, KeyEvent.KEYCODE_NUMPAD_0 -> { photoView.resetZoom(); true }
         else -> super.onKeyDown(keyCode, event)
-    }
-
-    private fun loadMetadata(uri: Uri) {
-        if (metadataLoaded) return
-        metadataLoaded = true
-        val metadataRequest = request
-        lifecycleScope.launch {
-            val result = withContext(Dispatchers.IO) {
-                runCatching {
-                    metadataReader.read(
-                        this@PhotoViewerActivity,
-                        uri,
-                        metadataRequest.displayName,
-                        metadataRequest.capturedAt,
-                    )
-                }
-            }
-            if (request.stableId != metadataRequest.stableId) return@launch
-            detailsProgress.visibility = View.GONE
-            result.onSuccess { items -> items.forEach(::addDetailsRow) }
-                .onFailure {
-                    addDetailsRow(PhotoMetadataItem(getString(R.string.error), getString(R.string.could_not_read_metadata)))
-                }
-        }
-    }
-
-    private fun addDetailsRow(item: PhotoMetadataItem) {
-        detailsContent.addView(LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(12), dp(10), dp(12), dp(10))
-            background = UiStyle.rippled(UiStyle.rounded(this@PhotoViewerActivity, Color.TRANSPARENT, 14))
-            addView(TextView(this@PhotoViewerActivity).apply {
-                text = item.label
-                textSize = 12f
-                typeface = UiStyle.medium
-                setTextColor(UiStyle.muted)
-            })
-            addView(TextView(this@PhotoViewerActivity).apply {
-                text = item.value
-                textSize = 15.5f
-                setTextColor(UiStyle.text)
-                setPadding(0, dp(3), 0, 0)
-            })
-            if (item.action is PhotoMetadataAction.OpenMap) {
-                addView(TextView(this@PhotoViewerActivity).apply {
-                    setText(R.string.open_in_maps)
-                    textSize = 13f
-                    setTextColor(UiStyle.accent)
-                    setPadding(0, dp(7), 0, dp(2))
-                    setOnClickListener { openMap(item.action) }
-                })
-                setOnClickListener { openMap(item.action) }
-            }
-        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-            bottomMargin = dp(2)
-        })
-    }
-
-    private fun handleDetailsDrag(distance: Float, velocity: Float, finished: Boolean) {
-        if (photoTransitioning || dismissing) return
-        if (!detailsShown && detailsDragStartOffset == null && distance < 0f) {
-            handlePhotoDismissDrag(-distance, -velocity, finished)
-            return
-        }
-
-        if (!finished) {
-            val startOffset = detailsDragStartOffset ?: photoDetailsScroll.scrollY.also {
-                detailsDragStartOffset = it
-                detailsDragStartedShown = detailsShown
-                detailsScrollAnimator?.cancel()
-            }
-            setDetailsOffset((startOffset + distance).roundToInt())
-            return
-        }
-
-        val startOffset = detailsDragStartOffset
-        val startedShown = detailsDragStartedShown
-        detailsDragStartOffset = null
-        detailsDragStartedShown = false
-        if (startOffset == null) {
-            if (!detailsShown) resetPhotoDismiss()
-            return
-        }
-
-        if (!startedShown) {
-            val initialOffset = initialDetailsOffset().toFloat()
-            if (VerticalGesturePolicy.shouldSettleSheet(
-                distance,
-                velocity,
-                initialOffset,
-                resources.displayMetrics.density,
-            )
-            ) {
-                showDetails(velocity)
-            } else {
-                hideDetails(velocity)
-            }
-            return
-        }
-
-        val initialOffset = initialDetailsOffset()
-        val targetOffset = VerticalGesturePolicy.detailsSettleOffset(
-            currentOffset = photoDetailsScroll.scrollY,
-            velocity = velocity,
-            initialOffset = initialOffset,
-            maximumOffset = maximumDetailsOffset(),
-        )
-        if (targetOffset == 0) hideDetails(velocity) else animateDetailsOffset(targetOffset, velocity)
-    }
-
-    private fun handlePhotoDismissDrag(distance: Float, velocity: Float, finished: Boolean) {
-        if (photoTransitioning || dismissing) return
-        if (finished) {
-            if (VerticalGesturePolicy.shouldDismissViewer(
-                    distance,
-                    velocity,
-                    root.height.toFloat(),
-                    resources.displayMetrics.density,
-                )
-            ) {
-                animateDismissToGallery(velocity)
-            } else {
-                resetPhotoDismiss(velocity)
-            }
-            return
-        }
-
-        cancelMediaAnimations()
-        backgroundScrim.animate().cancel()
-        actions.animate().cancel()
-        mediaTitle.animate().cancel()
-        val progress = (distance / (root.height * 0.58f).coerceAtLeast(1f)).coerceIn(0f, 1f)
-        val photoScale = 1f - 0.12f * progress
-        setMediaDismissTransform(distance, photoScale)
-        loadingPanel.alpha = 1f - progress
-        backgroundScrim.alpha = 1f - 0.88f * progress
-        actions.alpha = 1f - progress
-        mediaTitle.alpha = 1f - progress
-    }
-
-    private fun resetPhotoDismiss(velocity: Float = 0f) {
-        if (dismissing) return
-        val duration = verticalSettleDuration(activeMediaView().translationY, velocity)
-        cancelMediaAnimations()
-        animateMediaDismissTransform(0f, 1f, 1f, duration)
-        backgroundScrim.animate().alpha(1f).setDuration(duration).setInterpolator(verticalSettleInterpolator).start()
-        actions.animate().alpha(1f).setDuration(duration).setInterpolator(verticalSettleInterpolator).start()
-        mediaTitle.animate().alpha(1f).setDuration(duration).setInterpolator(verticalSettleInterpolator).start()
-    }
-
-    private fun animateDismissToGallery(velocity: Float = 0f) {
-        dismissing = true
-        setActionsEnabled(false)
-        val targetY = (root.height.takeIf { it > 0 } ?: resources.displayMetrics.heightPixels) * 0.9f
-        val activeMedia = activeMediaView()
-        val duration = verticalSettleDuration(targetY - activeMedia.translationY, velocity)
-        cancelMediaAnimations()
-        activeMedia.animate()
-            .translationY(targetY)
-            .scaleX(0.82f)
-            .scaleY(0.82f)
-            .alpha(0.12f)
-            .setDuration(duration)
-            .setInterpolator(verticalSettleInterpolator)
-            .withEndAction {
-                finish()
-                disableExitTransition()
-            }
-            .start()
-        if (activeMedia !== photoView) {
-            animateDismissedMedia(photoView, targetY, duration)
-        }
-        if (activeMedia !== playerView) {
-            animateDismissedMedia(playerView, targetY, duration)
-        }
-        thumbnailPreview.animate()
-            .translationY(targetY)
-            .scaleX(0.82f)
-            .scaleY(0.82f)
-            .alpha(0.12f)
-            .setDuration(duration)
-            .setInterpolator(verticalSettleInterpolator)
-            .start()
-        loadingPanel.animate()
-            .translationY(targetY)
-            .alpha(0f)
-            .setDuration(duration)
-            .setInterpolator(verticalSettleInterpolator)
-            .start()
-        if (detailsShown) {
-            detailsSheet.animate().cancel()
-            detailsSheet.animate()
-                .translationY(detailsSheet.height.toFloat())
-                .alpha(0f)
-                .setDuration(duration)
-                .setInterpolator(verticalSettleInterpolator)
-                .start()
-        }
-        backgroundScrim.animate().alpha(0f).setDuration(duration).setInterpolator(verticalSettleInterpolator).start()
-        actions.animate().alpha(0f).setDuration(duration).setInterpolator(verticalSettleInterpolator).start()
-        mediaTitle.animate().alpha(0f).setDuration(duration).setInterpolator(verticalSettleInterpolator).start()
-    }
-
-    private fun showDetails(velocity: Float = 0f) {
-        ensureMetadataLoaded()
-        detailsShown = true
-        detailsSheet.visibility = View.VISIBLE
-        actions.animate().cancel()
-        animateDetailsOffset(initialDetailsOffset(), velocity)
-    }
-
-    private fun hideDetails(velocity: Float = 0f) {
-        detailsShown = false
-        actions.visibility = View.VISIBLE
-        actions.animate().cancel()
-        animateDetailsOffset(0, velocity)
-    }
-
-    private fun setDetailsOffset(offset: Int) {
-        val boundedOffset = offset.coerceIn(0, maximumDetailsOffset())
-        photoDetailsScroll.scrollTo(0, boundedOffset)
-        val initialOffset = initialDetailsOffset().coerceAtLeast(1)
-        val progress = (boundedOffset.toFloat() / initialOffset).coerceIn(0f, 1f)
-        detailsSheet.alpha = progress
-        detailsSheet.visibility = if (progress > 0f || detailsShown) View.VISIBLE else View.INVISIBLE
-        if (progress < 1f) actions.visibility = View.VISIBLE
-        actions.alpha = 1f - progress
-        mediaTitle.alpha = 1f - progress
-        if (progress >= 1f && detailsShown) actions.visibility = View.INVISIBLE
-    }
-
-    private fun animateDetailsOffset(targetOffset: Int, velocity: Float) {
-        detailsScrollAnimator?.cancel()
-        val boundedTarget = targetOffset.coerceIn(0, maximumDetailsOffset())
-        val startOffset = photoDetailsScroll.scrollY
-        val duration = verticalSettleDuration((boundedTarget - startOffset).toFloat(), velocity)
-        detailsScrollAnimator = ValueAnimator.ofInt(startOffset, boundedTarget).apply {
-            this.duration = duration
-            interpolator = verticalSettleInterpolator
-            addUpdateListener { animator -> setDetailsOffset(animator.animatedValue as Int) }
-            start()
-        }
-    }
-
-    private fun initialDetailsOffset(): Int = PhotoDetailsLayoutPolicy.initialOffset(
-        mediaHeight = mediaFrame.height,
-        fittedImageBottom = fittedMediaBottom(),
-        overlap = resources.getDimensionPixelSize(R.dimen.photo_details_sheet_overlap),
-        fallbackOffset = (root.height * DETAILS_FALLBACK_OFFSET_FRACTION).roundToInt(),
-        maximumOffset = maximumDetailsOffset(),
-    )
-
-    private fun updateDetailsSheetAttachment(): Int {
-        val previousOffset = detailsSheetAttachmentOffset
-        detailsSheetAttachmentOffset = PhotoDetailsLayoutPolicy.attachmentOffset(
-            mediaHeight = mediaFrame.height,
-            fittedImageBottom = fittedMediaBottom(),
-            overlap = resources.getDimensionPixelSize(R.dimen.photo_details_sheet_overlap),
-        )
-        detailsSheet.translationY = -detailsSheetAttachmentOffset.toFloat()
-        return detailsSheetAttachmentOffset - previousOffset
-    }
-
-    private fun synchronizeDetailsSheetWithImage() {
-        val attachmentChange = updateDetailsSheetAttachment()
-        val adjustedOffset = photoDetailsScroll.scrollY - attachmentChange
-        val target = if (detailsShown) {
-            adjustedOffset.coerceAtLeast(initialDetailsOffset())
-        } else {
-            0
-        }
-        setDetailsOffset(target.coerceAtMost(maximumDetailsOffset()))
-    }
-
-    private fun maximumDetailsOffset(): Int {
-        val surfaceHeight = photoDetailsScroll.getChildAt(0)?.measuredHeight ?: return 0
-        return PhotoDetailsLayoutPolicy.maximumOffset(
-            surfaceHeight = surfaceHeight,
-            viewportHeight = photoDetailsScroll.height,
-            attachmentOffset = detailsSheetAttachmentOffset,
-        )
-    }
-
-    private fun cancelMediaAnimations() {
-        photoView.animate().cancel()
-        playerView.animate().cancel()
-        thumbnailPreview.animate().cancel()
-        loadingPanel.animate().cancel()
-        mediaTitle.animate().cancel()
-    }
-
-    private fun setMediaTranslationX(translationX: Float) {
-        photoView.translationX = translationX
-        playerView.translationX = translationX
-        thumbnailPreview.translationX = translationX
-        loadingPanel.translationX = translationX
-        mediaTitle.translationX = translationX
-    }
-
-    private fun animateMediaTranslationX(translationX: Float, duration: Long) {
-        photoView.animate().translationX(translationX).setDuration(duration).start()
-        playerView.animate().translationX(translationX).setDuration(duration).start()
-        thumbnailPreview.animate().translationX(translationX).setDuration(duration).start()
-        loadingPanel.animate().translationX(translationX).setDuration(duration).start()
-        mediaTitle.animate().translationX(translationX).setDuration(duration).start()
-    }
-
-    private fun setMediaTranslationY(translationY: Float) {
-        photoView.translationY = translationY
-        playerView.translationY = translationY
-        thumbnailPreview.translationY = translationY
-        loadingPanel.translationY = translationY
-        mediaTitle.translationY = translationY
-    }
-
-    private fun setMediaDismissTransform(translationY: Float, scale: Float) {
-        setMediaTranslationY(translationY)
-        photoView.scaleX = scale
-        photoView.scaleY = scale
-        playerView.scaleX = scale
-        playerView.scaleY = scale
-        thumbnailPreview.scaleX = scale
-        thumbnailPreview.scaleY = scale
-    }
-
-    private fun animateMediaDismissTransform(
-        translationY: Float,
-        scale: Float,
-        alpha: Float,
-        duration: Long,
-    ) {
-        photoView.animate()
-            .translationY(translationY)
-            .scaleX(scale)
-            .scaleY(scale)
-            .alpha(alpha)
-            .setDuration(duration)
-            .setInterpolator(verticalSettleInterpolator)
-            .start()
-        playerView.animate()
-            .translationY(translationY)
-            .scaleX(scale)
-            .scaleY(scale)
-            .alpha(alpha)
-            .setDuration(duration)
-            .setInterpolator(verticalSettleInterpolator)
-            .start()
-        thumbnailPreview.animate()
-            .translationY(translationY)
-            .scaleX(scale)
-            .scaleY(scale)
-            .alpha(alpha)
-            .setDuration(duration)
-            .setInterpolator(verticalSettleInterpolator)
-            .start()
-        loadingPanel.animate()
-            .translationY(translationY)
-            .alpha(alpha)
-            .setDuration(duration)
-            .setInterpolator(verticalSettleInterpolator)
-            .start()
-        mediaTitle.animate()
-            .translationY(translationY)
-            .alpha(alpha)
-            .setDuration(duration)
-            .setInterpolator(verticalSettleInterpolator)
-            .start()
     }
 
     private fun activeMediaView(): View =
@@ -1206,57 +766,8 @@ class PhotoViewerActivity : FragmentActivity() {
         return top + (height + imageHeight * fittedScale) / 2f
     }
 
-    private fun animateDismissedMedia(view: View, targetY: Float, duration: Long) {
-        view.animate()
-            .translationY(targetY)
-            .scaleX(0.82f)
-            .scaleY(0.82f)
-            .alpha(0.12f)
-            .setDuration(duration)
-            .setInterpolator(verticalSettleInterpolator)
-            .start()
-    }
-
-    private fun verticalSettleDuration(remainingDistance: Float, velocity: Float): Long {
-        val absoluteDistance = abs(remainingDistance)
-        val absoluteVelocity = abs(velocity)
-        if (absoluteDistance < 1f) return 0L
-        if (absoluteVelocity < dp(200)) return 260L
-        return (absoluteDistance / absoluteVelocity * 800f)
-            .roundToLong()
-            .coerceIn(140L, 260L)
-    }
-
-    @Suppress("DEPRECATION")
-    private fun disableExitTransition() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            overrideActivityTransition(OVERRIDE_TRANSITION_CLOSE, 0, 0)
-        } else {
-            overridePendingTransition(0, 0)
-        }
-    }
-
     private fun handleBack() {
-        if (detailsShown) hideDetails() else finish()
-    }
-
-    private fun ensureMetadataLoaded() {
-        if (metadataLoaded) return
-        val uri = resolvedUri ?: return
-        loadMetadata(uri)
-    }
-
-    private fun openMap(action: PhotoMetadataAction.OpenMap) {
-        val coordinates = "${action.latitude},${action.longitude}"
-        val intent = Intent(
-            Intent.ACTION_VIEW,
-            "geo:$coordinates?q=$coordinates".toUri(),
-        )
-        if (intent.resolveActivity(packageManager) == null) {
-            Toast.makeText(this, R.string.no_maps_app, Toast.LENGTH_SHORT).show()
-            return
-        }
-        startActivity(intent)
+        if (details.shown) details.hideDetails() else finish()
     }
 
     private fun deletePhoto() {
@@ -1392,7 +903,7 @@ class PhotoViewerActivity : FragmentActivity() {
                 media.layoutParams = this
             }
         }
-        if (photoReady || thumbnailPreview.isVisible) photoDetailsScroll.post(::synchronizeDetailsSheetWithImage)
+        if (photoReady || thumbnailPreview.isVisible) photoDetailsScroll.post(details::synchronizeWithImage)
     }
 
     private fun cancelPendingPreviewClear() {
@@ -1431,9 +942,7 @@ class PhotoViewerActivity : FragmentActivity() {
         const val EXTRA_FAVORITE_CHANGED = "com.bownee.lenswave.extra.FAVORITE_CHANGED"
         const val EXTRA_NAVIGATION = "com.bownee.lenswave.extra.NAVIGATION"
         private const val DETAILS_MINIMUM_HEIGHT_FRACTION = 0.55f
-        private const val DETAILS_FALLBACK_OFFSET_FRACTION = 0.55f
         private const val MEDIA_ACTION_GAP_DP = 8
-        private const val PEEK_GAP_DP = 10
         private const val VIDEO_CONTROLS_HEIGHT_DP = 80
         private const val FULL_QUALITY_CROSSFADE_MILLIS = 180L
         private const val LOADING_PANEL_DELAY_MILLIS = 300L

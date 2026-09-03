@@ -198,12 +198,15 @@ val debugCoverageData = fileTree(layout.buildDirectory) {
     include("outputs/unit_test_code_coverage/debugUnitTest/testDebugUnitTest.exec")
 }
 
-fun Task.requireCoverageInputs() {
+// Reads the task's own inputs rather than script-level values so the configuration cache can
+// serialize the action.
+fun org.gradle.testing.jacoco.tasks.JacocoReportBase.requireCoverageInputs() {
     doFirst {
-        check(!authoredDebugClasses.asFileTree.isEmpty) {
+        val report = this as org.gradle.testing.jacoco.tasks.JacocoReportBase
+        check(!report.classDirectories.asFileTree.isEmpty) {
             "No compiled app classes found for coverage; the AGP intermediate class directory may have moved."
         }
-        check(!debugCoverageData.isEmpty) {
+        check(!report.executionData.isEmpty) {
             "No JaCoCo execution data found; unit tests must run with coverage enabled."
         }
     }

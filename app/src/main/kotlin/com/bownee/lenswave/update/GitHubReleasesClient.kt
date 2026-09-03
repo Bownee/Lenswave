@@ -3,6 +3,7 @@ package com.bownee.lenswave.update
 import android.util.JsonReader
 import android.util.JsonToken
 import com.bownee.lenswave.LenswaveDiagnostics
+import com.bownee.lenswave.LenswaveOperation
 import java.io.InputStream
 import java.io.InputStreamReader
 import java.net.URL
@@ -26,7 +27,7 @@ internal class GitHubReleasesClient @Inject constructor() : LatestReleaseClient 
     override fun fetch(etag: String?): LatestReleaseResult {
         var connection: HttpsURLConnection? = null
         return try {
-            connection = URL(LATEST_RELEASE_API_URL).openConnection() as HttpsURLConnection
+            connection = URL(LenswaveReleases.latestReleaseApiUrl).openConnection() as HttpsURLConnection
             connection.apply {
                 requestMethod = "GET"
                 connectTimeout = TIMEOUT_MILLIS
@@ -52,7 +53,7 @@ internal class GitHubReleasesClient @Inject constructor() : LatestReleaseClient 
         } catch (error: CancellationException) {
             throw error
         } catch (error: Throwable) {
-            LenswaveDiagnostics.reportFailure("app-update-check", error)
+            LenswaveDiagnostics.reportFailure(LenswaveOperation.APP_UPDATE_CHECK, error)
             LatestReleaseResult.Unavailable
         } finally {
             connection?.disconnect()
@@ -60,8 +61,6 @@ internal class GitHubReleasesClient @Inject constructor() : LatestReleaseClient 
     }
 
     private companion object {
-        const val LATEST_RELEASE_API_URL =
-            "https://api.github.com/repos/Bownee/Lenswave/releases/latest"
         const val GITHUB_API_VERSION = "2026-03-10"
         const val TIMEOUT_MILLIS = 5_000
     }

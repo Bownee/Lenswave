@@ -16,19 +16,21 @@ import android.widget.TextView
 import androidx.core.view.ViewCompat
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.PlayerView
+import com.bownee.lenswave.metadata.PhotoMetadataAction
+import com.bownee.lenswave.metadata.PhotoMetadataItem
 
 @androidx.annotation.OptIn(markerClass = [UnstableApi::class])
 internal class PhotoViewerScreen(
     private val context: Context,
     requestIsTrashed: Boolean,
-    actions: Actions,
+    callbacks: Actions,
 ) {
     val root = PhotoViewerGestureLayout(context).apply {
         setBackgroundColor(Color.TRANSPARENT)
-        gesturesEnabled = actions.gesturesEnabled
-        gestureStartAllowed = actions.gestureStartAllowed
-        onVerticalDrag = actions.onVerticalDrag
-        onHorizontalDrag = actions.onHorizontalDrag
+        gesturesEnabled = callbacks.gesturesEnabled
+        gestureStartAllowed = callbacks.gestureStartAllowed
+        onVerticalDrag = callbacks.onVerticalDrag
+        onHorizontalDrag = callbacks.onHorizontalDrag
     }
     val backgroundScrim = View(context).apply { setBackgroundColor(Color.BLACK) }
     val photoDetailsScroll = PhotoDetailsScrollView(context).apply {
@@ -36,7 +38,7 @@ internal class PhotoViewerScreen(
         isVerticalScrollBarEnabled = false
         overScrollMode = View.OVER_SCROLL_NEVER
     }
-    val photoDetailsSurface = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+    private val photoDetailsSurface = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
     val mediaFrame = FrameLayout(context)
     val thumbnailPreview = ImageView(context).apply {
         scaleType = ImageView.ScaleType.FIT_CENTER
@@ -129,7 +131,7 @@ internal class PhotoViewerScreen(
             retryButton = UiStyle.accentButton(context, context.getString(R.string.retry), radiusDp = 24).apply {
                 setPadding(context.dp(24), 0, context.dp(24), 0)
                 visibility = View.GONE
-                setOnClickListener { actions.onRetry() }
+                setOnClickListener { callbacks.onRetry() }
             }
             addView(retryButton, LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -167,20 +169,20 @@ internal class PhotoViewerScreen(
             isEnabled = false
             visibility = View.GONE
             ViewCompat.setTooltipText(this, contentDescription)
-            setOnClickListener { actions.onFavorite() }
+            setOnClickListener { callbacks.onFavorite() }
         }
         deleteButton = UiStyle.iconButton(
             context,
             R.drawable.ic_delete,
-            context.getString(if (requestIsTrashed) R.string.delete_forever else R.string.delete),
+            context.getString(R.string.delete),
             fill = UiStyle.withAlpha(UiStyle.dangerSoft, 240),
             tint = UiStyle.danger,
             sizeDp = 52,
         ).apply {
             isEnabled = false
-            ViewCompat.setTooltipText(this, contentDescription)
-            setOnClickListener { actions.onDelete() }
+            setOnClickListener { callbacks.onDelete() }
         }
+        setDeleteLabel(requestIsTrashed)
         val buttons = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
@@ -203,14 +205,54 @@ internal class PhotoViewerScreen(
 
         root.addOnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
             if (right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop) {
-                actions.onLayoutChanged(bottom - top)
+                callbacks.onLayoutChanged(bottom - top)
             }
         }
         mediaTitle.addOnLayoutChangeListener { _, _, top, _, bottom, _, oldTop, _, oldBottom ->
             if (bottom - top != oldBottom - oldTop && root.height > 0) {
-                actions.onLayoutChanged(root.height)
+                callbacks.onLayoutChanged(root.height)
             }
         }
+    }
+
+    /** Names the delete button for what it will do; trashed photos are deleted for good. */
+    fun setDeleteLabel(trashed: Boolean) {
+        deleteButton.contentDescription =
+            context.getString(if (trashed) R.string.delete_forever else R.string.delete)
+        ViewCompat.setTooltipText(deleteButton, deleteButton.contentDescription)
+    }
+
+    /** Appends one metadata row to the details sheet; rows with a location open the map on tap. */
+    fun addDetailsRow(item: PhotoMetadataItem, onOpenMap: (PhotoMetadataAction.OpenMap) -> Unit) {
+        detailsContent.addView(LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(context.dp(12), context.dp(10), context.dp(12), context.dp(10))
+            background = UiStyle.rippled(UiStyle.rounded(context, Color.TRANSPARENT, 14))
+            addView(TextView(context).apply {
+                text = item.label
+                textSize = 12f
+                typeface = UiStyle.medium
+                setTextColor(UiStyle.muted)
+            })
+            addView(TextView(context).apply {
+                text = item.value
+                textSize = 15.5f
+                setTextColor(UiStyle.text)
+                setPadding(0, context.dp(3), 0, 0)
+            })
+            if (item.action is PhotoMetadataAction.OpenMap) {
+                addView(TextView(context).apply {
+                    setText(R.string.open_in_maps)
+                    textSize = 13f
+                    setTextColor(UiStyle.accent)
+                    setPadding(0, context.dp(7), 0, context.dp(2))
+                    setOnClickListener { onOpenMap(item.action) }
+                })
+                setOnClickListener { onOpenMap(item.action) }
+            }
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            bottomMargin = context.dp(2)
+        })
     }
 
     private fun buildDetailsSheet(): DetailsSheet {

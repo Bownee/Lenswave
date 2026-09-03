@@ -12,7 +12,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 internal class ProtonThumbnailNetworkMonitor(context: Context) {
     private val connectivityManager = context.getSystemService(ConnectivityManager::class.java)
 
-    fun hasValidatedUnmeteredNetwork(): Boolean {
+    private fun hasValidatedUnmeteredNetwork(): Boolean {
         val activeNetwork = connectivityManager.activeNetwork ?: return false
         val capabilities = connectivityManager.getNetworkCapabilities(activeNetwork) ?: return false
         return capabilities.isValidatedUnmetered()

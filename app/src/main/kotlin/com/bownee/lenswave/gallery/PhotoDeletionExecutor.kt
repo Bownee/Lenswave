@@ -1,6 +1,5 @@
 package com.bownee.lenswave.gallery
 
-import com.bownee.lenswave.proton.ProtonPhotoGateway
 import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
@@ -18,7 +17,7 @@ interface PhotoDeletionExecutor {
 
 @Singleton
 internal class ProtonPhotoDeletionExecutor @Inject constructor(
-    private val protonRepository: ProtonPhotoGateway,
+    private val protonRepository: ProtonPhotoMutations,
 ) : PhotoDeletionExecutor {
     override suspend fun trashProton(
         userId: UserId,

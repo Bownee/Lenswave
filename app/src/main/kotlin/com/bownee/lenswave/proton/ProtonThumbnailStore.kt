@@ -25,7 +25,7 @@ internal class ProtonThumbnailStore @Inject constructor(
     private val secureFiles: SecureFileStore,
     private val clock: LenswaveClock,
 ) {
-    private val root = File(context.filesDir, "proton-photo-cache").apply { mkdirs() }
+    private val root = File(context.filesDir, ProtonStorageLayout.METADATA_DIRECTORY).apply { mkdirs() }
     private val bitmaps = object : LruCache<ThumbnailKey, Bitmap>(bitmapCacheSize()) {
         override fun sizeOf(key: ThumbnailKey, value: Bitmap): Int = value.byteCount / 1_024
     }
@@ -152,9 +152,9 @@ internal class ProtonThumbnailStore @Inject constructor(
         File(directory(userId), "${AtomicFileStore.safeName(nodeUid)}.thumb")
 
     private fun directory(userId: String): File =
-        File(File(root, AtomicFileStore.safeName(userId)), "thumbnails")
+        File(File(root, AtomicFileStore.safeName(userId)), ProtonStorageLayout.THUMBNAILS_DIRECTORY)
 
-    private fun scope(userId: String): String = "proton-media:$userId"
+    private fun scope(userId: String): String = ProtonStorageLayout.mediaScope(userId)
 
     private fun lock(key: ThumbnailKey): Any = locks[(key.hashCode() and Int.MAX_VALUE) % locks.size]
 
@@ -162,7 +162,7 @@ internal class ProtonThumbnailStore @Inject constructor(
         file.lastModified() <= 0L || clock.nowMillis() - file.lastModified() > ttlMillis
 
     private fun isStalePartial(file: File): Boolean =
-        file.extension == "part" && isExpired(file, STALE_PART_TTL_MILLIS)
+        file.extension == "part" && isExpired(file, ProtonStorageLayout.STALE_PART_TTL_MILLIS)
 
     private fun bitmapCacheSize(): Int = (Runtime.getRuntime().maxMemory() / 1_024 / 16)
         .coerceIn(8 * 1_024, 32 * 1_024)
@@ -172,7 +172,6 @@ internal class ProtonThumbnailStore @Inject constructor(
 
     private companion object {
         const val LOCK_COUNT = 32
-        const val STALE_PART_TTL_MILLIS = 24L * 60L * 60L * 1_000L
     }
 }
 

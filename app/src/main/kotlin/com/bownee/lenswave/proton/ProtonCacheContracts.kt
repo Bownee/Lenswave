@@ -15,11 +15,12 @@ interface ProtonTimelineCache {
     fun hasTagSnapshot(userId: String, tag: ProtonMediaTag): Boolean
     fun writeTag(userId: String, tag: ProtonMediaTag, photos: List<ProtonGalleryPhoto>)
     fun thumbnailExists(userId: String, nodeUid: String): Boolean
+    /** Drops cached media and tag entries for nodes that vanished from the remote timeline. */
     fun reconcilePhotos(
         userId: String,
         cachedNodeUids: Collection<String>,
         remoteNodeUids: Collection<String>,
-    ): ProtonPhotoChanges
+    )
     fun removePhotos(userId: String, nodeUids: Collection<String>)
 }
 

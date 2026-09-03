@@ -2,6 +2,7 @@ package com.bownee.lenswave.update
 
 import com.bownee.lenswave.LenswaveClock
 import com.bownee.lenswave.LenswaveDiagnostics
+import com.bownee.lenswave.LenswaveOperation
 import com.bownee.lenswave.LenswaveDispatchers
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -37,7 +38,7 @@ class AppUpdateChecker @Inject internal constructor(
     } catch (error: CancellationException) {
         throw error
     } catch (error: Throwable) {
-        LenswaveDiagnostics.reportFailure("app-update-evaluation", error)
+        LenswaveDiagnostics.reportFailure(LenswaveOperation.APP_UPDATE_EVALUATION, error)
         null
     }
 
@@ -57,7 +58,7 @@ class AppUpdateChecker @Inject internal constructor(
         } catch (error: CancellationException) {
             throw error
         } catch (error: Throwable) {
-            LenswaveDiagnostics.reportFailure("app-update-snooze", error)
+            LenswaveDiagnostics.reportFailure(LenswaveOperation.APP_UPDATE_SNOOZE, error)
         }
     }
 

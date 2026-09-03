@@ -304,7 +304,7 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
     ) = GalleryUiState(
         destination = inputs.destination,
         title = title(inputs.destination),
-        content = content,
+        content = content.sorted(),
         statusText = statusText,
         emptyState = emptyState,
         currentUserId = inputs.currentUserId,
@@ -312,6 +312,12 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
         isRefreshing = inputs.isRefreshing,
         showDeleteAll = showDeleteAll,
     )
+
+    /** Photo pages are published newest first so every consumer sees the same order as the grid. */
+    private fun GalleryContent.sorted(): GalleryContent = when (this) {
+        is GalleryContent.Photos -> GalleryContent.Photos(GalleryGrouping.sortPhotos(assets))
+        is GalleryContent.Library -> this
+    }
 
     private fun title(destination: GalleryDestination): String = when (destination) {
         GalleryDestination.Timeline -> text.string(R.string.photos)

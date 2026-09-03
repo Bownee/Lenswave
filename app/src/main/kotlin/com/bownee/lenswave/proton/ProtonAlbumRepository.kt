@@ -1,6 +1,7 @@
 package com.bownee.lenswave.proton
 
 import com.bownee.lenswave.LenswaveDiagnostics
+import com.bownee.lenswave.LenswaveOperation
 
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -20,7 +21,6 @@ import me.proton.drive.sdk.entity.NodeUid
 internal class ProtonAlbumRepository @Inject constructor(
     private val clientProvider: ProtonPhotosClientProvider,
     private val cache: ProtonAlbumCache,
-    private val syncPipeline: ProtonPhotoSyncPipeline,
     private val snapshots: ProtonSnapshotCoordinator,
 ) {
     private val albumsSyncMutex = Mutex()
@@ -58,7 +58,7 @@ internal class ProtonAlbumRepository @Inject constructor(
             val shouldEnumerate = snapshots.shouldEnumerate(
                 userId.id,
                 ProtonSyncSource.ALBUMS,
-                ALBUMS_SYNC_KEY,
+                ProtonSyncKeys.ALBUMS,
                 forceRemote,
                 hasCachedSnapshot,
             )
@@ -77,7 +77,7 @@ internal class ProtonAlbumRepository @Inject constructor(
                 .also { remoteAlbums ->
                     cache.reconcileAlbums(userId.id, remoteAlbums.map(ProtonAlbum::nodeUid))
                     cache.writeAlbums(userId.id, remoteAlbums)
-                    snapshots.commit(userId.id, ALBUMS_SYNC_KEY)
+                    snapshots.commit(userId.id, ProtonSyncKeys.ALBUMS)
                 }
 
             emitAlbums(userId, albums, syncing = false)
@@ -85,7 +85,7 @@ internal class ProtonAlbumRepository @Inject constructor(
             mutableAlbumsState.value = mutableAlbumsState.value.copy(syncing = false)
             throw error
         } catch (error: Throwable) {
-            LenswaveDiagnostics.reportFailure("album-sync", error)
+            LenswaveDiagnostics.reportFailure(LenswaveOperation.ALBUM_SYNC, error)
             mutableAlbumsState.value = mutableAlbumsState.value.copy(
                 syncing = false,
                 refreshFailed = true,
@@ -101,7 +101,7 @@ internal class ProtonAlbumRepository @Inject constructor(
         val existing = cache.readAlbumPhotos(userId.id, album.nodeUid)
         val hasCachedSnapshot = cache.hasAlbumPhotosSnapshot(userId.id, album.nodeUid)
         try {
-            val syncKey = "$ALBUM_PHOTOS_SYNC_KEY:${album.nodeUid}"
+            val syncKey = ProtonSyncKeys.albumPhotos(album.nodeUid)
             val shouldEnumerate = snapshots.shouldEnumerate(
                 userId.id,
                 ProtonSyncSource.ALBUM_PHOTOS,
@@ -115,19 +115,15 @@ internal class ProtonAlbumRepository @Inject constructor(
             }
             emitAlbumPhotos(userId, album, existing, hasLoaded = hasCachedSnapshot, syncing = true)
             val photosClient = clientProvider.get(userId)
-            val photos = syncPipeline.synchronizeMetadata(
-                enumerate = {
-                    photosClient.enumerateAlbum(NodeUid(album.nodeUid)).toList().map { item ->
-                        ProtonGalleryPhoto(
-                            nodeUid = item.nodeUid.value,
-                            captureTimeEpochSeconds = item.captureTime.epochSecond,
-                            hasThumbnail = cache.thumbnailExists(userId.id, item.nodeUid.value),
-                        )
-                    }.sortedByDescending(ProtonGalleryPhoto::captureTimeEpochSeconds)
-                },
-                commitSnapshot = { cache.writeAlbumPhotos(userId.id, album.nodeUid, it) },
-                commitEnumeration = { snapshots.commit(userId.id, syncKey) },
-            )
+            val photos = photosClient.enumerateAlbum(NodeUid(album.nodeUid)).toList().map { item ->
+                ProtonGalleryPhoto(
+                    nodeUid = item.nodeUid.value,
+                    captureTimeEpochSeconds = item.captureTime.epochSecond,
+                    hasThumbnail = cache.thumbnailExists(userId.id, item.nodeUid.value),
+                )
+            }.sortedByDescending(ProtonGalleryPhoto::captureTimeEpochSeconds)
+            cache.writeAlbumPhotos(userId.id, album.nodeUid, photos)
+            snapshots.commit(userId.id, syncKey)
             emitAlbumPhotos(userId, album, photos, hasLoaded = true, syncing = false)
         } catch (error: CancellationException) {
             if (mutableAlbumPhotosState.value.albumUid == album.nodeUid) {
@@ -135,7 +131,7 @@ internal class ProtonAlbumRepository @Inject constructor(
             }
             throw error
         } catch (error: Throwable) {
-            LenswaveDiagnostics.reportFailure("album-photo-sync", error)
+            LenswaveDiagnostics.reportFailure(LenswaveOperation.ALBUM_PHOTO_SYNC, error)
             if (mutableAlbumPhotosState.value.albumUid == album.nodeUid) {
                 mutableAlbumPhotosState.value = mutableAlbumPhotosState.value.copy(
                     syncing = false,
@@ -146,70 +142,48 @@ internal class ProtonAlbumRepository @Inject constructor(
     }
 
     internal fun markCoverThumbnailsAvailable(userId: UserId, nodeUids: Set<String>) {
-        if (nodeUids.isEmpty()) return
-        mutableAlbumsState.update { state ->
-            if (state.userId != userId.id) return@update state
-            var completedCoverCount = 0
-            val albums = state.albums.map { album ->
-                if (album.coverPhotoNodeUid !in nodeUids || album.hasCoverThumbnail) return@map album
-                completedCoverCount++
-                album.copy(hasCoverThumbnail = true)
-            }
-            if (completedCoverCount == 0) return@update state
-            state.copy(
-                albums = albums,
-            )
-        }
+        markCoverThumbnails(userId, nodeUids, available = true)
     }
 
     internal fun markCoverThumbnailsUnavailable(userId: UserId, nodeUids: Set<String>) {
-        if (nodeUids.isEmpty()) return
-        mutableAlbumsState.update { state ->
-            if (state.userId != userId.id) return@update state
-            var invalidatedCount = 0
-            val albums = state.albums.map { album ->
-                if (album.coverPhotoNodeUid !in nodeUids || !album.hasCoverThumbnail) return@map album
-                invalidatedCount++
-                album.copy(hasCoverThumbnail = false)
-            }
-            if (invalidatedCount == 0) return@update state
-            state.copy(
-                albums = albums,
-            )
-        }
+        markCoverThumbnails(userId, nodeUids, available = false)
     }
 
     internal fun markAlbumPhotoThumbnailsAvailable(userId: UserId, nodeUids: Set<String>) {
-        if (nodeUids.isEmpty()) return
-        mutableAlbumPhotosState.update { state ->
-            if (state.userId != userId.id) return@update state
-            var completedCount = 0
-            val photos = state.photos.map { photo ->
-                if (photo.nodeUid !in nodeUids || photo.hasThumbnail) return@map photo
-                completedCount++
-                photo.copy(hasThumbnail = true)
-            }
-            if (completedCount == 0) return@update state
-            state.copy(
-                photos = photos,
-            )
-        }
+        markAlbumPhotoThumbnails(userId, nodeUids, available = true)
     }
 
     internal fun markAlbumPhotoThumbnailsUnavailable(userId: UserId, nodeUids: Set<String>) {
+        markAlbumPhotoThumbnails(userId, nodeUids, available = false)
+    }
+
+    private fun markCoverThumbnails(userId: UserId, nodeUids: Set<String>, available: Boolean) {
+        if (nodeUids.isEmpty()) return
+        mutableAlbumsState.update { state ->
+            if (state.userId != userId.id) return@update state
+            val albums = state.albums.withThumbnailAvailability(
+                nodeUids,
+                available,
+                nodeUid = ProtonAlbum::coverPhotoNodeUid,
+                hasThumbnail = ProtonAlbum::hasCoverThumbnail,
+                copy = { album, hasCoverThumbnail -> album.copy(hasCoverThumbnail = hasCoverThumbnail) },
+            ) ?: return@update state
+            state.copy(albums = albums)
+        }
+    }
+
+    private fun markAlbumPhotoThumbnails(userId: UserId, nodeUids: Set<String>, available: Boolean) {
         if (nodeUids.isEmpty()) return
         mutableAlbumPhotosState.update { state ->
             if (state.userId != userId.id) return@update state
-            var invalidatedCount = 0
-            val photos = state.photos.map { photo ->
-                if (photo.nodeUid !in nodeUids || !photo.hasThumbnail) return@map photo
-                invalidatedCount++
-                photo.copy(hasThumbnail = false)
-            }
-            if (invalidatedCount == 0) return@update state
-            state.copy(
-                photos = photos,
-            )
+            val photos = state.photos.withThumbnailAvailability(
+                nodeUids,
+                available,
+                nodeUid = ProtonGalleryPhoto::nodeUid,
+                hasThumbnail = ProtonGalleryPhoto::hasThumbnail,
+                copy = { photo, hasThumbnail -> photo.copy(hasThumbnail = hasThumbnail) },
+            ) ?: return@update state
+            state.copy(photos = photos)
         }
     }
 
@@ -294,10 +268,5 @@ internal class ProtonAlbumRepository @Inject constructor(
             hasLoaded = hasLoaded,
             syncing = syncing,
         )
-    }
-
-    private companion object {
-        const val ALBUMS_SYNC_KEY = "albums"
-        const val ALBUM_PHOTOS_SYNC_KEY = "album-photos"
     }
 }

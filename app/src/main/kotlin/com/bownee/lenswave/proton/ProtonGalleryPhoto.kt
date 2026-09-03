@@ -21,7 +21,6 @@ data class ProtonFavoriteResult(
 enum class ProtonThumbnailWorkIssue {
     TIMEOUT,
     INCOMPLETE,
-    INTERRUPTED,
     ERROR,
 }
 

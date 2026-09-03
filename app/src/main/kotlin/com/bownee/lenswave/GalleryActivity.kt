@@ -1,27 +1,13 @@
 package com.bownee.lenswave
 
-import android.Manifest
 import android.app.Activity
-import android.app.AlertDialog
-import android.content.ActivityNotFoundException
-import android.content.Intent
-import android.content.pm.PackageManager
-import android.os.Build
 import android.os.Bundle
 import android.view.View
-import android.view.ViewGroup
-import android.widget.AbsListView
-import android.widget.FrameLayout
-import android.widget.PopupMenu
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.core.content.ContextCompat
-import androidx.core.content.edit
 import androidx.core.graphics.Insets
-import androidx.core.net.toUri
 import androidx.core.view.ViewCompat
-import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.isVisible
 import androidx.fragment.app.FragmentActivity
@@ -30,31 +16,32 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.bownee.lenswave.gallery.GalleryAsset
+import com.bownee.lenswave.gallery.GalleryAuthCoordinator
 import com.bownee.lenswave.gallery.GalleryContent
 import com.bownee.lenswave.gallery.GalleryDeletionCoordinator
 import com.bownee.lenswave.gallery.GalleryDestination
 import com.bownee.lenswave.gallery.GalleryEmptyAction
-import com.bownee.lenswave.gallery.GalleryGrouping
 import com.bownee.lenswave.gallery.GalleryFastScrollLayoutPolicy
+import com.bownee.lenswave.gallery.GalleryFavoriteToggle
+import com.bownee.lenswave.gallery.GalleryNavigationPolicy
+import com.bownee.lenswave.gallery.GalleryNotificationPermissionPrompter
 import com.bownee.lenswave.gallery.GalleryScrollPosition
 import com.bownee.lenswave.gallery.GalleryScrollPositionStore
-import com.bownee.lenswave.gallery.GalleryNavigationPolicy
+import com.bownee.lenswave.gallery.GallerySettingsPresenter
 import com.bownee.lenswave.gallery.GalleryThumbnailCacheIdentity
 import com.bownee.lenswave.gallery.GalleryThumbnailCachePolicy
 import com.bownee.lenswave.gallery.GalleryUiState
+import com.bownee.lenswave.gallery.GalleryUpdatePresenter
 import com.bownee.lenswave.gallery.GalleryViewModel
 import com.bownee.lenswave.gallery.LibraryAction
-import com.bownee.lenswave.gallery.ThumbnailNotificationPermissionPolicy
-import com.bownee.lenswave.proton.ProtonAlbum
-import com.bownee.lenswave.proton.ProtonPhotoGateway
 import com.bownee.lenswave.gallery.PhotoDeletionExecutor
-import com.bownee.lenswave.proton.ProtonPresentationInitializer
+import com.bownee.lenswave.proton.ProtonAlbum
+import com.bownee.lenswave.gallery.ProtonPhotoMutations
+import com.bownee.lenswave.gallery.ProtonThumbnailImageSource
 import com.bownee.lenswave.update.AppUpdateChecker
 import com.bownee.lenswave.update.UpdateAvailableDialogFragment
 import dagger.hilt.android.AndroidEntryPoint
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import me.proton.core.accountmanager.domain.AccountManager
 import me.proton.core.auth.presentation.AuthOrchestrator
@@ -67,7 +54,8 @@ import javax.inject.Inject
 class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listener {
     @Inject lateinit var accountManager: AccountManager
     @Inject lateinit var authOrchestrator: AuthOrchestrator
-    @Inject lateinit var protonRepository: ProtonPhotoGateway
+    @Inject lateinit var photoMutations: ProtonPhotoMutations
+    @Inject lateinit var thumbnailSource: ProtonThumbnailImageSource
     @Inject lateinit var photoDeletionExecutor: PhotoDeletionExecutor
     @Inject lateinit var observeUserSettings: ObserveUserSettings
     @Inject lateinit var updateTelemetry: PerformUpdateTelemetry
@@ -80,13 +68,14 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
     private lateinit var screen: GalleryScreen
     private val root get() = screen.root
     private val list get() = screen.list
-    private val galleryFooter get() = screen.galleryFooter
     private val adapter get() = screen.adapter
     private val tabBar get() = screen.tabBar
     private val selectionBar get() = screen.selectionBar
-    private val settingsButton get() = screen.settingsButton
-    private val trashDeleteAllButton get() = screen.trashDeleteAllButton
     private lateinit var deletionCoordinator: GalleryDeletionCoordinator
+    private lateinit var authCoordinator: GalleryAuthCoordinator
+    private lateinit var settingsPresenter: GallerySettingsPresenter
+    private lateinit var updatePresenter: GalleryUpdatePresenter
+    private lateinit var favoriteToggle: GalleryFavoriteToggle
 
     private var currentUiState = GalleryUiState()
     private var renderedDestination: GalleryDestination? = null
@@ -94,23 +83,10 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
     private val scrollPositions = GalleryScrollPositionStore()
     private var pendingScrollRestore: GalleryDestination? = null
     private var safeBottom = 0
-    private var visibleAssets: List<GalleryAsset> = emptyList()
-    private var fastScrollEdgePadding = 0
-    private var pendingUpdateVersionName: String? = null
     private var thumbnailCacheIdentity: GalleryThumbnailCacheIdentity? = null
-    private var notificationPermissionRequestInFlight = false
-    private val permissionPreferences by lazy {
-        getSharedPreferences(PERMISSION_PREFERENCES_NAME, MODE_PRIVATE)
-    }
 
-    private val notificationPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) {
-        notificationPermissionRequestInFlight = false
-        permissionPreferences.edit {
-            putBoolean(KEY_THUMBNAIL_NOTIFICATION_PERMISSION_REQUESTED, true)
-        }
-    }
+    // Registers an activity result launcher, so it must exist before the activity is started.
+    private val notificationPermissionPrompter = GalleryNotificationPermissionPrompter(this)
 
     private val viewerLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -126,8 +102,22 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        pendingUpdateVersionName = savedInstanceState?.getString(STATE_PENDING_UPDATE_VERSION)
+        updatePresenter = GalleryUpdatePresenter(activity = this, appUpdateChecker = appUpdateChecker)
+        updatePresenter.restore(savedInstanceState)
         configureEdgeToEdgeWindow()
+        authCoordinator = GalleryAuthCoordinator(
+            activity = this,
+            accountManager = accountManager,
+            authOrchestrator = authOrchestrator,
+        )
+        settingsPresenter = GallerySettingsPresenter(
+            activity = this,
+            observeUserSettings = observeUserSettings,
+            updateTelemetry = updateTelemetry,
+            currentUserId = { currentUiState.currentUserId },
+            onConnectProton = ::connectProton,
+            onDisconnectProton = viewModel::disconnectProton,
+        )
         deletionCoordinator = GalleryDeletionCoordinator(
             activity = this,
             deletionExecutor = photoDeletionExecutor,
@@ -135,50 +125,51 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
             onSelectionCleared = { adapter.clearSelection() },
         )
         buildInterface()
+        favoriteToggle = GalleryFavoriteToggle(
+            scope = lifecycleScope,
+            setFavorite = { userId, nodeUids, favorite ->
+                photoMutations.setFavorite(userId, nodeUids, favorite)
+            },
+            onBegin = adapter::beginFavoriteUpdate,
+            onFinish = adapter::finishFavoriteUpdate,
+            onError = ::showFavoriteError,
+        )
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() = handleBack()
         })
-        initializeAuthentication()
+        authCoordinator.register()
         observeGalleryState()
         if (savedInstanceState == null && LenswaveApplication.isAppUpdateStartupEnabled()) {
-            checkForAppUpdate()
+            updatePresenter.checkForUpdate()
         }
     }
 
     override fun onResume() {
         super.onResume()
         viewModel.resumeThumbnailDownloads()
-        showPendingUpdate()
+        updatePresenter.showPendingUpdate()
     }
 
     override fun onDestroy() {
         if (this::screen.isInitialized) screen.dispose()
-        authOrchestrator.unregister()
+        authCoordinator.unregister()
         super.onDestroy()
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
-        pendingUpdateVersionName?.let { outState.putString(STATE_PENDING_UPDATE_VERSION, it) }
+        updatePresenter.save(outState)
         super.onSaveInstanceState(outState)
     }
 
-    override fun onUpdateRequested() {
-        try {
-            startActivity(Intent(Intent.ACTION_VIEW, LATEST_RELEASE_PAGE_URL.toUri()))
-        } catch (_: ActivityNotFoundException) {
-            Toast.makeText(this, R.string.no_browser_for_update, Toast.LENGTH_LONG).show()
-        }
-    }
+    override fun onUpdateRequested() = updatePresenter.onUpdateRequested()
 
-    override fun onUpdateSnoozed(versionName: String) {
-        lifecycleScope.launch { appUpdateChecker.snooze(versionName) }
-    }
+    override fun onUpdateSnoozed(versionName: String) = updatePresenter.onUpdateSnoozed(versionName)
 
     private fun buildInterface() {
         screen = GalleryScreen(
             activity = this,
             scope = lifecycleScope,
-            repository = protonRepository,
+            repository = thumbnailSource,
             currentUserId = { currentUiState.currentUserId },
             actions = GalleryScreen.Actions(
                 onPhotoClicked = ::openPhoto,
@@ -200,44 +191,6 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
         updateNavigationControls()
     }
 
-    private fun initializeAuthentication() {
-        ProtonPresentationInitializer.registerAuthentication(
-            activity = this,
-            accountManager = accountManager,
-            authOrchestrator = authOrchestrator,
-            onAuthenticationError = ::showAuthenticationError,
-        )
-        authOrchestrator.setOnLoginResult { }
-    }
-
-    private fun initializeProtonCore() {
-        ProtonPresentationInitializer.initializeCore(applicationContext)
-    }
-
-    private fun checkForAppUpdate() {
-        lifecycleScope.launch {
-            val update = appUpdateChecker.findAvailableUpdate(BuildConfig.VERSION_NAME) ?: return@launch
-            pendingUpdateVersionName = update.versionName
-            showPendingUpdate()
-        }
-    }
-
-    private fun showPendingUpdate() {
-        val versionName = pendingUpdateVersionName ?: return
-        if (!lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return
-        if (supportFragmentManager.isStateSaved) return
-        if (supportFragmentManager.findFragmentByTag(UpdateAvailableDialogFragment.TAG) != null) {
-            pendingUpdateVersionName = null
-            return
-        }
-        UpdateAvailableDialogFragment.create(versionName, BuildConfig.VERSION_NAME).show(
-            supportFragmentManager,
-            UpdateAvailableDialogFragment.TAG,
-        )
-        pendingUpdateVersionName = null
-    }
-
-
     private fun observeGalleryState() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
@@ -258,17 +211,14 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
             pendingScrollRestore = state.destination
         }
         currentUiState = state
-        requestThumbnailNotificationPermissionIfNeeded(state)
+        notificationPermissionPrompter.requestIfNeeded(protonConnected = state.isProtonConnected)
         updateThumbnailCacheIdentity(state.currentUserId)
         renderedDestination = state.destination
         renderedContent = state.content
         if (contentChanged || destinationChanged) {
             when (val content = state.content) {
-                is GalleryContent.Photos -> submitPhotos(content.assets)
-                is GalleryContent.Library -> {
-                    visibleAssets = emptyList()
-                    adapter.submitLibrary(content.sections)
-                }
+                is GalleryContent.Photos -> adapter.submitPhotos(content.assets)
+                is GalleryContent.Library -> adapter.submitLibrary(content.sections)
             }
             restorePendingScrollPosition(state)
         }
@@ -283,37 +233,16 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
                 },
             )
         } ?: screen.showContent()
-        screen.renderHeader(
-            statusText = state.statusText,
-            showDeleteAll = state.showDeleteAll && adapter.selectedPhotos().isEmpty(),
+        screen.renderHeader(statusText = state.statusText)
+        screen.renderTrashActions(
+            showDeleteAll = state.showDeleteAll,
             refreshing = state.isRefreshing,
+            selecting = adapter.selectedPhotos().isNotEmpty(),
         )
         updateNavigationControls()
         if (destinationChanged) {
             adapter.clearSelection()
         }
-    }
-
-    private fun requestThumbnailNotificationPermissionIfNeeded(state: GalleryUiState) {
-        // Runtime notification permission only exists from Android 13; the explicit check also
-        // keeps lint's InlinedApi analysis satisfied about the constant below.
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
-        val preferences = permissionPreferences
-        if (!ThumbnailNotificationPermissionPolicy.shouldRequest(
-                apiLevel = Build.VERSION.SDK_INT,
-                protonConnected = state.isProtonConnected,
-                permissionGranted = ContextCompat.checkSelfPermission(
-                    this,
-                    Manifest.permission.POST_NOTIFICATIONS,
-                ) == PackageManager.PERMISSION_GRANTED,
-                requestedBefore = preferences.getBoolean(
-                    KEY_THUMBNAIL_NOTIFICATION_PERMISSION_REQUESTED,
-                    false,
-                ) || notificationPermissionRequestInFlight,
-            )
-        ) return
-        notificationPermissionRequestInFlight = true
-        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 
     private fun updateThumbnailCacheIdentity(userId: UserId?) {
@@ -325,12 +254,12 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
     }
 
     private fun selectDestination(destination: GalleryDestination) {
-        beforeNavigation()
+        clearSelectionForNavigation()
         viewModel.selectDestination(destination)
     }
 
     private fun openAlbum(album: ProtonAlbum) {
-        beforeNavigation()
+        clearSelectionForNavigation()
         viewModel.openAlbum(album)
     }
 
@@ -340,7 +269,7 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
             screen.scrollToTop()
             return
         }
-        beforeNavigation()
+        clearSelectionForNavigation()
         viewModel.openPhotosTab()
     }
 
@@ -349,12 +278,12 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
             screen.scrollToTop()
             return
         }
-        beforeNavigation()
+        clearSelectionForNavigation()
         viewModel.openLibrary()
     }
 
     private fun navigateUp() {
-        beforeNavigation()
+        clearSelectionForNavigation()
         viewModel.navigateUp()
     }
 
@@ -367,103 +296,43 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
         }
     }
 
-    private fun beforeNavigation() {
+    /** Drops any selection and hides "Delete all" so neither outlives the page being left. */
+    private fun clearSelectionForNavigation() {
         adapter.clearSelection()
-        trashDeleteAllButton.visibility = View.GONE
+        screen.renderTrashActions(
+            showDeleteAll = false,
+            refreshing = currentUiState.isRefreshing,
+            selecting = false,
+        )
     }
 
     private fun connectProton() {
-        initializeProtonCore()
-        authOrchestrator.startLoginWorkflow()
+        authCoordinator.connectProton()
     }
 
     private fun showSettingsMenu() {
-        PopupMenu(this, settingsButton).apply {
-            if (currentUiState.currentUserId == null) {
-                menu.add(android.view.Menu.NONE, SETTINGS_CONNECT_PROTON, 0, R.string.connect_proton)
-            } else {
-                menu.add(android.view.Menu.NONE, SETTINGS_DISCONNECT_PROTON, 0, R.string.disconnect_proton)
-            }
-            menu.add(android.view.Menu.NONE, SETTINGS_PRIVACY, 1, R.string.privacy_and_data)
-            menu.add(
-                android.view.Menu.NONE,
-                android.view.Menu.NONE,
-                2,
-                getString(R.string.app_version, BuildConfig.VERSION_NAME),
-            ).isEnabled = false
-            setOnMenuItemClickListener { item ->
-                when (item.itemId) {
-                    SETTINGS_CONNECT_PROTON -> connectProton()
-                    SETTINGS_DISCONNECT_PROTON -> confirmDisconnectProton()
-                    SETTINGS_PRIVACY -> showPrivacySettings()
-                }
-                true
-            }
-            show()
-        }
-    }
-
-    private fun showPrivacySettings() {
-        val userId = currentUiState.currentUserId
-        if (userId == null) {
-            AlertDialog.Builder(this)
-                .setTitle(R.string.privacy_and_data)
-                .setMessage(R.string.privacy_disconnected_message)
-                .setPositiveButton(android.R.string.ok, null)
-                .show()
-            return
-        }
-        lifecycleScope.launch {
-            val enabled = runCatching { observeUserSettings(userId, false).first()?.telemetry == true }
-                .getOrDefault(false)
-            var desired = enabled
-            AlertDialog.Builder(this@GalleryActivity)
-                .setTitle(R.string.privacy_and_data)
-                .setMessage(R.string.privacy_connected_message)
-                .setMultiChoiceItems(
-                    arrayOf(getString(R.string.allow_proton_telemetry)),
-                    booleanArrayOf(enabled),
-                ) { _, _, checked -> desired = checked }
-                .setNegativeButton(R.string.cancel, null)
-                .setPositiveButton(R.string.save) { _, _ ->
-                    lifecycleScope.launch {
-                        val updated = runCatching { updateTelemetry(userId, desired) }.isSuccess
-                        Toast.makeText(
-                            this@GalleryActivity,
-                            if (updated) R.string.privacy_setting_saved else R.string.privacy_setting_failed,
-                            Toast.LENGTH_LONG,
-                        ).show()
-                    }
-                }
-                .show()
-        }
-    }
-
-    private fun confirmDisconnectProton() {
-        AlertDialog.Builder(this)
-            .setTitle(R.string.disconnect_proton_question)
-            .setMessage(R.string.disconnect_proton_message)
-            .setNegativeButton(R.string.cancel, null)
-            .setPositiveButton(R.string.disconnect) { _, _ -> disconnectProton() }
-            .show()
-    }
-
-    private fun disconnectProton() {
-        viewModel.disconnectProton()
+        settingsPresenter.showMenu(screen.settingsButton)
     }
 
     private fun openPhoto(photo: GalleryAsset) {
         val userId = currentUiState.currentUserId ?: return
-        viewerLauncher.launch(PhotoViewerActivity.createIntent(this, photo, userId, visibleAssets))
+        viewerLauncher.launch(
+            PhotoViewerActivity.createIntent(this, photo, userId, currentUiState.visibleAssets),
+        )
     }
 
     private fun showSelection(selected: List<GalleryAsset>) {
-        val viewingTrash = currentUiState.isTrash
         screen.renderSelection(
             selectedCount = selected.size,
-            viewingTrash = viewingTrash,
-            showDeleteAll = currentUiState.showDeleteAll && visibleAssets.isNotEmpty(),
+            viewingTrash = currentUiState.isTrash,
         )
+        if (currentUiState.isTrash) {
+            screen.renderTrashActions(
+                showDeleteAll = currentUiState.showDeleteAll && currentUiState.visibleAssets.isNotEmpty(),
+                refreshing = currentUiState.isRefreshing,
+                selecting = selected.isNotEmpty(),
+            )
+        }
         updateNavigationControls()
     }
 
@@ -480,13 +349,8 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
     }
 
     private fun confirmDeleteAllTrashPhotos() {
-        deletionCoordinator.deleteAllFromTrash(visibleAssets)
+        deletionCoordinator.deleteAllFromTrash(currentUiState.visibleAssets)
     }
-    private fun submitPhotos(photos: List<GalleryAsset>) {
-        visibleAssets = GalleryGrouping.sortPhotos(photos)
-        adapter.submitPhotos(visibleAssets)
-    }
-
 
     private fun updateNavigationControls() {
         val destination = currentUiState.destination
@@ -507,51 +371,23 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
     }
 
     private fun updateGalleryFooterHeight() {
-        val height = GalleryFastScrollLayoutPolicy.footerHeight(
-            navigationVisible = tabBar.isVisible,
-            bottomInset = safeBottom,
-            navigationClearance = dp(GalleryScreen.TAB_BAR_HEIGHT_DP + 14),
-            baseClearance = dp(12),
+        screen.setFooterHeight(
+            GalleryFastScrollLayoutPolicy.footerHeight(
+                navigationVisible = tabBar.isVisible,
+                bottomInset = safeBottom,
+                navigationClearance = dp(GalleryScreen.TAB_BAR_HEIGHT_DP + 14),
+                baseClearance = dp(12),
+            ),
         )
-        val params = galleryFooter.layoutParams ?: AbsListView.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            height,
-        )
-        if (params.height == height) return
-        params.height = height
-        galleryFooter.layoutParams = params
     }
 
     private fun toggleOverviewFavorite(photo: GalleryAsset) {
         val userId = currentUiState.currentUserId ?: return
-        if (!photo.canFavorite) return
-        val nodeUids = listOf(photo.nodeUid)
-        val favorite = !photo.isFavorite
-        adapter.beginFavoriteUpdate(photo.stableId, favorite)
-        lifecycleScope.launch {
-            var succeeded = false
-            try {
-                val result = protonRepository.setFavorite(userId, nodeUids, favorite)
-                succeeded = result.updatedCount == nodeUids.size
-                if (!succeeded) {
-                    Toast.makeText(
-                        this@GalleryActivity,
-                        R.string.could_not_update_favorite,
-                        Toast.LENGTH_LONG,
-                    ).show()
-                }
-            } catch (error: CancellationException) {
-                throw error
-            } catch (_: Throwable) {
-                Toast.makeText(
-                    this@GalleryActivity,
-                    R.string.could_not_update_favorite,
-                    Toast.LENGTH_LONG,
-                ).show()
-            } finally {
-                adapter.finishFavoriteUpdate(photo.stableId, succeeded)
-            }
-        }
+        favoriteToggle.toggle(userId, photo)
+    }
+
+    private fun showFavoriteError() {
+        Toast.makeText(this, R.string.could_not_update_favorite, Toast.LENGTH_LONG).show()
     }
 
     private fun restorePendingScrollPosition(state: GalleryUiState) {
@@ -576,7 +412,7 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
                 WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
             )
             safeBottom = safeArea.bottom
-            fastScrollEdgePadding = GalleryFastScrollLayoutPolicy.edgePadding(
+            val fastScrollEdgePadding = GalleryFastScrollLayoutPolicy.edgePadding(
                 topInset = safeArea.top,
                 bottomInset = safeArea.bottom,
                 margin = resources.getDimensionPixelSize(R.dimen.gallery_fast_scroll_edge_margin),
@@ -589,20 +425,5 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
             insets
         }
         ViewCompat.requestApplyInsets(root)
-    }
-
-    private fun showAuthenticationError() {
-        Toast.makeText(this, R.string.proton_unlock_failed, Toast.LENGTH_LONG).show()
-    }
-
-    private companion object {
-        const val LATEST_RELEASE_PAGE_URL = "https://github.com/Bownee/Lenswave/releases/latest"
-        const val STATE_PENDING_UPDATE_VERSION = "gallery.pending-update-version"
-        const val SETTINGS_CONNECT_PROTON = 1
-        const val SETTINGS_DISCONNECT_PROTON = 2
-        const val SETTINGS_PRIVACY = 3
-        const val PERMISSION_PREFERENCES_NAME = "permissions"
-        const val KEY_THUMBNAIL_NOTIFICATION_PERMISSION_REQUESTED =
-            "thumbnail-notification-permission-requested-v2"
     }
 }

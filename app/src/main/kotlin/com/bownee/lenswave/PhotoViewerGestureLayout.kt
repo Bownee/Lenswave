@@ -51,6 +51,9 @@ internal class PhotoViewerGestureLayout @JvmOverloads constructor(
         return false
     }
 
+    // Lint requires the override to accompany onTouchEvent; taps are delivered via performClick below.
+    override fun performClick(): Boolean = super.performClick()
+
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (!interceptingDrag) return super.onTouchEvent(event)
         when (event.actionMasked) {
@@ -73,8 +76,6 @@ internal class PhotoViewerGestureLayout @JvmOverloads constructor(
         }
         return true
     }
-
-    override fun performClick(): Boolean = super.performClick()
 
     private fun beginDrag(event: MotionEvent) {
         dragStartX = event.rawX

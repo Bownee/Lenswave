@@ -8,6 +8,7 @@ import com.bownee.lenswave.proton.ProtonAlbumPhotosState
 import com.bownee.lenswave.proton.ProtonAlbumsState
 import com.bownee.lenswave.proton.ProtonAccountSessionManager
 import com.bownee.lenswave.proton.ProtonAccountSessionState
+import com.bownee.lenswave.proton.ProtonAlbum
 import com.bownee.lenswave.proton.ProtonGalleryState
 import com.bownee.lenswave.proton.ProtonThumbnailScheduler
 import com.bownee.lenswave.proton.ProtonTrashState
@@ -83,7 +84,7 @@ class GalleryViewModel @Inject internal constructor(
         GalleryNavigationPolicy.parent(destination)?.let(::selectDestination)
     }
 
-    fun openAlbum(album: com.bownee.lenswave.proton.ProtonAlbum) {
+    fun openAlbum(album: ProtonAlbum) {
         val albumReference = album.reference()
         destination = GalleryDestination.AlbumPhotos(albumReference)
         saveDestination()

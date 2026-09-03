@@ -386,6 +386,52 @@ class GalleryUiStateFactoryTest {
     }
 
     @Test
+    fun `photo pages are published newest first with undated photos last`() {
+        val state = factory.create(
+            GalleryUiInputs(
+                destination = GalleryDestination.Timeline,
+                protonAccountStatus = ProtonAccountStatus.CONNECTED,
+                protonGallery = ProtonGalleryState(
+                    photos = listOf(
+                        ProtonGalleryPhoto("undated", 0, hasThumbnail = true),
+                        ProtonGalleryPhoto("older", 10, hasThumbnail = true),
+                        ProtonGalleryPhoto("newer", 20, hasThumbnail = true),
+                        ProtonGalleryPhoto("also-older", 10, hasThumbnail = true),
+                    ),
+                    hasLoaded = true,
+                ),
+            ),
+        )
+
+        assertEquals(
+            listOf("proton:newer", "proton:also-older", "proton:older", "proton:undated"),
+            state.visibleAssets.map(GalleryAsset::stableId),
+        )
+    }
+
+    @Test
+    fun `trash is published in the same order as other photo pages`() {
+        val state = factory.create(
+            GalleryUiInputs(
+                destination = GalleryDestination.Trash,
+                protonAccountStatus = ProtonAccountStatus.CONNECTED,
+                protonTrash = ProtonTrashState(
+                    photos = listOf(
+                        ProtonTrashPhoto("older", 1, hasThumbnail = true),
+                        ProtonTrashPhoto("newer", 2, hasThumbnail = true),
+                    ),
+                    hasLoaded = true,
+                ),
+            ),
+        )
+
+        assertEquals(
+            listOf("proton-trash:newer", "proton-trash:older"),
+            state.visibleAssets.map(GalleryAsset::stableId),
+        )
+    }
+
+    @Test
     fun `background worker with no pending thumbnails uses the normal count`() {
         val state = factory.create(
             GalleryUiInputs(

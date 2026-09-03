@@ -1,6 +1,7 @@
 package com.bownee.lenswave.proton
 
 import com.bownee.lenswave.LenswaveDiagnostics
+import com.bownee.lenswave.LenswaveOperation
 import java.io.File
 import net.zetetic.database.sqlcipher.SQLiteDatabase
 
@@ -21,7 +22,7 @@ internal object ProtonDatabaseKeyMigration {
         val legacyPassphrase = ByteArray(passphrase.size)
         if (!opensWith(databaseFile, legacyPassphrase)) {
             LenswaveDiagnostics.reportFailure(
-                "session-database-rekey",
+                LenswaveOperation.SESSION_DATABASE_REKEY,
                 IllegalStateException("Session database opens with neither key; discarding it"),
             )
             discard(databaseFile)
@@ -36,7 +37,7 @@ internal object ProtonDatabaseKeyMigration {
                 null,
             ).use { database -> database.changePassword(passphrase) }
         } catch (error: Throwable) {
-            LenswaveDiagnostics.reportFailure("session-database-rekey", error)
+            LenswaveDiagnostics.reportFailure(LenswaveOperation.SESSION_DATABASE_REKEY, error)
             discard(databaseFile)
         }
     }

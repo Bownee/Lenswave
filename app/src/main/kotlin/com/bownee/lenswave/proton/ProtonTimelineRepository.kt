@@ -1,6 +1,7 @@
 package com.bownee.lenswave.proton
 
 import com.bownee.lenswave.LenswaveDiagnostics
+import com.bownee.lenswave.LenswaveOperation
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
@@ -17,7 +18,6 @@ import me.proton.core.domain.entity.UserId
 internal class ProtonTimelineRepository @Inject constructor(
     private val clientProvider: ProtonPhotosClientProvider,
     private val cache: ProtonTimelineCache,
-    private val syncPipeline: ProtonPhotoSyncPipeline,
     private val snapshots: ProtonSnapshotCoordinator,
     private val tagListings: ProtonTagListingClient,
 ) {
@@ -51,7 +51,7 @@ internal class ProtonTimelineRepository @Inject constructor(
             val shouldEnumerate = snapshots.shouldEnumerate(
                 userId.id,
                 ProtonSyncSource.TIMELINE,
-                SYNC_KEY,
+                ProtonSyncKeys.TIMELINE,
                 forceRemote,
                 hasCachedSnapshot,
             )
@@ -61,26 +61,20 @@ internal class ProtonTimelineRepository @Inject constructor(
             }
             emit(userId, existing, hasLoaded = hasCachedSnapshot, syncing = true)
             val photosClient = clientProvider.get(userId)
-            val photos = syncPipeline.synchronizeMetadata(
-                enumerate = {
-                    photosClient.enumerateTimeline().toList().map { item ->
-                        ProtonGalleryPhoto(
-                            nodeUid = item.nodeUid.value,
-                            captureTimeEpochSeconds = item.captureTime.epochSecond,
-                            hasThumbnail = cache.thumbnailExists(userId.id, item.nodeUid.value),
-                        )
-                    }
-                },
-                prepareSnapshot = { remotePhotos ->
-                    cache.reconcilePhotos(
-                        userId = userId.id,
-                        cachedNodeUids = existing.map(ProtonGalleryPhoto::nodeUid),
-                        remoteNodeUids = remotePhotos.map(ProtonGalleryPhoto::nodeUid),
-                    )
-                },
-                commitSnapshot = { cache.writeIndex(userId.id, it) },
-                commitEnumeration = { snapshots.commit(userId.id, SYNC_KEY) },
+            val photos = photosClient.enumerateTimeline().toList().map { item ->
+                ProtonGalleryPhoto(
+                    nodeUid = item.nodeUid.value,
+                    captureTimeEpochSeconds = item.captureTime.epochSecond,
+                    hasThumbnail = cache.thumbnailExists(userId.id, item.nodeUid.value),
+                )
+            }
+            cache.reconcilePhotos(
+                userId = userId.id,
+                cachedNodeUids = existing.map(ProtonGalleryPhoto::nodeUid),
+                remoteNodeUids = photos.map(ProtonGalleryPhoto::nodeUid),
             )
+            cache.writeIndex(userId.id, photos)
+            snapshots.commit(userId.id, ProtonSyncKeys.TIMELINE)
             val remoteNodeUids = photos.mapTo(mutableSetOf(), ProtonGalleryPhoto::nodeUid)
             val reconciledTags = mutableState.value.tags.mapValues { (_, tagState) ->
                 tagState.copy(photos = tagState.photos.filter { it.nodeUid in remoteNodeUids })
@@ -90,7 +84,7 @@ internal class ProtonTimelineRepository @Inject constructor(
             mutableState.value = mutableState.value.copy(syncing = false)
             throw error
         } catch (error: Throwable) {
-            LenswaveDiagnostics.reportFailure("timeline-sync", error)
+            LenswaveDiagnostics.reportFailure(LenswaveOperation.TIMELINE_SYNC, error)
             mutableState.value = mutableState.value.copy(
                 syncing = false,
                 refreshFailed = true,
@@ -102,7 +96,7 @@ internal class ProtonTimelineRepository @Inject constructor(
         tagMutexes.getValue(tag).withLock {
             val existing = cache.readTag(userId.id, tag)
             val hasCachedSnapshot = cache.hasTagSnapshot(userId.id, tag)
-            val syncKey = "$TAG_SYNC_KEY:${tag.name.lowercase()}"
+            val syncKey = ProtonSyncKeys.timelineTag(tag)
             try {
                 val shouldEnumerate = snapshots.shouldEnumerate(
                     userId.id,
@@ -140,7 +134,7 @@ internal class ProtonTimelineRepository @Inject constructor(
                 )
                 throw error
             } catch (error: Throwable) {
-                LenswaveDiagnostics.reportFailure("tag-sync-${tag.name.lowercase()}", error)
+                LenswaveDiagnostics.reportFailure(LenswaveOperation.tagSync(tag), error)
                 updateTag(
                     tag,
                     ProtonTagState(
@@ -153,43 +147,29 @@ internal class ProtonTimelineRepository @Inject constructor(
         }
 
     internal fun markThumbnailsAvailable(userId: UserId, nodeUids: Set<String>) {
-        if (nodeUids.isEmpty()) return
-        mutableState.update { state ->
-            if (state.userId != userId.id) return@update state
-            var completedCount = 0
-            val photos = state.photos.map { photo ->
-                if (photo.nodeUid !in nodeUids || photo.hasThumbnail) return@map photo
-                completedCount++
-                photo.copy(hasThumbnail = true)
-            }
-            if (completedCount == 0) return@update state
-            state.copy(
-                photos = photos,
-                tags = state.tags.mapValues { (_, tagState) ->
-                    tagState.copy(photos = tagState.photos.map { photo ->
-                        if (photo.nodeUid in nodeUids) photo.copy(hasThumbnail = true) else photo
-                    })
-                },
-            )
-        }
+        markThumbnails(userId, nodeUids, available = true)
     }
 
     internal fun markThumbnailsUnavailable(userId: UserId, nodeUids: Set<String>) {
+        markThumbnails(userId, nodeUids, available = false)
+    }
+
+    private fun markThumbnails(userId: UserId, nodeUids: Set<String>, available: Boolean) {
         if (nodeUids.isEmpty()) return
         mutableState.update { state ->
             if (state.userId != userId.id) return@update state
-            var invalidatedCount = 0
-            val photos = state.photos.map { photo ->
-                if (photo.nodeUid !in nodeUids || !photo.hasThumbnail) return@map photo
-                invalidatedCount++
-                photo.copy(hasThumbnail = false)
-            }
-            if (invalidatedCount == 0) return@update state
+            val photos = state.photos.withThumbnailAvailability(
+                nodeUids,
+                available,
+                nodeUid = ProtonGalleryPhoto::nodeUid,
+                hasThumbnail = ProtonGalleryPhoto::hasThumbnail,
+                copy = { photo, hasThumbnail -> photo.copy(hasThumbnail = hasThumbnail) },
+            ) ?: return@update state
             state.copy(
                 photos = photos,
                 tags = state.tags.mapValues { (_, tagState) ->
                     tagState.copy(photos = tagState.photos.map { photo ->
-                        if (photo.nodeUid in nodeUids) photo.copy(hasThumbnail = false) else photo
+                        if (photo.nodeUid in nodeUids) photo.copy(hasThumbnail = available) else photo
                     })
                 },
             )
@@ -278,9 +258,4 @@ internal class ProtonTimelineRepository @Inject constructor(
         ?.nodeUid
         ?.substringBefore('~')
         ?.takeIf(String::isNotBlank)
-
-    private companion object {
-        const val SYNC_KEY = "timeline"
-        const val TAG_SYNC_KEY = "timeline-tag"
-    }
 }

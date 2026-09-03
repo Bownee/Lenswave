@@ -3,7 +3,6 @@ package com.bownee.lenswave.gallery
 import android.graphics.Bitmap
 import android.util.LruCache
 import com.bownee.lenswave.proton.ProtonAlbum
-import com.bownee.lenswave.proton.ProtonPhotoGateway
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -14,7 +13,7 @@ import me.proton.core.domain.entity.UserId
 
 class GalleryThumbnailLoader(
     private val scope: CoroutineScope,
-    private val protonRepository: ProtonPhotoGateway,
+    private val protonRepository: ProtonThumbnailImageSource,
     private val protonUserId: () -> UserId?,
 ) {
     private val bitmaps = object : LruCache<String, Bitmap>(cacheSize()) {

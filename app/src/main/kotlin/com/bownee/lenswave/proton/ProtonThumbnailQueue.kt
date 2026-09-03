@@ -53,15 +53,16 @@ internal class ProtonThumbnailQueue @Inject constructor(
         mutex.withLock {
             val entries = entries(userId)
             val replacedSources = pendingCandidatesBySource.keys
-            val retainedAlbumSources = retainedAlbumNodeUids?.mapTo(mutableSetOf()) { nodeUid ->
-                "$ALBUM_PHOTOS_SOURCE:$nodeUid"
-            }
+            val retainedAlbumSources = retainedAlbumNodeUids?.mapTo(
+                mutableSetOf(),
+                ProtonSyncKeys.QueueSource::albumPhotos,
+            )
             entries.replaceAll { _, entry ->
                 entry.copy(
                     sourceCaptureTimes = entry.sourceCaptureTimes.filterKeys { source ->
                         source !in replacedSources &&
                             (retainedAlbumSources == null ||
-                                !source.startsWith("$ALBUM_PHOTOS_SOURCE:") ||
+                                !ProtonSyncKeys.QueueSource.isAlbumPhotos(source) ||
                                 source in retainedAlbumSources)
                     },
                 )
@@ -108,8 +109,19 @@ internal class ProtonThumbnailQueue @Inject constructor(
         }
     }
 
-    suspend fun claimReady(userId: String, limit: Int): List<ProtonThumbnailQueueEntry> =
-        claim(userId, limit)
+    suspend fun claimReady(userId: String, limit: Int): List<ProtonThumbnailQueueEntry> = mutex.withLock {
+        require(limit > 0) { "Thumbnail claim limit must be positive" }
+        val now = clock.nowMillis()
+        val claimed = claimedNodeUids.getOrPut(userId, ::mutableSetOf)
+        entries(userId).values
+            .asSequence()
+            .filter { entry -> entry.retryAtMillis <= now }
+            .filterNot { entry -> entry.nodeUid in claimed }
+            .sortedWith(NEWEST_FIRST)
+            .take(limit)
+            .toList()
+            .onEach { entry -> claimed += entry.nodeUid }
+    }
 
     suspend fun settle(
         userId: String,
@@ -178,36 +190,16 @@ internal class ProtonThumbnailQueue @Inject constructor(
         store.writeThumbnailQueue(userId, entries.values.toList())
     }
 
-    private suspend fun claim(
-        userId: String,
-        limit: Int,
-    ): List<ProtonThumbnailQueueEntry> = mutex.withLock {
-        require(limit > 0) { "Thumbnail claim limit must be positive" }
-        val now = clock.nowMillis()
-        val claimed = claimedNodeUids.getOrPut(userId, ::mutableSetOf)
-        entries(userId).values
-            .asSequence()
-            .filter { entry -> entry.retryAtMillis <= now }
-            .filterNot { entry -> entry.nodeUid in claimed }
-            .sortedWith(NEWEST_FIRST)
-            .take(limit)
-            .toList()
-            .onEach { entry -> claimed += entry.nodeUid }
-    }
-
     private fun retryDelayMillis(retryCount: Int): Long {
         val multiplier = 1L shl (retryCount - 1).coerceIn(0, MAX_RETRY_SHIFT)
         return (BASE_RETRY_MILLIS * multiplier).coerceAtMost(MAX_RETRY_MILLIS)
     }
 
-    companion object {
-        /** Queue source prefix for the photos of one album; the album node uid follows the colon. */
-        const val ALBUM_PHOTOS_SOURCE = "album"
-
-        private const val BASE_RETRY_MILLIS = 30_000L
-        private const val MAX_RETRY_MILLIS = 15L * 60L * 1_000L
-        private const val MAX_RETRY_SHIFT = 5
-        private val NEWEST_FIRST = compareByDescending(ProtonThumbnailQueueEntry::captureTimeEpochSeconds)
+    private companion object {
+        const val BASE_RETRY_MILLIS = 30_000L
+        const val MAX_RETRY_MILLIS = 15L * 60L * 1_000L
+        const val MAX_RETRY_SHIFT = 5
+        val NEWEST_FIRST = compareByDescending(ProtonThumbnailQueueEntry::captureTimeEpochSeconds)
             .thenBy(ProtonThumbnailQueueEntry::nodeUid)
     }
 }

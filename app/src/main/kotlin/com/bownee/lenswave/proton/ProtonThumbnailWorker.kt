@@ -1,6 +1,7 @@
 package com.bownee.lenswave.proton
 
 import com.bownee.lenswave.LenswaveDiagnostics
+import com.bownee.lenswave.LenswaveOperation
 import android.content.Context
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
@@ -30,7 +31,7 @@ class ProtonThumbnailWorker(
             applicationContext,
             RepositoryEntryPoint::class.java,
         )
-        val repository = entryPoint.repository()
+        val repository = entryPoint.thumbnailWork()
         val attempt = (runAttemptCount + 1).coerceAtMost(ProtonThumbnailWorkPolicy.MAX_ATTEMPTS)
         var statusPublished = false
         return try {
@@ -106,7 +107,7 @@ class ProtonThumbnailWorker(
             }
             throw error
         } catch (error: Throwable) {
-            LenswaveDiagnostics.reportFailure("thumbnail-worker", error)
+            LenswaveDiagnostics.reportFailure(LenswaveOperation.THUMBNAIL_WORKER, error)
             resolve(repository, ProtonThumbnailWorkIssue.ERROR, publishStatus = statusPublished)
         }
     }
@@ -119,7 +120,7 @@ class ProtonThumbnailWorker(
     }
 
     private fun resolve(
-        repository: ProtonPhotoGateway,
+        repository: ProtonThumbnailWorkGateway,
         issue: ProtonThumbnailWorkIssue? = null,
         publishStatus: Boolean = true,
     ): Result {
@@ -135,7 +136,7 @@ class ProtonThumbnailWorker(
 
     private fun reportState(state: String) {
         LenswaveDiagnostics.reportState(
-            operation = "thumbnail-worker",
+            operation = LenswaveOperation.THUMBNAIL_WORKER,
             state = state,
             attempt = (runAttemptCount + 1).coerceAtMost(ProtonThumbnailWorkPolicy.MAX_ATTEMPTS),
             maximumAttempts = ProtonThumbnailWorkPolicy.MAX_ATTEMPTS,
@@ -144,8 +145,8 @@ class ProtonThumbnailWorker(
 
     @EntryPoint
     @InstallIn(SingletonComponent::class)
-    interface RepositoryEntryPoint {
-        fun repository(): ProtonPhotoGateway
+    internal interface RepositoryEntryPoint {
+        fun thumbnailWork(): ProtonThumbnailWorkGateway
         fun accountSessionManager(): ProtonAccountSessionManager
     }
 

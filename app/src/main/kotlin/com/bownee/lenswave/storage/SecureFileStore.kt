@@ -90,7 +90,7 @@ class SecureFileStore @Inject constructor() {
         }
     }
 
-    fun encrypt(scope: String, plaintext: ByteArray): ByteArray {
+    private fun encrypt(scope: String, plaintext: ByteArray): ByteArray {
         val cipher = Cipher.getInstance(TRANSFORMATION)
         cipher.init(Cipher.ENCRYPT_MODE, key(scope))
         val encrypted = cipher.doFinal(plaintext)
@@ -103,7 +103,7 @@ class SecureFileStore @Inject constructor() {
             .array()
     }
 
-    fun decrypt(scope: String, payload: ByteArray): ByteArray {
+    private fun decrypt(scope: String, payload: ByteArray): ByteArray {
         require(payload.size >= MAGIC.size + 2) { "Encrypted file is truncated" }
         val buffer = ByteBuffer.wrap(payload)
         val magic = ByteArray(MAGIC.size).also(buffer::get)

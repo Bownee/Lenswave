@@ -25,9 +25,9 @@ internal class ProtonPhotoCache @Inject constructor(
     ProtonMediaCache,
     ProtonSessionCache,
     ProtonThumbnailQueueStore {
-    private val root = File(context.filesDir, "proton-photo-cache").apply { mkdirs() }
-    private val originals = File(context.cacheDir, "proton-originals").apply { mkdirs() }
-    private val decrypted = File(context.cacheDir, "proton-decrypted")
+    private val root = File(context.filesDir, ProtonStorageLayout.METADATA_DIRECTORY).apply { mkdirs() }
+    private val originals = File(context.cacheDir, ProtonStorageLayout.ORIGINALS_DIRECTORY).apply { mkdirs() }
+    private val decrypted = File(context.cacheDir, ProtonStorageLayout.DECRYPTED_DIRECTORY)
     /**
      * Plaintext copies from a previous process are wiped once, on the first session activation,
      * which runs on an I/O dispatcher. Doing it in the constructor would delete potentially
@@ -273,7 +273,7 @@ internal class ProtonPhotoCache @Inject constructor(
             return null
         }
         val materialized = decryptedOriginalFile(userId, nodeUid)
-        if (materialized.isFile && !isExpired(materialized, DECRYPTED_TTL_MILLIS)) {
+        if (materialized.isFile && !isExpired(materialized, ProtonStorageLayout.DECRYPTED_TTL_MILLIS)) {
             materialized.setLastModified(clock.nowMillis())
             file.setLastModified(clock.nowMillis())
             return materialized
@@ -322,7 +322,7 @@ internal class ProtonPhotoCache @Inject constructor(
     override fun trimUser(userId: String) {
         thumbnails.maintain(userId)
         wipeStaleDecryptedCopies()
-        expireFiles(decryptedDirectory(userId), DECRYPTED_TTL_MILLIS)
+        expireFiles(decryptedDirectory(userId), ProtonStorageLayout.DECRYPTED_TTL_MILLIS)
     }
 
     @Synchronized
@@ -337,7 +337,7 @@ internal class ProtonPhotoCache @Inject constructor(
         userId: String,
         cachedNodeUids: Collection<String>,
         remoteNodeUids: Collection<String>,
-    ): ProtonPhotoChanges {
+    ) {
         val changes = ProtonPhotoReconciliation.compare(cachedNodeUids, remoteNodeUids)
         val remote = remoteNodeUids.toSet()
         ProtonMediaTag.entries.forEach { tag ->
@@ -365,7 +365,6 @@ internal class ProtonPhotoCache @Inject constructor(
                 file.delete()
             }
         }
-        return changes
     }
 
     override fun removePhotos(userId: String, nodeUids: Collection<String>) {
@@ -508,14 +507,14 @@ internal class ProtonPhotoCache @Inject constructor(
 
     private fun readText(userId: String, file: File): String = secureFiles.readText(scope(userId), file)
 
-    private fun scope(userId: String): String = "proton-media:$userId"
+    private fun scope(userId: String): String = ProtonStorageLayout.mediaScope(userId)
 
     /** Stale partial downloads and completed files that no longer belong to a known node. */
     private fun File.isPrunable(validNames: Set<String>): Boolean =
         isStalePartial(this) || (extension != "part" && nameWithoutExtension !in validNames)
 
     private fun isStalePartial(file: File): Boolean =
-        file.extension == "part" && isExpired(file, STALE_PART_TTL_MILLIS)
+        file.extension == "part" && isExpired(file, ProtonStorageLayout.STALE_PART_TTL_MILLIS)
 
     private fun isExpired(file: File, ttlMillis: Long): Boolean =
         file.lastModified() <= 0L || clock.nowMillis() - file.lastModified() > ttlMillis
@@ -527,9 +526,4 @@ internal class ProtonPhotoCache @Inject constructor(
     }
 
     private fun safeName(value: String): String = AtomicFileStore.safeName(value)
-
-    private companion object {
-        const val DECRYPTED_TTL_MILLIS = 30L * 60L * 1_000L
-        const val STALE_PART_TTL_MILLIS = 24L * 60L * 60L * 1_000L
-    }
 }

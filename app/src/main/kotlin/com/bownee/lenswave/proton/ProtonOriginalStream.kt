@@ -8,7 +8,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-internal data class ProtonOriginalDownloadProgress(
+data class ProtonOriginalDownloadProgress(
     val downloadedBytes: Long = 0L,
     val totalBytes: Long? = null,
     val complete: Boolean = false,
@@ -20,7 +20,7 @@ internal data class ProtonOriginalDownloadProgress(
 }
 
 /** A file that can be read while the Proton SDK is still appending decrypted bytes to it. */
-internal class ProtonOriginalStream(
+class ProtonOriginalStream(
     val file: File,
 ) {
     private val lock = ReentrantLock()
@@ -93,7 +93,7 @@ internal class ProtonOriginalStream(
     }
 }
 
-internal data class ProtonOriginalReadState(
+data class ProtonOriginalReadState(
     val availableBytes: Long,
     val complete: Boolean,
 )

@@ -15,7 +15,7 @@ class AccessibilityContractInstrumentedTest {
                 val screen = PhotoViewerScreen(
                     context = activity,
                     requestIsTrashed = false,
-                    actions = PhotoViewerScreen.Actions(
+                    callbacks = PhotoViewerScreen.Actions(
                         gesturesEnabled = { true },
                         gestureStartAllowed = { _, _ -> true },
                         onVerticalDrag = { _, _, _ -> },

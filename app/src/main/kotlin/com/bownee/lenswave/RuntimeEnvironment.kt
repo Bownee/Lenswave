@@ -15,7 +15,6 @@ interface LenswaveClock {
 
 interface LenswaveDispatchers {
     val io: CoroutineDispatcher
-    val computation: CoroutineDispatcher
 }
 
 @Singleton
@@ -26,7 +25,6 @@ internal class SystemLenswaveClock @Inject constructor() : LenswaveClock {
 @Singleton
 internal class DefaultLenswaveDispatchers @Inject constructor() : LenswaveDispatchers {
     override val io: CoroutineDispatcher = Dispatchers.IO
-    override val computation: CoroutineDispatcher = Dispatchers.Default
 }
 
 @Module

@@ -2,6 +2,7 @@ package com.bownee.lenswave.proton
 
 import android.graphics.Bitmap
 import com.bownee.lenswave.LenswaveDiagnostics
+import com.bownee.lenswave.LenswaveOperation
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -67,7 +68,7 @@ internal class ProtonDownloadRepository @Inject constructor(
                         cache.onOriginalStored(userId.id, target)
                     }
                 }.getOrElse { error ->
-                    LenswaveDiagnostics.reportFailure("original-cache-store", error)
+                    LenswaveDiagnostics.reportFailure(LenswaveOperation.ORIGINAL_CACHE_STORE, error)
                     temporary
                 }
             } catch (error: CancellationException) {
@@ -76,7 +77,7 @@ internal class ProtonDownloadRepository @Inject constructor(
                 throw error
             } catch (error: Throwable) {
                 stream.fail(error)
-                LenswaveDiagnostics.reportFailure("original-download", error)
+                LenswaveDiagnostics.reportFailure(LenswaveOperation.ORIGINAL_DOWNLOAD, error)
                 temporary.delete()
                 throw error
             }
@@ -100,7 +101,7 @@ internal class ProtonDownloadRepository @Inject constructor(
             temporary.delete()
             throw error
         } catch (error: Throwable) {
-            LenswaveDiagnostics.reportFailure("original-download", error)
+            LenswaveDiagnostics.reportFailure(LenswaveOperation.ORIGINAL_DOWNLOAD, error)
             temporary.delete()
             throw error
         }
@@ -126,7 +127,7 @@ internal class ProtonDownloadRepository @Inject constructor(
         } catch (error: CancellationException) {
             throw error
         } catch (error: Throwable) {
-            LenswaveDiagnostics.reportFailure("original-name-load", error)
+            LenswaveDiagnostics.reportFailure(LenswaveOperation.ORIGINAL_NAME_LOAD, error)
             null
         }
     }
@@ -281,7 +282,7 @@ internal class ProtonDownloadRepository @Inject constructor(
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Throwable) {
-                LenswaveDiagnostics.reportFailure("thumbnail-download", error)
+                LenswaveDiagnostics.reportFailure(LenswaveOperation.THUMBNAIL_DOWNLOAD, error)
                 val kind = ThumbnailFailureClassifier.classify(error)
                 requested.filterNot(successful::contains)
                     .forEach { nodeUid -> failures.record(nodeUid, kind) }
