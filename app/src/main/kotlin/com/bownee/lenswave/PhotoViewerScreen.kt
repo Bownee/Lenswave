@@ -55,7 +55,6 @@ internal class PhotoViewerScreen(
     val status: TextView
     val progress: ProgressBar
     val retryButton: Button
-    val backButton: ImageButton
     val actions: LinearLayout
     val editButton: ImageButton
     val favoriteButton: ImageButton
@@ -134,22 +133,6 @@ internal class PhotoViewerScreen(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
             ),
-        )
-
-        backButton = ImageButton(context).apply {
-            setImageResource(R.drawable.ic_back)
-            imageTintList = ColorStateList.valueOf(Color.WHITE)
-            background = UiStyle.rounded(context, UiStyle.withAlpha(UiStyle.surface, 220), 18)
-            contentDescription = context.getString(R.string.back)
-            setPadding(context.dp(10), context.dp(10), context.dp(10), context.dp(10))
-            setOnClickListener { actions.onBack() }
-        }
-        root.addView(
-            backButton,
-            FrameLayout.LayoutParams(context.dp(48), context.dp(48), Gravity.TOP or Gravity.START).apply {
-                marginStart = context.dp(8)
-                topMargin = context.dp(8)
-            },
         )
 
         editButton = smallIconButton(context.getString(R.string.edit), R.drawable.ic_edit).apply {
@@ -278,7 +261,6 @@ internal class PhotoViewerScreen(
         val gestureStartAllowed: (Float, Float) -> Boolean,
         val onVerticalDrag: (Float, Float, Boolean) -> Unit,
         val onHorizontalDrag: (Float, Boolean) -> Unit,
-        val onBack: () -> Unit,
         val onEdit: () -> Unit,
         val onFavorite: () -> Unit,
         val onDelete: () -> Unit,

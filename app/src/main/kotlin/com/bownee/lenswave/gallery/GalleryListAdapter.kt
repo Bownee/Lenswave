@@ -342,11 +342,9 @@ class GalleryListAdapter(
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             visibility = View.GONE
         }
-        val videoBadge = TextView(context).apply {
-            text = "▶"
-            textSize = 13f
-            gravity = Gravity.CENTER
-            setTextColor(Color.WHITE)
+        val videoBadge = ImageView(context).apply {
+            setImageResource(R.drawable.ic_play)
+            setPadding(context.dp(5))
             background = UiStyle.rounded(context, Color.argb(180, 12, 14, 19), 14)
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             visibility = View.GONE

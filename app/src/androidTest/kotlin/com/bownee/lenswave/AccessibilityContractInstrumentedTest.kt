@@ -26,7 +26,6 @@ class AccessibilityContractInstrumentedTest {
                         gestureStartAllowed = { _, _ -> true },
                         onVerticalDrag = { _, _, _ -> },
                         onHorizontalDrag = { _, _ -> },
-                        onBack = {},
                         onEdit = {},
                         onFavorite = {},
                         onDelete = {},

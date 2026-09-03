@@ -84,7 +84,6 @@ class PhotoViewerActivity : FragmentActivity() {
     private val status get() = screen.status
     private val progress get() = screen.progress
     private val retryButton get() = screen.retryButton
-    private val backButton get() = screen.backButton
     private val actions get() = screen.actions
     private val editButton get() = screen.editButton
     private val favoriteButton get() = screen.favoriteButton
@@ -199,7 +198,6 @@ class PhotoViewerActivity : FragmentActivity() {
                 },
                 onVerticalDrag = ::handleDetailsDrag,
                 onHorizontalDrag = ::handleHorizontalPhotoDrag,
-                onBack = ::handleBack,
                 onEdit = ::openEditor,
                 onFavorite = ::toggleFavorite,
                 onDelete = ::deletePhoto,
@@ -208,6 +206,9 @@ class PhotoViewerActivity : FragmentActivity() {
             ),
         )
         setContentView(screen.root)
+        actions.addOnLayoutChangeListener { _, _, top, _, bottom, _, oldTop, _, oldBottom ->
+            if (top != oldTop || bottom != oldBottom) updateMediaBounds()
+        }
         applySystemInsets()
     }
 
@@ -219,6 +220,7 @@ class PhotoViewerActivity : FragmentActivity() {
             mediaFrame.layoutParams = mediaParams
         }
         detailsSheet.minimumHeight = (availableHeight * DETAILS_MINIMUM_HEIGHT_FRACTION).roundToInt()
+        mediaFrame.post(::updateMediaBounds)
         photoDetailsScroll.post(::synchronizeDetailsSheetWithImage)
     }
 
@@ -782,14 +784,12 @@ class PhotoViewerActivity : FragmentActivity() {
 
         cancelMediaAnimations()
         backgroundScrim.animate().cancel()
-        backButton.animate().cancel()
         actions.animate().cancel()
         val progress = (distance / (root.height * 0.58f).coerceAtLeast(1f)).coerceIn(0f, 1f)
         val photoScale = 1f - 0.12f * progress
         setMediaDismissTransform(distance, photoScale)
         loadingPanel.alpha = 1f - progress
         backgroundScrim.alpha = 1f - 0.88f * progress
-        backButton.alpha = 1f - progress
         actions.alpha = 1f - progress
     }
 
@@ -799,7 +799,6 @@ class PhotoViewerActivity : FragmentActivity() {
         cancelMediaAnimations()
         animateMediaDismissTransform(0f, 1f, 1f, duration)
         backgroundScrim.animate().alpha(1f).setDuration(duration).setInterpolator(verticalSettleInterpolator).start()
-        backButton.animate().alpha(1f).setDuration(duration).setInterpolator(verticalSettleInterpolator).start()
         actions.animate().alpha(1f).setDuration(duration).setInterpolator(verticalSettleInterpolator).start()
     }
 
@@ -853,7 +852,6 @@ class PhotoViewerActivity : FragmentActivity() {
                 .start()
         }
         backgroundScrim.animate().alpha(0f).setDuration(duration).setInterpolator(verticalSettleInterpolator).start()
-        backButton.animate().alpha(0f).setDuration(duration).setInterpolator(verticalSettleInterpolator).start()
         actions.animate().alpha(0f).setDuration(duration).setInterpolator(verticalSettleInterpolator).start()
     }
 
@@ -1234,36 +1232,13 @@ class PhotoViewerActivity : FragmentActivity() {
             val safeArea: Insets = insets.getInsets(
                 WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
             )
-            (backButton.layoutParams as FrameLayout.LayoutParams).apply {
-                marginStart = dp(8) + if (root.layoutDirection == View.LAYOUT_DIRECTION_RTL) {
-                    safeArea.right
-                } else {
-                    safeArea.left
-                }
-                topMargin = dp(8) + safeArea.top
-                backButton.layoutParams = this
-            }
             (actions.layoutParams as FrameLayout.LayoutParams).apply {
                 leftMargin = dp(8) + safeArea.left
                 rightMargin = dp(8) + safeArea.right
                 bottomMargin = dp(8) + safeArea.bottom
                 actions.layoutParams = this
             }
-            (photoView.layoutParams as FrameLayout.LayoutParams).apply {
-                topMargin = dp(PHOTO_TOP_MARGIN_DP) + safeArea.top
-                bottomMargin = dp(PHOTO_BOTTOM_MARGIN_DP) + safeArea.bottom
-                photoView.layoutParams = this
-            }
-            (thumbnailPreview.layoutParams as FrameLayout.LayoutParams).apply {
-                topMargin = dp(PHOTO_TOP_MARGIN_DP) + safeArea.top
-                bottomMargin = dp(PHOTO_BOTTOM_MARGIN_DP) + safeArea.bottom
-                thumbnailPreview.layoutParams = this
-            }
-            (playerView.layoutParams as FrameLayout.LayoutParams).apply {
-                topMargin = dp(PHOTO_TOP_MARGIN_DP) + safeArea.top
-                bottomMargin = dp(PHOTO_BOTTOM_MARGIN_DP) + safeArea.bottom
-                playerView.layoutParams = this
-            }
+            actions.post(::updateMediaBounds)
             detailsSheet.setPadding(
                 dp(16) + safeArea.left,
                 dp(8),
@@ -1273,6 +1248,23 @@ class PhotoViewerActivity : FragmentActivity() {
             insets
         }
         ViewCompat.requestApplyInsets(root)
+    }
+
+    private fun updateMediaBounds() {
+        val bottomInset = PhotoViewerMediaLayoutPolicy.bottomInset(
+            viewportHeight = mediaFrame.height,
+            actionsTop = actions.top,
+            gap = dp(MEDIA_ACTION_GAP_DP),
+        )
+        if (bottomInset <= 0) return
+        listOf(photoView, thumbnailPreview, playerView, loadingPanel).forEach { media ->
+            (media.layoutParams as FrameLayout.LayoutParams).apply {
+                topMargin = 0
+                bottomMargin = bottomInset
+                media.layoutParams = this
+            }
+        }
+        if (photoReady) photoDetailsScroll.post(::synchronizeDetailsSheetWithImage)
     }
 
     private fun clearThumbnailPreview() {
@@ -1309,8 +1301,7 @@ class PhotoViewerActivity : FragmentActivity() {
         const val EXTRA_NAVIGATION = "com.bownee.lenswave.extra.NAVIGATION"
         private const val DETAILS_MINIMUM_HEIGHT_FRACTION = 0.55f
         private const val DETAILS_FALLBACK_OFFSET_FRACTION = 0.55f
-        private const val PHOTO_TOP_MARGIN_DP = 64
-        private const val PHOTO_BOTTOM_MARGIN_DP = 112
+        private const val MEDIA_ACTION_GAP_DP = 8
         private const val VIDEO_CONTROLS_HEIGHT_DP = 80
         private const val FULL_QUALITY_CROSSFADE_MILLIS = 180L
         private const val LOADING_PANEL_DELAY_MILLIS = 300L
