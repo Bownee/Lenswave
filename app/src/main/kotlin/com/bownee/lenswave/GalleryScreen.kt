@@ -21,6 +21,7 @@ import com.bownee.lenswave.gallery.GalleryAsset
 import com.bownee.lenswave.gallery.GalleryDestination
 import com.bownee.lenswave.gallery.GalleryListAdapter
 import com.bownee.lenswave.gallery.GalleryListView
+import com.bownee.lenswave.gallery.GalleryScrollPosition
 import com.bownee.lenswave.gallery.GalleryThumbnailLoader
 import com.bownee.lenswave.proton.ProtonAlbum
 import com.bownee.lenswave.proton.ProtonPhotoGateway
@@ -194,11 +195,28 @@ internal class GalleryScreen(
         scheduleVisibleThumbnailUpdate()
     }
 
-    fun resetScroll() {
+    fun captureScrollPosition(): GalleryScrollPosition? {
+        val firstVisibleChild = list.getChildAt(0) ?: return null
+        return GalleryScrollPosition(list.firstVisiblePosition, firstVisibleChild.top)
+    }
+
+    fun restoreScrollPosition(
+        position: GalleryScrollPosition,
+        isCurrentDestination: () -> Boolean,
+    ) {
         list.post {
-            list.setSelectionFromTop(0, 0)
-            list.scrollTo(0, 0)
-            stickyMonth.visibility = View.GONE
+            if (!isCurrentDestination()) return@post
+            val maximumPosition = (list.count - 1).coerceAtLeast(0)
+            list.setSelectionFromTop(
+                position.firstVisiblePosition.coerceIn(0, maximumPosition),
+                position.topOffset,
+            )
+            lastVisibleThumbnailNodeUids = emptySet()
+            list.post {
+                if (!isCurrentDestination()) return@post
+                scheduleStickyMonthUpdate(list.firstVisiblePosition)
+                scheduleVisibleThumbnailUpdate()
+            }
         }
     }
 

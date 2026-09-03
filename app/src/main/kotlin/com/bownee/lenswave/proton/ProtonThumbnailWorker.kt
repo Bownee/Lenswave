@@ -43,18 +43,27 @@ class ProtonThumbnailWorker(
             if (session.activeUserId != requestedUserId) {
                 return Result.failure()
             }
+            val foregroundInfoFactory = ProtonThumbnailForegroundInfoFactory(applicationContext)
+            publishForeground(repository, foregroundInfoFactory)
             repository.updateThumbnailWorkStatus(
                 ProtonThumbnailWorkStatus.Running(attempt, ProtonThumbnailWorkPolicy.MAX_ATTEMPTS)
             )
             statusPublished = true
             var completedWithinTime = false
-            val issue = withTimeoutOrNull<ProtonThumbnailWorkIssue?>(MAX_RUN_MILLIS) {
+            val issue = withTimeoutOrNull<ProtonThumbnailWorkIssue?>(
+                ProtonThumbnailWorkPolicy.MAX_RUN_MILLIS
+            ) {
                 var sawFailure = false
                 var runIssue: ProtonThumbnailWorkIssue? = null
                 while (true) {
                     when (val step = repository.downloadNextQueuedThumbnailBatch(requestedUserId)) {
-                        ProtonThumbnailQueueStep.Downloaded -> Unit
-                        ProtonThumbnailQueueStep.Failed -> sawFailure = true
+                        ProtonThumbnailQueueStep.Downloaded -> {
+                            publishForeground(repository, foregroundInfoFactory)
+                        }
+                        ProtonThumbnailQueueStep.Failed -> {
+                            sawFailure = true
+                            publishForeground(repository, foregroundInfoFactory)
+                        }
                         is ProtonThumbnailQueueStep.Idle -> {
                             completedWithinTime = true
                             runIssue = when {
@@ -83,6 +92,23 @@ class ProtonThumbnailWorker(
             LenswaveDiagnostics.reportFailure("thumbnail-worker", error)
             resolve(repository, ProtonThumbnailWorkIssue.ERROR, publishStatus = statusPublished)
         }
+    }
+
+    private suspend fun publishForeground(
+        repository: ProtonPhotoGateway,
+        factory: ProtonThumbnailForegroundInfoFactory,
+    ) {
+        val state = repository.state.value
+        val total = state.photos.size
+        setForeground(
+            factory.create(
+                workerId = id,
+                progress = ProtonThumbnailNotificationProgress(
+                    downloaded = state.downloadedThumbnailCount.coerceIn(0, total),
+                    total = total,
+                ),
+            ),
+        )
     }
 
     private fun resolve(
@@ -119,7 +145,6 @@ class ProtonThumbnailWorker(
     companion object {
         const val KEY_USER_ID = "user-id"
         private const val SESSION_READY_TIMEOUT_MILLIS = 30_000L
-        private const val MAX_RUN_MILLIS = 3L * 60L * 1_000L + 30_000L
         fun request(userId: UserId): OneTimeWorkRequest =
             OneTimeWorkRequestBuilder<ProtonThumbnailWorker>()
                 .setInputData(workDataOf(KEY_USER_ID to userId.id))
@@ -149,6 +174,7 @@ internal data class ProtonThumbnailWorkResolution(
 
 internal object ProtonThumbnailWorkPolicy {
     const val MAX_ATTEMPTS = 25
+    const val MAX_RUN_MILLIS = 5L * 60L * 60L * 1_000L + 30L * 60L * 1_000L
 
     fun resolve(
         runAttemptCount: Int,

@@ -48,12 +48,15 @@ import com.bownee.lenswave.gallery.GalleryDestinations
 import com.bownee.lenswave.gallery.GalleryEmptyAction
 import com.bownee.lenswave.gallery.GalleryGrouping
 import com.bownee.lenswave.gallery.GalleryFastScrollLayoutPolicy
+import com.bownee.lenswave.gallery.GalleryScrollPosition
+import com.bownee.lenswave.gallery.GalleryScrollPositionStore
 import com.bownee.lenswave.gallery.GallerySpace
 import com.bownee.lenswave.gallery.GalleryThumbnailCacheIdentity
 import com.bownee.lenswave.gallery.GalleryThumbnailCachePolicy
 import com.bownee.lenswave.gallery.GalleryUiState
 import com.bownee.lenswave.gallery.GalleryViewModel
 import com.bownee.lenswave.gallery.PhotoSource
+import com.bownee.lenswave.gallery.ThumbnailNotificationPermissionPolicy
 import com.bownee.lenswave.proton.ProtonAlbum
 import com.bownee.lenswave.proton.ProtonPhotoGateway
 import com.bownee.lenswave.gallery.PhotoDeletionExecutor
@@ -108,6 +111,8 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
     private var currentUiState = GalleryUiState()
     private var renderedDestination: GalleryDestination? = null
     private var renderedContent: GalleryContent? = null
+    private val scrollPositions = GalleryScrollPositionStore()
+    private var pendingScrollRestore: GalleryDestination? = null
     private var safeBottom = 0
     private var visibleAssets: List<GalleryAsset> = emptyList()
     private var fastScrollEdgePadding = 0
@@ -119,6 +124,10 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
     ) {
         updateDeviceAccess()
     }
+
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) {}
 
     private val viewerLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -216,11 +225,11 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
                 onDeleteAllTrash = ::confirmDeleteAllTrashPhotos,
                 onProtonSource = {
                     hideDevicePicker()
-                    selectDestination(GalleryDestination.ProtonTimeline, scrollToTop = true)
+                    selectDestination(GalleryDestination.ProtonTimeline)
                 },
                 onAlbumsSource = {
                     hideDevicePicker()
-                    selectDestination(GalleryDestination.ProtonAlbums, scrollToTop = true)
+                    selectDestination(GalleryDestination.ProtonAlbums)
                 },
                 onDeviceSource = {
                     if (DeviceCollectionPicker.shouldOpenMenu(currentUiState.destination)) {
@@ -236,7 +245,7 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
                         GallerySpace.COMBINED,
                         GallerySpace.PROTON -> PhotoSource.PROTON
                     }
-                    selectDestination(GalleryDestination.Trash(source), scrollToTop = true)
+                    selectDestination(GalleryDestination.Trash(source))
                 },
                 onDeviceCollection = ::selectDeviceCollection,
                 onDeleteSelection = ::deleteSelectedPhotos,
@@ -298,7 +307,16 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
     private fun render(state: GalleryUiState) {
         val destinationChanged = renderedDestination != state.destination
         val contentChanged = renderedContent != state.content
+        if (destinationChanged) {
+            renderedDestination?.let { previousDestination ->
+                screen.captureScrollPosition()?.let { position ->
+                    scrollPositions.save(previousDestination, position)
+                }
+            }
+            pendingScrollRestore = state.destination
+        }
         currentUiState = state
+        requestThumbnailNotificationPermissionIfNeeded(state)
         updateThumbnailCacheIdentity(deviceAccessLevel(), state.currentUserId)
         renderedDestination = state.destination
         renderedContent = state.content
@@ -311,6 +329,7 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
                 }
             }
             screen.scheduleVisibleThumbnailUpdate()
+            restorePendingScrollPosition(state)
         }
         state.emptyState?.let { empty ->
             screen.showEmptyState(
@@ -364,6 +383,27 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
         } else {
             launchRequest()
         }
+    }
+
+    private fun requestThumbnailNotificationPermissionIfNeeded(state: GalleryUiState) {
+        val preferences = getSharedPreferences("permissions", MODE_PRIVATE)
+        if (!ThumbnailNotificationPermissionPolicy.shouldRequest(
+                apiLevel = Build.VERSION.SDK_INT,
+                protonConnected = state.isProtonConnected,
+                permissionGranted = ContextCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.POST_NOTIFICATIONS,
+                ) == PackageManager.PERMISSION_GRANTED,
+                requestedBefore = preferences.getBoolean(
+                    KEY_THUMBNAIL_NOTIFICATION_PERMISSION_REQUESTED,
+                    false,
+                ),
+            )
+        ) return
+        preferences.edit {
+            putBoolean(KEY_THUMBNAIL_NOTIFICATION_PERMISSION_REQUESTED, true)
+        }
+        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 
     private fun updateDeviceAccess() {
@@ -425,20 +465,18 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
 
     private fun selectDeviceCollection(collection: DeviceCollection) {
         hideDevicePicker()
-        selectDestination(GalleryDestination.Device(collection), scrollToTop = true)
+        selectDestination(GalleryDestination.Device(collection))
     }
 
-    private fun selectDestination(destination: GalleryDestination, scrollToTop: Boolean = false) {
+    private fun selectDestination(destination: GalleryDestination) {
         adapter.clearSelection()
         trashDeleteAllButton.visibility = View.GONE
         viewModel.selectDestination(destination)
-        if (scrollToTop) resetGalleryScroll()
     }
 
     private fun openAlbum(album: ProtonAlbum) {
         adapter.clearSelection()
         viewModel.openAlbum(album)
-        resetGalleryScroll()
     }
 
     private fun connectProton() {
@@ -521,7 +559,6 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
 
     private fun disconnectProton() {
         viewModel.disconnectProton()
-        resetGalleryScroll()
     }
 
     private fun openPhoto(photo: GalleryAsset) {
@@ -629,7 +666,7 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
                     GallerySpace.DEVICE -> GalleryDestination.Device(currentUiState.selectedDeviceCollection)
                     else -> GalleryDestinations.defaultFor(space)
                 }
-                selectDestination(destination, scrollToTop = true)
+                selectDestination(destination)
                 true
             }
             show()
@@ -709,7 +746,6 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
         if (currentUiState.destination !is GalleryDestination.ProtonAlbumPhotos) return
         adapter.clearSelection()
         viewModel.closeAlbum()
-        resetGalleryScroll()
     }
 
     private fun toggleDevicePicker() {
@@ -748,8 +784,20 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
         }
     }
 
-    private fun resetGalleryScroll() {
-        screen.resetScroll()
+    private fun restorePendingScrollPosition(state: GalleryUiState) {
+        val destination = pendingScrollRestore ?: return
+        if (destination != state.destination) return
+        val savedPosition = scrollPositions.positionFor(destination)
+        if (savedPosition != null &&
+            savedPosition.firstVisiblePosition > 0 &&
+            adapter.count == 0 &&
+            state.emptyState == null
+        ) return
+
+        pendingScrollRestore = null
+        screen.restoreScrollPosition(
+            savedPosition ?: GalleryScrollPosition(firstVisiblePosition = 0, topOffset = 0),
+        ) { currentUiState.destination == destination }
     }
 
     private fun applySystemInsets() {
@@ -809,6 +857,8 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
         const val SETTINGS_DISCONNECT_PROTON = 2
         const val SETTINGS_PHOTO_ACCESS = 3
         const val SETTINGS_PRIVACY = 4
+        const val KEY_THUMBNAIL_NOTIFICATION_PERMISSION_REQUESTED =
+            "thumbnail-notification-permission-requested"
         const val SPACE_COMBINED = 10
         const val SPACE_PROTON = 11
         const val SPACE_DEVICE = 12

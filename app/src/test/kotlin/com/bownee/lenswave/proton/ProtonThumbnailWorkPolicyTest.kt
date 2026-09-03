@@ -1,9 +1,16 @@
 package com.bownee.lenswave.proton
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ProtonThumbnailWorkPolicyTest {
+    @Test
+    fun `foreground run is long lived but below the Android data sync limit`() {
+        assertTrue(ProtonThumbnailWorkPolicy.MAX_RUN_MILLIS > 10L * 60L * 1_000L)
+        assertTrue(ProtonThumbnailWorkPolicy.MAX_RUN_MILLIS < 6L * 60L * 60L * 1_000L)
+    }
+
     @Test
     fun `complete download succeeds immediately`() {
         val resolution = ProtonThumbnailWorkPolicy.resolve(runAttemptCount = 0, issue = null)
