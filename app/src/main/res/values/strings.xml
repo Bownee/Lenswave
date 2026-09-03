@@ -37,6 +37,8 @@
     <string name="no_proton_photos">No Proton photos</string>
     <string name="no_media_with_tag">No %1$s</string>
     <string name="proton_tagged_media_appear_here">Matching Proton media will appear here.</string>
+    <string name="no_albums">No albums yet</string>
+    <string name="proton_albums_appear_here">Albums you create in Proton Photos will appear here.</string>
     <string name="could_not_load_proton_tag">Could not load %1$s</string>
     <string name="proton_photos_appear_here">Photos uploaded to Proton will appear here.</string>
     <string name="could_not_refresh">Could not refresh</string>
@@ -50,6 +52,7 @@
     <string name="remove_from_favorites">Remove from favorites</string>
     <string name="could_not_update_favorite">Could not update the favorite</string>
     <string name="could_not_load_album">Could not load this album</string>
+    <string name="could_not_load_albums">Could not load albums</string>
     <string name="check_connection_refresh">Check your connection and use Refresh to try again.</string>
     <string name="album_empty">Album is empty</string>
     <string name="album_photos_appear_here">Photos added to %1$s will appear here.</string>

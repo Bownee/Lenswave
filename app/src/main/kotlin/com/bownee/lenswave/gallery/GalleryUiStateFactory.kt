@@ -152,10 +152,25 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
                 ).orEmpty()
             }
         }
+        // Mirrors the media-type filters: an empty panel once the list has loaded and is empty.
+        val emptyState = when {
+            inputs.protonAccountStatus != ProtonAccountStatus.CONNECTED -> null
+            albums.albums.isNotEmpty() -> null
+            albums.refreshFailed -> GalleryEmptyState(
+                text.string(R.string.could_not_load_albums),
+                text.string(R.string.check_connection_refresh),
+            )
+            !albums.hasLoaded -> null
+            else -> GalleryEmptyState(
+                text.string(R.string.no_albums),
+                text.string(R.string.proton_albums_appear_here),
+            )
+        }
         return base(
             inputs = inputs,
             content = GalleryContent.Library(sections),
             statusText = statusDetail,
+            emptyState = emptyState,
         )
     }
 

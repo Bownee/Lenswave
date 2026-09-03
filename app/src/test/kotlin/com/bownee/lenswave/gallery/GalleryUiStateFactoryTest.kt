@@ -79,7 +79,7 @@ class GalleryUiStateFactoryTest {
     }
 
     @Test
-    fun `library omits the albums section when there are no albums`() {
+    fun `library shows an empty panel once loaded with no albums`() {
         val state = factory.create(
             GalleryUiInputs(
                 destination = GalleryDestination.Library,
@@ -88,8 +88,21 @@ class GalleryUiStateFactoryTest {
             ),
         )
 
-        assertNull(state.emptyState)
         assertEquals(emptyList<String>(), state.librarySectionKeys())
+        assertTrue(state.emptyState?.title.orEmpty().startsWith(R.string.no_albums.toString()))
+    }
+
+    @Test
+    fun `library shows a failure panel when albums could not load`() {
+        val state = factory.create(
+            GalleryUiInputs(
+                destination = GalleryDestination.Library,
+                protonAccountStatus = ProtonAccountStatus.CONNECTED,
+                protonAlbums = ProtonAlbumsState(hasLoaded = true, refreshFailed = true),
+            ),
+        )
+
+        assertTrue(state.emptyState?.title.orEmpty().startsWith(R.string.could_not_load_albums.toString()))
     }
 
     @Test
@@ -144,7 +157,7 @@ class GalleryUiStateFactoryTest {
                 destination = GalleryDestination.Library,
                 protonAccountStatus = ProtonAccountStatus.CONNECTED,
                 protonGallery = ProtonGalleryState(syncing = true),
-                protonAlbums = ProtonAlbumsState(hasLoaded = true),
+                protonAlbums = ProtonAlbumsState(albums = listOf(ProtonAlbum("ready", "Ready", 1, "cover", 1, 2, true, false)), hasLoaded = true),
             ),
         )
 
@@ -202,7 +215,7 @@ class GalleryUiStateFactoryTest {
             GalleryUiInputs(
                 destination = GalleryDestination.Library,
                 protonAccountStatus = ProtonAccountStatus.CONNECTED,
-                protonAlbums = ProtonAlbumsState(hasLoaded = true, syncing = true),
+                protonAlbums = ProtonAlbumsState(albums = listOf(ProtonAlbum("ready", "Ready", 1, "cover", 1, 2, true, false)), hasLoaded = true, syncing = true),
             ),
         )
 
