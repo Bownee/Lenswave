@@ -13,10 +13,9 @@ class ProtonTrashGalleryTest {
         ).single()
 
         assertEquals("proton-trash:node-1", photo.stableId)
-        assertEquals(PhotoSource.PROTON, photo.source)
         assertEquals(1_234_000L, photo.capturedAtEpochMillis)
         assertEquals("photo.jpg", photo.displayName)
-        assertEquals("node-1", photo.protonNodeUid)
+        assertEquals("node-1", photo.nodeUid)
         assertTrue(photo.hasThumbnail)
         assertTrue(photo.isTrashed)
     }

@@ -1,11 +1,9 @@
 package com.bownee.lenswave.gallery
 
 import android.content.Context
-import android.os.Build
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
-import com.bownee.lenswave.LenswaveDiagnostics
 import com.bownee.lenswave.proton.ProtonAlbumPhotosState
 import com.bownee.lenswave.proton.ProtonAlbumsState
 import com.bownee.lenswave.proton.ProtonAccountSessionManager
@@ -16,7 +14,6 @@ import com.bownee.lenswave.proton.ProtonTrashState
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -24,8 +21,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import me.proton.core.account.domain.entity.Account
 import me.proton.core.account.domain.entity.isReady
@@ -34,9 +29,8 @@ import me.proton.core.domain.entity.UserId
 
 @HiltViewModel
 class GalleryViewModel @Inject internal constructor(
-    @param:ApplicationContext private val context: Context,
+    @ApplicationContext context: Context,
     private val accountManager: AccountManager,
-    private val deviceRepository: DevicePhotoSource,
     private val protonRepository: ProtonGalleryReader,
     private val protonThumbnailScheduler: ProtonThumbnailScheduler,
     private val accountSessionManager: ProtonAccountSessionManager,
@@ -45,25 +39,18 @@ class GalleryViewModel @Inject internal constructor(
 ) : ViewModel() {
     private val uiStateFactory = GalleryUiStateFactory(AndroidGalleryText(context.resources))
     private val mutableUiState = MutableStateFlow(GalleryUiState())
-    private val deviceLoadMutex = Mutex()
-    private val deviceTrashLoadMutex = Mutex()
 
     private var destination = restoreNavigation(savedStateHandle)
         ?: navigationStore.read()
-        ?: GalleryDestination.ProtonTimeline
+        ?: GalleryDestination.Timeline
     private var account: Account? = null
     private var currentUserId: UserId? = null
     private var accountSessionInitialized = false
     private var sessionTransitioning = false
-    private var deviceAccessLevel = DeviceAccessLevel.NONE
-    private val hasDeviceAccess get() = deviceAccessLevel != DeviceAccessLevel.NONE
-    private var devicePhotos = GallerySourceSnapshot<GalleryAsset>()
-    private var deviceTrash = GallerySourceSnapshot<GalleryAsset>()
     private var protonGalleryState = ProtonGalleryState()
     private var protonAlbumsState = ProtonAlbumsState()
     private var protonAlbumPhotosState = ProtonAlbumPhotosState()
     private var protonTrashState = ProtonTrashState()
-    private var deviceAccessGeneration = 0L
     private var manualRefreshGeneration = 0
 
     val uiState: StateFlow<GalleryUiState> = mutableUiState.asStateFlow()
@@ -73,36 +60,19 @@ class GalleryViewModel @Inject internal constructor(
         observeProtonSources()
     }
 
-    fun setDeviceAccess(level: DeviceAccessLevel) {
-        val accessChanged = GalleryOperationPolicy.shouldInvalidateDeviceSnapshots(deviceAccessLevel, level)
-        deviceAccessLevel = level
-        if (accessChanged) {
-            deviceAccessGeneration++
-            devicePhotos = GallerySourceSnapshot()
-            deviceTrash = GallerySourceSnapshot()
-        }
-        publishUiState()
-        if (level != DeviceAccessLevel.NONE) requestRefresh(manual = false)
-    }
-
     fun selectDestination(newDestination: GalleryDestination) {
         if (destination == newDestination) {
             publishUiState()
             return
         }
-        val previousDestination = destination
         destination = newDestination
         saveDestination()
         publishUiState()
-        if (previousDestination is GalleryDestination.Device &&
-            newDestination is GalleryDestination.Device &&
-            devicePhotos.hasLoaded
-        ) return
         requestRefresh(manual = false)
     }
 
     fun openPhotosTab() {
-        selectDestination(GalleryDestination.ProtonTimeline)
+        selectDestination(GalleryDestination.Timeline)
     }
 
     fun openLibrary() {
@@ -115,7 +85,7 @@ class GalleryViewModel @Inject internal constructor(
 
     fun openAlbum(album: com.bownee.lenswave.proton.ProtonAlbum) {
         val albumReference = album.reference()
-        destination = GalleryDestination.ProtonAlbumPhotos(albumReference)
+        destination = GalleryDestination.AlbumPhotos(albumReference)
         saveDestination()
         publishUiState()
         viewModelScope.launch {
@@ -149,7 +119,6 @@ class GalleryViewModel @Inject internal constructor(
 
     fun resumeThumbnailDownloads() {
         val userId = currentUserId ?: return
-        if (!destination.usesProton()) return
         viewModelScope.launch(Dispatchers.IO) {
             protonThumbnailScheduler.resume(userId)
         }
@@ -159,10 +128,9 @@ class GalleryViewModel @Inject internal constructor(
         val userId = currentUserId ?: return
         viewModelScope.launch {
             accountManager.removeAccount(userId)
-            destination = GalleryNavigationPolicy.withoutProton(destination)
+            destination = GalleryNavigationPolicy.withoutAccount(destination)
             saveDestination()
             publishUiState()
-            requestRefresh(manual = false)
         }
     }
 
@@ -217,7 +185,7 @@ class GalleryViewModel @Inject internal constructor(
             return
         }
         if (readyAccount == null) {
-            val fallback = GalleryNavigationPolicy.withoutProton(destination)
+            val fallback = GalleryNavigationPolicy.withoutAccount(destination)
             if (fallback != destination) {
                 destination = fallback
                 saveDestination()
@@ -252,7 +220,7 @@ class GalleryViewModel @Inject internal constructor(
                     protonRepository.syncTrashMetadata(userId)
                 }
             }
-            (destination as? GalleryDestination.ProtonTag)?.let { selected ->
+            (destination as? GalleryDestination.Tag)?.let { selected ->
                 withContext(Dispatchers.IO) {
                     protonRepository.syncTagMetadata(userId, selected.tag)
                 }
@@ -265,33 +233,27 @@ class GalleryViewModel @Inject internal constructor(
     }
 
     private suspend fun refresh(selectedDestination: GalleryDestination, forceRemote: Boolean) {
+        val userId = currentUserId ?: return
         when (selectedDestination) {
-            GalleryDestination.ProtonTimeline -> currentUserId?.let { userId ->
-                withContext(Dispatchers.IO) {
-                    refreshProtonSection(userId) {
+            GalleryDestination.Timeline -> withContext(Dispatchers.IO) {
+                refreshProtonSection(userId) {
+                    protonRepository.syncTimelineMetadata(userId, forceRemote)
+                }
+            }
+            is GalleryDestination.Tag -> withContext(Dispatchers.IO) {
+                refreshProtonSection(userId) {
+                    if (!protonRepository.state.value.hasLoaded) {
                         protonRepository.syncTimelineMetadata(userId, forceRemote)
                     }
+                    protonRepository.syncTagMetadata(userId, selectedDestination.tag, forceRemote)
                 }
             }
-            is GalleryDestination.Device -> if (hasDeviceAccess) loadDevicePhotos()
-            is GalleryDestination.ProtonTag -> currentUserId?.let { userId ->
-                withContext(Dispatchers.IO) {
-                    refreshProtonSection(userId) {
-                        if (!protonRepository.state.value.hasLoaded) {
-                            protonRepository.syncTimelineMetadata(userId, forceRemote)
-                        }
-                        protonRepository.syncTagMetadata(userId, selectedDestination.tag, forceRemote)
-                    }
+            GalleryDestination.Library -> withContext(Dispatchers.IO) {
+                refreshProtonSection(userId) {
+                    protonRepository.syncAlbumsMetadata(userId, forceRemote)
                 }
             }
-            GalleryDestination.Library -> currentUserId?.let { userId ->
-                withContext(Dispatchers.IO) {
-                    refreshProtonSection(userId) {
-                        protonRepository.syncAlbumsMetadata(userId, forceRemote)
-                    }
-                }
-            }
-            is GalleryDestination.ProtonAlbumPhotos -> currentUserId?.let { userId ->
+            is GalleryDestination.AlbumPhotos -> {
                 withContext(Dispatchers.IO) {
                     protonRepository.syncAlbumPhotoMetadata(
                         userId,
@@ -301,14 +263,9 @@ class GalleryViewModel @Inject internal constructor(
                 }
                 protonThumbnailScheduler.enqueue(userId)
             }
-            is GalleryDestination.Trash -> when (selectedDestination.source) {
-                PhotoSource.DEVICE -> if (hasDeviceAccess) loadDeviceTrash()
-                PhotoSource.PROTON -> currentUserId?.let { userId ->
-                    withContext(Dispatchers.IO) {
-                        refreshProtonSection(userId) {
-                            protonRepository.syncTrashMetadata(userId, forceRemote)
-                        }
-                    }
+            GalleryDestination.Trash -> withContext(Dispatchers.IO) {
+                refreshProtonSection(userId) {
+                    protonRepository.syncTrashMetadata(userId, forceRemote)
                 }
             }
         }
@@ -319,84 +276,10 @@ class GalleryViewModel @Inject internal constructor(
         protonThumbnailScheduler.enqueue(userId)
     }
 
-    private fun GalleryDestination.usesProton(): Boolean =
-        this == GalleryDestination.Library || GalleryNavigationPolicy.requiresProton(this)
-
-    private suspend fun loadDevicePhotos() {
-        val accessGeneration = deviceAccessGeneration
-        deviceLoadMutex.withLock {
-            if (!isCurrentDeviceLoad(accessGeneration)) return@withLock
-            devicePhotos = devicePhotos.copy(isLoading = true, errorMessage = null)
-            publishUiState()
-            try {
-                val loadedPhotos = deviceRepository.loadPhotos()
-                if (!isCurrentDeviceLoad(accessGeneration)) return@withLock
-                devicePhotos = GallerySourceSnapshot(
-                    items = loadedPhotos,
-                    hasLoaded = true,
-                )
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Throwable) {
-                LenswaveDiagnostics.reportFailure("device-photo-load", error)
-                if (!isCurrentDeviceLoad(accessGeneration)) return@withLock
-                devicePhotos = devicePhotos.copy(
-                    isLoading = false,
-                    errorMessage = context.getString(com.bownee.lenswave.R.string.could_not_load_device_photos),
-                )
-            } finally {
-                if (isCurrentDeviceLoad(accessGeneration)) {
-                    devicePhotos = devicePhotos.copy(isLoading = false)
-                    publishUiState()
-                }
-            }
-        }
-    }
-
-    private suspend fun loadDeviceTrash() {
-        val accessGeneration = deviceAccessGeneration
-        deviceTrashLoadMutex.withLock {
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R ||
-                !isCurrentDeviceLoad(accessGeneration)
-            ) return@withLock
-            deviceTrash = deviceTrash.copy(isLoading = true, errorMessage = null)
-            publishUiState()
-            try {
-                val loadedPhotos = deviceRepository.loadTrashedPhotos()
-                if (!isCurrentDeviceLoad(accessGeneration)) return@withLock
-                deviceTrash = GallerySourceSnapshot(
-                    items = loadedPhotos,
-                    hasLoaded = true,
-                )
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Throwable) {
-                LenswaveDiagnostics.reportFailure("device-trash-load", error)
-                if (!isCurrentDeviceLoad(accessGeneration)) return@withLock
-                deviceTrash = deviceTrash.copy(
-                    isLoading = false,
-                    errorMessage = context.getString(com.bownee.lenswave.R.string.could_not_load_device_trash),
-                )
-            } finally {
-                if (isCurrentDeviceLoad(accessGeneration)) {
-                    deviceTrash = deviceTrash.copy(isLoading = false)
-                    publishUiState()
-                }
-            }
-        }
-    }
-
-    private fun isCurrentDeviceLoad(generation: Long): Boolean =
-        GalleryOperationPolicy.isCurrentDeviceLoad(generation, deviceAccessGeneration, deviceAccessLevel)
-
     private fun publishUiState(isRefreshing: Boolean = mutableUiState.value.isRefreshing) {
         mutableUiState.value = uiStateFactory.create(
             GalleryUiInputs(
                 destination = destination,
-                hasDeviceAccess = hasDeviceAccess,
-                supportsDeviceTrash = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R,
-                devicePhotos = devicePhotos,
-                deviceTrash = deviceTrash,
                 protonGallery = protonGalleryState,
                 protonAlbums = protonAlbumsState,
                 protonAlbumPhotos = protonAlbumPhotosState,
@@ -416,32 +299,26 @@ class GalleryViewModel @Inject internal constructor(
     private fun saveDestination() {
         val stored = GalleryNavigationCodec.encode(destination)
         savedStateHandle[STATE_DESTINATION] = stored.destination
-        savedStateHandle[STATE_DEVICE_COLLECTION] = stored.deviceCollection
-        savedStateHandle[STATE_TRASH_SOURCE] = stored.trashSource
         savedStateHandle[STATE_ALBUM_UID] = stored.albumUid
         savedStateHandle[STATE_ALBUM_NAME] = stored.albumName
-        savedStateHandle[STATE_PROTON_TAG] = stored.protonTag
+        savedStateHandle[STATE_TAG] = stored.tag
         // A cold start reopens the tab root, never a deep collection or album.
         navigationStore.write(GalleryNavigationPolicy.root(destination))
     }
 
     private companion object {
         const val STATE_DESTINATION = "gallery.destination"
-        const val STATE_DEVICE_COLLECTION = "gallery.device-collection"
-        const val STATE_TRASH_SOURCE = "gallery.trash-source"
         const val STATE_ALBUM_UID = "gallery.album-uid"
         const val STATE_ALBUM_NAME = "gallery.album-name"
-        const val STATE_PROTON_TAG = "gallery.proton-tag"
+        const val STATE_TAG = "gallery.proton-tag"
 
         fun restoreNavigation(state: SavedStateHandle): GalleryDestination? =
             GalleryNavigationCodec.decode(
                 StoredGalleryNavigation(
                     destination = state[STATE_DESTINATION],
-                    deviceCollection = state[STATE_DEVICE_COLLECTION],
-                    trashSource = state[STATE_TRASH_SOURCE],
                     albumUid = state[STATE_ALBUM_UID],
                     albumName = state[STATE_ALBUM_NAME],
-                    protonTag = state[STATE_PROTON_TAG],
+                    tag = state[STATE_TAG],
                 ),
             )
     }

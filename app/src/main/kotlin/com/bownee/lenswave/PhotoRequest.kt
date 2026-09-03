@@ -4,83 +4,25 @@ import android.content.Intent
 import android.os.Bundle
 import com.bownee.lenswave.gallery.GalleryAsset
 import com.bownee.lenswave.gallery.MediaKind
-import com.bownee.lenswave.gallery.PhotoSource
 import com.bownee.lenswave.gallery.PhotoTarget
 
-sealed interface PhotoRequest {
-    val stableId: String
-    val source: PhotoSource
-    val capturedAt: Long
-    val displayName: String
-    val isTrashed: Boolean
-    val mediaKind: MediaKind
-    val isFavorite: Boolean
-    val protonFavoriteNodeUids: List<String>
-    val protonUserId: String?
+data class PhotoRequest(
+    val stableId: String,
+    val nodeUid: String,
+    val userId: String,
+    val capturedAt: Long,
+    val displayName: String,
+    val isTrashed: Boolean,
+    val mediaKind: MediaKind = MediaKind.IMAGE,
+    val isFavorite: Boolean = false,
+) {
+    fun toPhotoTarget(): PhotoTarget = PhotoTarget(stableId, nodeUid, isTrashed)
 
-    data class Device(
-        override val stableId: String,
-        val uri: String,
-        val protonBackingNodeUids: List<String>,
-        override val capturedAt: Long,
-        override val displayName: String,
-        override val isTrashed: Boolean,
-        override val mediaKind: MediaKind = MediaKind.IMAGE,
-        override val isFavorite: Boolean = false,
-        override val protonUserId: String? = null,
-    ) : PhotoRequest {
-        override val source = PhotoSource.DEVICE
-        override val protonFavoriteNodeUids: List<String>
-            get() = protonBackingNodeUids
-    }
-
-    data class Proton(
-        override val stableId: String,
-        val protonNodeUid: String,
-        val userId: String,
-        override val capturedAt: Long,
-        override val displayName: String,
-        override val isTrashed: Boolean,
-        override val mediaKind: MediaKind = MediaKind.IMAGE,
-        override val isFavorite: Boolean = false,
-    ) : PhotoRequest {
-        override val source = PhotoSource.PROTON
-        override val protonFavoriteNodeUids: List<String>
-            get() = listOf(protonNodeUid)
-        override val protonUserId: String
-            get() = userId
-    }
-
-    fun toPhotoTarget(): PhotoTarget = when (this) {
-        is Device -> PhotoTarget.Device(stableId, uri, isTrashed)
-        is Proton -> PhotoTarget.Proton(stableId, protonNodeUid, isTrashed)
-    }
-
-    fun withFavorite(favorite: Boolean): PhotoRequest = when (this) {
-        is Device -> copy(isFavorite = favorite)
-        is Proton -> copy(isFavorite = favorite)
-    }
+    fun withFavorite(favorite: Boolean): PhotoRequest = copy(isFavorite = favorite)
 
     fun writeTo(intent: Intent): Intent = intent.apply {
-        putExtra(PhotoViewerActivity.EXTRA_SOURCE, source.name)
-        when (this@PhotoRequest) {
-            is Device -> {
-                putExtra(PhotoViewerActivity.EXTRA_URI, uri)
-                putStringArrayListExtra(
-                    PhotoViewerActivity.EXTRA_PROTON_BACKING_NODE_UIDS,
-                    ArrayList(protonBackingNodeUids),
-                )
-                removeExtra(PhotoViewerActivity.EXTRA_PROTON_NODE_UID)
-                protonUserId?.let { putExtra(PhotoViewerActivity.EXTRA_USER_ID, it) }
-                    ?: removeExtra(PhotoViewerActivity.EXTRA_USER_ID)
-            }
-            is Proton -> {
-                putExtra(PhotoViewerActivity.EXTRA_PROTON_NODE_UID, protonNodeUid)
-                putExtra(PhotoViewerActivity.EXTRA_USER_ID, userId)
-                removeExtra(PhotoViewerActivity.EXTRA_URI)
-                removeExtra(PhotoViewerActivity.EXTRA_PROTON_BACKING_NODE_UIDS)
-            }
-        }
+        putExtra(PhotoViewerActivity.EXTRA_PROTON_NODE_UID, nodeUid)
+        putExtra(PhotoViewerActivity.EXTRA_USER_ID, userId)
         putExtra(PhotoViewerActivity.EXTRA_CAPTURED_AT, capturedAt)
         putExtra(PhotoViewerActivity.EXTRA_DISPLAY_NAME, displayName)
         putExtra(PhotoViewerActivity.EXTRA_STABLE_ID, stableId)
@@ -94,67 +36,29 @@ sealed interface PhotoRequest {
     }
 
     companion object {
-        fun from(photo: GalleryAsset, userId: String?): PhotoRequest = when (photo.source) {
-            PhotoSource.DEVICE -> Device(
-                stableId = photo.stableId,
-                uri = requireNotNull(photo.uri),
-                protonBackingNodeUids = photo.protonBackingNodeUids,
-                capturedAt = photo.capturedAtEpochMillis,
-                displayName = photo.displayName,
-                isTrashed = photo.isTrashed,
-                mediaKind = photo.mediaKind,
-                isFavorite = photo.isFavorite,
-                protonUserId = userId.takeIf { photo.protonBackingNodeUids.isNotEmpty() },
-            )
-            PhotoSource.PROTON -> Proton(
-                stableId = photo.stableId,
-                protonNodeUid = requireNotNull(photo.protonNodeUid),
-                userId = requireNotNull(userId),
-                capturedAt = photo.capturedAtEpochMillis,
-                displayName = photo.displayName,
-                isTrashed = photo.isTrashed,
-                mediaKind = photo.mediaKind,
-                isFavorite = photo.isFavorite,
-            )
-        }
+        fun from(photo: GalleryAsset, userId: String): PhotoRequest = PhotoRequest(
+            stableId = photo.stableId,
+            nodeUid = photo.nodeUid,
+            userId = userId,
+            capturedAt = photo.capturedAtEpochMillis,
+            displayName = photo.displayName,
+            isTrashed = photo.isTrashed,
+            mediaKind = photo.mediaKind,
+            isFavorite = photo.isFavorite,
+        )
 
-        fun from(intent: Intent): PhotoRequest {
-            val stableId = requireNotNull(intent.getStringExtra(PhotoViewerActivity.EXTRA_STABLE_ID))
-            val capturedAt = intent.getLongExtra(PhotoViewerActivity.EXTRA_CAPTURED_AT, 0L)
-            val displayName = intent.getStringExtra(PhotoViewerActivity.EXTRA_DISPLAY_NAME).orEmpty()
-            val isTrashed = intent.getBooleanExtra(PhotoViewerActivity.EXTRA_IS_TRASHED, false)
-            val mediaKind = intent.getStringExtra(PhotoViewerActivity.EXTRA_MEDIA_KIND)
+        fun from(intent: Intent): PhotoRequest = PhotoRequest(
+            stableId = requireNotNull(intent.getStringExtra(PhotoViewerActivity.EXTRA_STABLE_ID)),
+            nodeUid = requireNotNull(intent.getStringExtra(PhotoViewerActivity.EXTRA_PROTON_NODE_UID)),
+            userId = requireNotNull(intent.getStringExtra(PhotoViewerActivity.EXTRA_USER_ID)),
+            capturedAt = intent.getLongExtra(PhotoViewerActivity.EXTRA_CAPTURED_AT, 0L),
+            displayName = intent.getStringExtra(PhotoViewerActivity.EXTRA_DISPLAY_NAME).orEmpty(),
+            isTrashed = intent.getBooleanExtra(PhotoViewerActivity.EXTRA_IS_TRASHED, false),
+            mediaKind = intent.getStringExtra(PhotoViewerActivity.EXTRA_MEDIA_KIND)
                 ?.let { runCatching { MediaKind.valueOf(it) }.getOrNull() }
-                ?: MediaKind.IMAGE
-            val isFavorite = intent.getBooleanExtra(PhotoViewerActivity.EXTRA_IS_FAVORITE, false)
-            return when (PhotoSource.valueOf(requireNotNull(intent.getStringExtra(PhotoViewerActivity.EXTRA_SOURCE)))) {
-                PhotoSource.DEVICE -> Device(
-                    stableId = stableId,
-                    uri = requireNotNull(intent.getStringExtra(PhotoViewerActivity.EXTRA_URI)),
-                    protonBackingNodeUids = intent.getStringArrayListExtra(
-                        PhotoViewerActivity.EXTRA_PROTON_BACKING_NODE_UIDS,
-                    ).orEmpty(),
-                    capturedAt = capturedAt,
-                    displayName = displayName,
-                    isTrashed = isTrashed,
-                    mediaKind = mediaKind,
-                    isFavorite = isFavorite,
-                    protonUserId = intent.getStringExtra(PhotoViewerActivity.EXTRA_USER_ID),
-                )
-                PhotoSource.PROTON -> Proton(
-                    stableId = stableId,
-                    protonNodeUid = requireNotNull(
-                        intent.getStringExtra(PhotoViewerActivity.EXTRA_PROTON_NODE_UID),
-                    ),
-                    userId = requireNotNull(intent.getStringExtra(PhotoViewerActivity.EXTRA_USER_ID)),
-                    capturedAt = capturedAt,
-                    displayName = displayName,
-                    isTrashed = isTrashed,
-                    mediaKind = mediaKind,
-                    isFavorite = isFavorite,
-                )
-            }
-        }
+                ?: MediaKind.IMAGE,
+            isFavorite = intent.getBooleanExtra(PhotoViewerActivity.EXTRA_IS_FAVORITE, false),
+        )
 
         @Suppress("DEPRECATION")
         fun navigationFrom(intent: Intent): List<PhotoRequest> =

@@ -31,11 +31,7 @@ internal enum class ProtonAccountStatus {
 }
 
 internal data class GalleryUiInputs(
-    val destination: GalleryDestination = GalleryDestination.ProtonTimeline,
-    val hasDeviceAccess: Boolean = false,
-    val supportsDeviceTrash: Boolean = true,
-    val devicePhotos: GallerySourceSnapshot<GalleryAsset> = GallerySourceSnapshot(),
-    val deviceTrash: GallerySourceSnapshot<GalleryAsset> = GallerySourceSnapshot(),
+    val destination: GalleryDestination = GalleryDestination.Timeline,
     val protonGallery: ProtonGalleryState = ProtonGalleryState(),
     val protonAlbums: ProtonAlbumsState = ProtonAlbumsState(),
     val protonAlbumPhotos: ProtonAlbumPhotosState = ProtonAlbumPhotosState(),
@@ -47,45 +43,14 @@ internal data class GalleryUiInputs(
 
 internal class GalleryUiStateFactory(private val text: GalleryText) {
     fun create(inputs: GalleryUiInputs): GalleryUiState = when (val destination = inputs.destination) {
-        is GalleryDestination.Device -> device(inputs, destination)
-        GalleryDestination.ProtonTimeline -> protonTimeline(inputs)
-        is GalleryDestination.ProtonTag -> protonTag(inputs, destination)
+        GalleryDestination.Timeline -> timeline(inputs)
+        is GalleryDestination.Tag -> tag(inputs, destination)
         GalleryDestination.Library -> library(inputs)
-        is GalleryDestination.ProtonAlbumPhotos -> protonAlbum(inputs, destination)
-        is GalleryDestination.Trash -> trash(inputs, destination)
+        is GalleryDestination.AlbumPhotos -> album(inputs, destination)
+        GalleryDestination.Trash -> trash(inputs)
     }
 
-    private fun device(
-        inputs: GalleryUiInputs,
-        destination: GalleryDestination.Device,
-    ): GalleryUiState {
-        if (!inputs.hasDeviceAccess) return base(
-            inputs = inputs,
-            emptyState = deviceAccessEmptyState(),
-        )
-        val assets = inputs.devicePhotos.items.filter { it.deviceCollection == destination.collection }
-        val label = text.string(destination.collection.labelRes)
-        val statusDetail = when {
-            inputs.devicePhotos.isLoading -> text.string(R.string.loading_metadata)
-            inputs.devicePhotos.errorMessage != null -> text.string(R.string.could_not_refresh)
-            else -> photoCountStatus(assets.size)
-        }
-        val status = status(label, statusDetail)
-        val emptyState = when {
-            assets.isNotEmpty() || inputs.devicePhotos.isLoading || !inputs.devicePhotos.hasLoaded -> null
-            inputs.devicePhotos.errorMessage != null -> GalleryEmptyState(
-                title = text.string(R.string.could_not_read_device_photos),
-                message = text.string(R.string.could_not_refresh_device_photos),
-            )
-            else -> GalleryEmptyState(
-                title = text.string(R.string.no_collection_photos, label),
-                message = text.string(R.string.photos_from_source_appear_here),
-            )
-        }
-        return base(inputs, GalleryContent.Photos(assets), status, emptyState)
-    }
-
-    private fun protonTimeline(inputs: GalleryUiInputs): GalleryUiState {
+    private fun timeline(inputs: GalleryUiInputs): GalleryUiState {
         protonUnavailable(inputs)?.let { return it }
         val tagIndex = inputs.protonGallery.tagIndex()
         val assets = inputs.protonGallery.photos.map { it.toGalleryAsset(tagIndex) }
@@ -99,7 +64,6 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
                 ProtonThumbnailProgressCalculator.timeline(inputs.protonGallery.photos),
             ) ?: photoCountStatus(assets.size)
         }
-        val status = status(text.string(R.string.photos), statusDetail)
         val emptyState = when {
             assets.isNotEmpty() -> null
             inputs.protonGallery.errorMessage != null -> GalleryEmptyState(
@@ -112,12 +76,12 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
                 text.string(R.string.proton_photos_appear_here),
             )
         }
-        return base(inputs, GalleryContent.Photos(assets), status, emptyState)
+        return base(inputs, GalleryContent.Photos(assets), statusDetail, emptyState)
     }
 
-    private fun protonTag(
+    private fun tag(
         inputs: GalleryUiInputs,
-        destination: GalleryDestination.ProtonTag,
+        destination: GalleryDestination.Tag,
     ): GalleryUiState {
         protonUnavailable(inputs)?.let { return it }
         val state = inputs.protonGallery.tags[destination.tag] ?: ProtonTagState()
@@ -143,23 +107,17 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
                 text.string(R.string.proton_filtered_media_appear_here),
             )
         }
-        return base(
-            inputs,
-            GalleryContent.Photos(assets),
-            status(label, statusDetail),
-            emptyState,
-        )
+        return base(inputs, GalleryContent.Photos(assets), statusDetail, emptyState)
     }
 
     private fun library(inputs: GalleryUiInputs): GalleryUiState {
-        val protonAvailable = inputs.protonAccountStatus != ProtonAccountStatus.DISCONNECTED
         val albums = inputs.protonAlbums
         val sections = buildList {
             when (inputs.protonAccountStatus) {
                 ProtonAccountStatus.DISCONNECTED -> add(
                     LibrarySection(
                         key = "proton",
-                        title = text.string(R.string.space_proton),
+                        title = "",
                         items = listOf(
                             entry(
                                 key = "connect-proton",
@@ -194,67 +152,27 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
                                         ProtonMediaTag.VIDEOS -> R.drawable.ic_play
                                         else -> R.drawable.ic_label
                                     },
-                                    action = LibraryAction.Open(GalleryDestination.ProtonTag(tag)),
+                                    action = LibraryAction.Open(GalleryDestination.Tag(tag)),
                                 )
                             },
                         ),
                     )
+                    add(
+                        LibrarySection(
+                            key = "trash",
+                            title = "",
+                            items = listOf(
+                                entry(
+                                    key = "trash",
+                                    label = text.string(R.string.trash),
+                                    iconRes = R.drawable.ic_delete,
+                                    action = LibraryAction.Open(GalleryDestination.Trash),
+                                ),
+                            ),
+                        ),
+                    )
                 }
             }
-            add(
-                LibrarySection(
-                    key = "device",
-                    title = text.string(R.string.space_device),
-                    items = if (inputs.hasDeviceAccess) {
-                        DeviceCollection.entries.map { collection ->
-                            entry(
-                                key = "device:${collection.name}",
-                                label = text.string(collection.labelRes),
-                                iconRes = R.drawable.ic_folder,
-                                action = LibraryAction.Open(GalleryDestination.Device(collection)),
-                            )
-                        }
-                    } else {
-                        listOf(
-                            entry(
-                                key = "allow-device-access",
-                                label = text.string(R.string.allow_photo_access),
-                                iconRes = R.drawable.ic_photo,
-                                action = LibraryAction.Request(GalleryEmptyAction.REQUEST_DEVICE_ACCESS),
-                            ),
-                        )
-                    },
-                ),
-            )
-            val trash = listOfNotNull(
-                if (protonAvailable) {
-                    entry(
-                        key = "trash:proton",
-                        label = text.string(R.string.proton_trash),
-                        iconRes = R.drawable.ic_delete,
-                        action = LibraryAction.Open(GalleryDestination.Trash(PhotoSource.PROTON)),
-                    )
-                } else {
-                    null
-                },
-                if (inputs.supportsDeviceTrash) {
-                    entry(
-                        key = "trash:device",
-                        label = text.string(R.string.device_trash),
-                        iconRes = R.drawable.ic_delete,
-                        action = LibraryAction.Open(GalleryDestination.Trash(PhotoSource.DEVICE)),
-                    )
-                } else {
-                    null
-                },
-            )
-            if (trash.isNotEmpty()) add(
-                LibrarySection(
-                    key = "trash",
-                    title = text.string(R.string.trash),
-                    items = trash,
-                ),
-            )
         }
         val statusDetail = when (inputs.protonAccountStatus) {
             ProtonAccountStatus.DISCONNECTED -> text.string(R.string.proton_not_connected)
@@ -282,9 +200,9 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
         action: LibraryAction,
     ) = LibraryItem.Entry(key = key, label = label, iconRes = iconRes, action = action)
 
-    private fun protonAlbum(
+    private fun album(
         inputs: GalleryUiInputs,
-        destination: GalleryDestination.ProtonAlbumPhotos,
+        destination: GalleryDestination.AlbumPhotos,
     ): GalleryUiState {
         protonUnavailable(inputs)?.let { return it }
         val albumState = inputs.protonAlbumPhotos.takeIf { it.albumUid == destination.album.nodeUid }
@@ -299,7 +217,6 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
                 ProtonThumbnailProgressCalculator.timeline(albumState.photos),
             ) ?: photoCountStatus(assets.size)
         }
-        val status = status(destination.album.name, statusDetail)
         val emptyState = when {
             assets.isNotEmpty() || !albumState.hasLoaded -> null
             albumState.errorMessage != null -> GalleryEmptyState(
@@ -311,56 +228,11 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
                 message = text.string(R.string.album_photos_appear_here, destination.album.name),
             )
         }
-        return base(inputs, GalleryContent.Photos(assets), status, emptyState)
+        return base(inputs, GalleryContent.Photos(assets), statusDetail, emptyState)
     }
 
-    private fun trash(
-        inputs: GalleryUiInputs,
-        destination: GalleryDestination.Trash,
-    ): GalleryUiState = when (destination.source) {
-        PhotoSource.DEVICE -> deviceTrash(inputs)
-        PhotoSource.PROTON -> protonTrash(inputs)
-    }
-
-    private fun deviceTrash(inputs: GalleryUiInputs): GalleryUiState {
-        if (!inputs.supportsDeviceTrash) return base(
-            inputs = inputs,
-            statusText = status(text.string(R.string.trash), text.string(R.string.requires_android_11)),
-            emptyState = GalleryEmptyState(
-                title = text.string(R.string.device_trash_unavailable),
-                message = text.string(R.string.device_trash_unavailable_message),
-            ),
-        )
-        if (!inputs.hasDeviceAccess) return base(
-            inputs = inputs,
-            emptyState = deviceAccessEmptyState(),
-        )
-        val assets = inputs.deviceTrash.items
-        val statusDetail = when {
-            inputs.deviceTrash.isLoading -> text.string(R.string.loading_metadata)
-            inputs.deviceTrash.errorMessage != null -> text.string(R.string.could_not_refresh)
-            else -> photoCountStatus(assets.size)
-        }
-        val status = status(text.string(R.string.trash), statusDetail)
-        val emptyState = if (assets.isEmpty() && !inputs.deviceTrash.isLoading) {
-            GalleryEmptyState(
-                title = text.string(R.string.device_trash_empty),
-                message = text.string(R.string.device_trash_empty_message),
-            )
-        } else {
-            null
-        }
-        return base(
-            inputs = inputs,
-            content = GalleryContent.Photos(assets),
-            statusText = status,
-            emptyState = emptyState,
-            showDeleteAll = assets.isNotEmpty() && !inputs.deviceTrash.isLoading,
-        )
-    }
-
-    private fun protonTrash(inputs: GalleryUiInputs): GalleryUiState {
-        protonUnavailable(inputs, area = R.string.trash)?.let { return it }
+    private fun trash(inputs: GalleryUiInputs): GalleryUiState {
+        protonUnavailable(inputs)?.let { return it }
         val state = inputs.protonTrash
         val videoNodeUids = inputs.protonGallery.tagNodeUids(ProtonMediaTag.VIDEOS)
         val favoriteNodeUids = inputs.protonGallery.tagNodeUids(ProtonMediaTag.FAVORITES)
@@ -373,7 +245,6 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
                 ProtonThumbnailProgressCalculator.trash(state.photos),
             ) ?: photoCountStatus(assets.size)
         }
-        val status = status(text.string(R.string.trash), statusDetail)
         val emptyState = when {
             assets.isNotEmpty() -> null
             state.errorMessage != null -> GalleryEmptyState(
@@ -389,19 +260,16 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
         return base(
             inputs = inputs,
             content = GalleryContent.Photos(assets),
-            statusText = status,
+            statusText = statusDetail,
             emptyState = emptyState,
             showDeleteAll = assets.isNotEmpty() && !state.syncing,
         )
     }
 
-    private fun protonUnavailable(
-        inputs: GalleryUiInputs,
-        area: Int = R.string.photos,
-    ): GalleryUiState? = when (inputs.protonAccountStatus) {
+    private fun protonUnavailable(inputs: GalleryUiInputs): GalleryUiState? = when (inputs.protonAccountStatus) {
         ProtonAccountStatus.DISCONNECTED -> base(
             inputs = inputs,
-            statusText = status(text.string(area), text.string(R.string.proton_not_connected)),
+            statusText = text.string(R.string.proton_not_connected),
             emptyState = GalleryEmptyState(
                 title = text.string(R.string.connect_proton_photos),
                 message = text.string(R.string.connect_proton_message),
@@ -411,8 +279,11 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
         )
         ProtonAccountStatus.CONNECTING -> base(
             inputs = inputs,
-            statusText = status(text.string(area), text.string(R.string.loading_metadata)),
-            emptyState = loadingMetadataEmptyState(),
+            statusText = text.string(R.string.loading_metadata),
+            emptyState = GalleryEmptyState(
+                title = text.string(R.string.loading_metadata),
+                message = "",
+            ),
         )
         ProtonAccountStatus.CONNECTED -> null
     }
@@ -436,15 +307,11 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
     )
 
     private fun title(destination: GalleryDestination): String = when (destination) {
-        GalleryDestination.ProtonTimeline -> text.string(R.string.photos)
+        GalleryDestination.Timeline -> text.string(R.string.photos)
         GalleryDestination.Library -> text.string(R.string.library)
-        is GalleryDestination.Device -> text.string(destination.collection.labelRes)
-        is GalleryDestination.ProtonTag -> text.string(destination.tag.labelRes)
-        is GalleryDestination.ProtonAlbumPhotos -> destination.album.name
-        is GalleryDestination.Trash -> when (destination.source) {
-            PhotoSource.PROTON -> text.string(R.string.proton_trash)
-            PhotoSource.DEVICE -> text.string(R.string.device_trash)
-        }
+        is GalleryDestination.Tag -> text.string(destination.tag.labelRes)
+        is GalleryDestination.AlbumPhotos -> destination.album.name
+        GalleryDestination.Trash -> text.string(R.string.trash)
     }
 
     private fun GalleryUiInputs.shouldShowMetadataLoading(
@@ -461,26 +328,11 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
         )
     }
 
-    private fun deviceAccessEmptyState() = GalleryEmptyState(
-        title = text.string(R.string.allow_photo_access),
-        message = text.string(R.string.allow_photo_access_message),
-        actionLabel = text.string(R.string.allow_access),
-        action = GalleryEmptyAction.REQUEST_DEVICE_ACCESS,
-    )
-
-    private fun loadingMetadataEmptyState() = GalleryEmptyState(
-        title = text.string(R.string.loading_metadata),
-        message = "",
-    )
-
     private fun photoCountStatus(count: Int): String =
         text.quantity(R.plurals.photo_count, count, count)
 
     private fun albumCountStatus(count: Int): String =
         text.quantity(R.plurals.album_count, count, count)
-
-    private fun status(label: String, detail: String): String =
-        text.string(R.string.status_with_detail, label, detail)
 
     private fun ProtonGalleryPhoto.toGalleryAsset(tagIndex: Map<String, Set<ProtonMediaTag>>): GalleryAsset {
         val tags = tagIndex[nodeUid].orEmpty()

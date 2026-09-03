@@ -51,7 +51,7 @@ object GalleryGrouping {
         require(albumColumns > 0 && entryColumns > 0) { "Columns must be positive" }
         return buildList {
             sections.forEach { section ->
-                add(GalleryRow.SectionHeading(section.key, section.title))
+                if (section.title.isNotEmpty()) add(GalleryRow.SectionHeading(section.key, section.title))
                 section.items.filterIsInstance<LibraryItem.Album>()
                     .map(LibraryItem.Album::album)
                     .chunked(albumColumns)

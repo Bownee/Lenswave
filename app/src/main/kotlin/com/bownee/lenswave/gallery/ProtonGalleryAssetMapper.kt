@@ -7,7 +7,7 @@ fun ProtonGalleryPhoto.toGalleryAsset(
     displayName: String = "",
     mediaKind: MediaKind = MediaKind.IMAGE,
     tags: Set<ProtonMediaTag> = emptySet(),
-): GalleryAsset = GalleryAsset.proton(
+): GalleryAsset = GalleryAsset(
     stableId = "proton:$nodeUid",
     capturedAtEpochMillis = captureTimeEpochSeconds * 1_000L,
     displayName = displayName,

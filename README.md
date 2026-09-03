@@ -1,6 +1,6 @@
 # Lenswave
 
-Lenswave is an Android gallery and non-destructive photo editor. Browse photos stored on your device and in Proton Photos, then save edited copies to `Pictures/Lenswave`.
+Lenswave is an Android viewer for Proton Photos. Browse your cloud timeline, albums, media types, and Trash, and manage favorites and deletions from your phone.
 
 Lenswave is an independent project and is not affiliated with Proton. The Proton integration uses preview SDKs and may change.
 

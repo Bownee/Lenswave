@@ -8,34 +8,25 @@ import org.junit.Test
 class GalleryThumbnailCachePolicyTest {
     @Test
     fun initialAndUnchangedIdentityPreserveThumbnails() {
-        val identity = identity()
+        val identity = GalleryThumbnailCacheIdentity(UserId("user"))
 
         assertFalse(GalleryThumbnailCachePolicy.shouldInvalidate(null, identity))
         assertFalse(GalleryThumbnailCachePolicy.shouldInvalidate(identity, identity))
     }
 
     @Test
-    fun changedDeviceAccessInvalidatesThumbnails() {
-        assertTrue(
-            GalleryThumbnailCachePolicy.shouldInvalidate(
-                identity(deviceAccessLevel = DeviceAccessLevel.FULL),
-                identity(deviceAccessLevel = DeviceAccessLevel.PARTIAL),
-            ),
-        )
-    }
-
-    @Test
     fun changedProtonAccountInvalidatesThumbnails() {
         assertTrue(
             GalleryThumbnailCachePolicy.shouldInvalidate(
-                identity(protonUserId = UserId("first-user")),
-                identity(protonUserId = UserId("second-user")),
+                GalleryThumbnailCacheIdentity(UserId("first-user")),
+                GalleryThumbnailCacheIdentity(UserId("second-user")),
+            ),
+        )
+        assertTrue(
+            GalleryThumbnailCachePolicy.shouldInvalidate(
+                GalleryThumbnailCacheIdentity(UserId("first-user")),
+                GalleryThumbnailCacheIdentity(null),
             ),
         )
     }
-
-    private fun identity(
-        deviceAccessLevel: DeviceAccessLevel = DeviceAccessLevel.FULL,
-        protonUserId: UserId? = UserId("user"),
-    ) = GalleryThumbnailCacheIdentity(deviceAccessLevel, protonUserId)
 }

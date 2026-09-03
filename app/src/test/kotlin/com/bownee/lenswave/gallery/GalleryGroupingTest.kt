@@ -81,14 +81,12 @@ class GalleryGroupingTest {
         assertEquals(6, rows.size)
     }
 
-    private fun photo(id: String, timestamp: Long) = GalleryAsset.device(
+    private fun photo(id: String, timestamp: Long) = GalleryAsset(
         stableId = id,
         capturedAtEpochMillis = timestamp,
         displayName = id,
-        uri = "content://media/$id",
-        collection = DeviceCollection.CAMERA,
-        sizeBytes = 1,
-        modifiedAtEpochMillis = timestamp,
+        nodeUid = id,
+        hasThumbnail = true,
     )
 
     private fun timestamp(year: Int, month: Int, day: Int): Long =

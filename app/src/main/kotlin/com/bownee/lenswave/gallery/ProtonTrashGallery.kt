@@ -9,7 +9,7 @@ object ProtonTrashGallery {
         videoNodeUids: Set<String> = emptySet(),
         favoriteNodeUids: Set<String> = emptySet(),
     ): List<GalleryAsset> = photos.map { photo ->
-        GalleryAsset.proton(
+        GalleryAsset(
             stableId = "proton-trash:${photo.nodeUid}",
             capturedAtEpochMillis = photo.trashedAtEpochSeconds * 1_000L,
             displayName = photo.displayName,

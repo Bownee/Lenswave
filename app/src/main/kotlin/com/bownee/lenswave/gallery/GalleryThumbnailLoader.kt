@@ -1,10 +1,7 @@
 package com.bownee.lenswave.gallery
 
-import android.content.Context
 import android.graphics.Bitmap
 import android.util.LruCache
-import android.util.Size
-import androidx.core.net.toUri
 import com.bownee.lenswave.proton.ProtonAlbum
 import com.bownee.lenswave.proton.ProtonPhotoGateway
 import kotlinx.coroutines.CoroutineScope
@@ -16,7 +13,6 @@ import kotlinx.coroutines.withContext
 import me.proton.core.domain.entity.UserId
 
 class GalleryThumbnailLoader(
-    private val context: Context,
     private val scope: CoroutineScope,
     private val protonRepository: ProtonPhotoGateway,
     private val protonUserId: () -> UserId?,
@@ -33,15 +29,11 @@ class GalleryThumbnailLoader(
         allowSourceRead: Boolean = true,
         onLoaded: (Bitmap?) -> Unit,
     ) {
-        val revision = when (val replica = asset.primaryReplica) {
-            is PhotoReplica.Device -> "${replica.modifiedAtEpochMillis}:${replica.sizeBytes}"
-            is PhotoReplica.Proton -> "${protonUserId()?.id}:${replica.hasThumbnail}"
-        }
         load(
-            key = "asset:${asset.stableId}:$revision",
+            key = "asset:${asset.stableId}:${protonUserId()?.id}:${asset.hasThumbnail}",
             isAvailable = asset.hasThumbnail,
             allowSourceRead = allowSourceRead,
-            read = { loadAsset(asset) },
+            read = { loadProtonThumbnail(asset.nodeUid) },
             onLoaded = onLoaded,
         )
     }
@@ -104,15 +96,6 @@ class GalleryThumbnailLoader(
         job.start()
     }
 
-    private suspend fun loadAsset(asset: GalleryAsset): Bitmap? = when (val replica = asset.primaryReplica) {
-        is PhotoReplica.Device -> context.contentResolver.loadThumbnail(
-            replica.uri.toUri(),
-            Size(THUMBNAIL_SIZE, THUMBNAIL_SIZE),
-            null,
-        )
-        is PhotoReplica.Proton -> loadProtonThumbnail(replica.nodeUid)
-    }
-
     private suspend fun loadProtonThumbnail(nodeUid: String): Bitmap? {
         val userId = protonUserId() ?: return null
         return protonRepository.loadThumbnail(userId, nodeUid)
@@ -121,8 +104,4 @@ class GalleryThumbnailLoader(
     private fun cacheSize(): Int = (Runtime.getRuntime().maxMemory() / 1_024 / 12)
         .coerceIn(8 * 1_024, 48 * 1_024)
         .toInt()
-
-    private companion object {
-        const val THUMBNAIL_SIZE = 480
-    }
 }

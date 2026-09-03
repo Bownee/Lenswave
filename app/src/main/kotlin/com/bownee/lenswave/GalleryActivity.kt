@@ -3,14 +3,11 @@ package com.bownee.lenswave
 import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
-import android.annotation.SuppressLint
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.provider.Settings
 import android.view.View
 import android.view.ViewGroup
 import android.widget.AbsListView
@@ -32,8 +29,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
-import com.bownee.lenswave.gallery.DeviceAccessLevel
-import com.bownee.lenswave.gallery.DevicePermissionPolicy
 import com.bownee.lenswave.gallery.GalleryAsset
 import com.bownee.lenswave.gallery.GalleryContent
 import com.bownee.lenswave.gallery.GalleryDeletionCoordinator
@@ -106,11 +101,6 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
     private var thumbnailCacheIdentity: GalleryThumbnailCacheIdentity? = null
     private var notificationPermissionRequestInFlight = false
 
-    private val permissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) {
-        updateDeviceAccess()
-    }
 
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -140,8 +130,6 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
             deletionExecutor = photoDeletionExecutor,
             currentUserId = { currentUiState.currentUserId },
             onSelectionCleared = { adapter.clearSelection() },
-            onDevicePhotosChanged = viewModel::refreshAfterMutation,
-            savedState = savedInstanceState?.getBundle(STATE_DELETION),
         )
         buildInterface()
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -149,7 +137,6 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
         })
         initializeAuthentication()
         observeGalleryState()
-        updateDeviceAccess()
         if (savedInstanceState == null && LenswaveApplication.isAppUpdateStartupEnabled()) {
             checkForAppUpdate()
         }
@@ -157,7 +144,6 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
 
     override fun onResume() {
         super.onResume()
-        updateDeviceAccess()
         viewModel.resumeThumbnailDownloads()
         showPendingUpdate()
     }
@@ -169,7 +155,6 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
-        outState.putBundle(STATE_DELETION, deletionCoordinator.saveState())
         pendingUpdateVersionName?.let { outState.putString(STATE_PENDING_UPDATE_VERSION, it) }
         super.onSaveInstanceState(outState)
     }
@@ -206,9 +191,6 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
                 onAlbumClicked = ::openAlbum,
                 onLibraryAction = ::performLibraryAction,
                 onSelectionChanged = ::showSelection,
-                onRefresh = {
-                    viewModel.requestRefresh()
-                },
                 onBack = ::navigateUp,
                 onSettings = ::showSettingsMenu,
                 onDeleteAllTrash = ::confirmDeleteAllTrashPhotos,
@@ -282,7 +264,7 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
         }
         currentUiState = state
         requestThumbnailNotificationPermissionIfNeeded(state)
-        updateThumbnailCacheIdentity(deviceAccessLevel(), state.currentUserId)
+        updateThumbnailCacheIdentity(state.currentUserId)
         renderedDestination = state.destination
         renderedContent = state.content
         if (contentChanged || destinationChanged) {
@@ -302,7 +284,6 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
                 action = empty.actionLabel,
                 onAction = when (empty.action) {
                     GalleryEmptyAction.CONNECT_PROTON -> ::connectProton
-                    GalleryEmptyAction.REQUEST_DEVICE_ACCESS -> ::requestDeviceAccess
                     null -> null
                 },
             )
@@ -315,35 +296,6 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
         updateNavigationControls()
         if (destinationChanged) {
             adapter.clearSelection()
-        }
-    }
-
-    private fun requestDeviceAccess() {
-        val preferences = getSharedPreferences("permissions", MODE_PRIVATE)
-        val requestedBefore = preferences.getBoolean("device-photos-requested", false)
-        val showRationale = devicePermissions().any(::shouldShowRequestPermissionRationale)
-        if (requestedBefore && !showRationale && deviceAccessLevel() == DeviceAccessLevel.NONE) {
-            AlertDialog.Builder(this)
-                .setTitle(R.string.allow_photo_access_settings)
-                .setMessage(R.string.allow_photo_access_settings_message)
-                .setNegativeButton(R.string.cancel, null)
-                .setPositiveButton(R.string.open_settings) { _, _ -> openApplicationSettings() }
-                .show()
-            return
-        }
-        val launchRequest = {
-            preferences.edit { putBoolean("device-photos-requested", true) }
-            permissionLauncher.launch(devicePermissions())
-        }
-        if (showRationale) {
-            AlertDialog.Builder(this)
-                .setTitle(R.string.allow_photo_access)
-                .setMessage(R.string.photo_access_rationale)
-                .setNegativeButton(R.string.not_now, null)
-                .setPositiveButton(R.string.continue_action) { _, _ -> launchRequest() }
-                .show()
-        } else {
-            launchRequest()
         }
     }
 
@@ -366,65 +318,12 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
         notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 
-    private fun updateDeviceAccess() {
-        val accessLevel = deviceAccessLevel()
-        updateThumbnailCacheIdentity(accessLevel, currentUiState.currentUserId)
-        viewModel.setDeviceAccess(accessLevel)
-    }
-
-    private fun updateThumbnailCacheIdentity(
-        accessLevel: DeviceAccessLevel,
-        userId: UserId?,
-    ) {
-        val identity = GalleryThumbnailCacheIdentity(accessLevel, userId)
+    private fun updateThumbnailCacheIdentity(userId: UserId?) {
+        val identity = GalleryThumbnailCacheIdentity(userId)
         if (GalleryThumbnailCachePolicy.shouldInvalidate(thumbnailCacheIdentity, identity)) {
             screen.adapter.clearThumbnails()
         }
         thumbnailCacheIdentity = identity
-    }
-
-    @SuppressLint("InlinedApi") // Permission strings are queried only by the API-aware policy.
-    private fun deviceAccessLevel(): DeviceAccessLevel = DevicePermissionPolicy.accessLevel(
-        apiLevel = Build.VERSION.SDK_INT,
-        readMediaImagesGranted = ContextCompat.checkSelfPermission(
-            this,
-            Manifest.permission.READ_MEDIA_IMAGES,
-        ) == PackageManager.PERMISSION_GRANTED,
-        readMediaVideosGranted = ContextCompat.checkSelfPermission(
-            this,
-            Manifest.permission.READ_MEDIA_VIDEO,
-        ) == PackageManager.PERMISSION_GRANTED,
-        selectedPhotosGranted = ContextCompat.checkSelfPermission(
-            this,
-            Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED,
-        ) == PackageManager.PERMISSION_GRANTED,
-        legacyReadGranted = ContextCompat.checkSelfPermission(
-            this,
-            Manifest.permission.READ_EXTERNAL_STORAGE,
-        ) == PackageManager.PERMISSION_GRANTED,
-    )
-
-    private fun openApplicationSettings() {
-        startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-            data = Uri.fromParts("package", packageName, null)
-        })
-    }
-
-    private fun managePhotoAccess() {
-        if (DevicePermissionPolicy.shouldOpenSettingsToManage(deviceAccessLevel())) {
-            openApplicationSettings()
-        } else {
-            requestDeviceAccess()
-        }
-    }
-
-    private fun photoAccessMenuTitle(): String {
-        val accessLabel = when (deviceAccessLevel()) {
-            DeviceAccessLevel.NONE -> R.string.photo_access_none
-            DeviceAccessLevel.PARTIAL -> R.string.photo_access_selected
-            DeviceAccessLevel.FULL -> R.string.photo_access_all
-        }
-        return getString(R.string.photo_access_state, getString(accessLabel))
     }
 
     private fun selectDestination(destination: GalleryDestination) {
@@ -457,7 +356,6 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
             is LibraryAction.Open -> selectDestination(action.destination)
             is LibraryAction.Request -> when (action.action) {
                 GalleryEmptyAction.CONNECT_PROTON -> connectProton()
-                GalleryEmptyAction.REQUEST_DEVICE_ACCESS -> requestDeviceAccess()
             }
         }
     }
@@ -479,7 +377,6 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
             } else {
                 menu.add(android.view.Menu.NONE, SETTINGS_DISCONNECT_PROTON, 0, R.string.disconnect_proton)
             }
-            menu.add(android.view.Menu.NONE, SETTINGS_PHOTO_ACCESS, 1, photoAccessMenuTitle())
             menu.add(android.view.Menu.NONE, SETTINGS_PRIVACY, 2, R.string.privacy_and_data)
             menu.add(
                 android.view.Menu.NONE,
@@ -491,7 +388,6 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
                 when (item.itemId) {
                     SETTINGS_CONNECT_PROTON -> connectProton()
                     SETTINGS_DISCONNECT_PROTON -> confirmDisconnectProton()
-                    SETTINGS_PHOTO_ACCESS -> managePhotoAccess()
                     SETTINGS_PRIVACY -> showPrivacySettings()
                 }
                 true
@@ -550,9 +446,8 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
     }
 
     private fun openPhoto(photo: GalleryAsset) {
-        viewerLauncher.launch(
-            PhotoViewerActivity.createIntent(this, photo, currentUiState.currentUserId, visibleAssets)
-        )
+        val userId = currentUiState.currentUserId ?: return
+        viewerLauncher.launch(PhotoViewerActivity.createIntent(this, photo, userId, visibleAssets))
     }
 
     private fun showSelection(selected: List<GalleryAsset>) {
@@ -586,7 +481,6 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
         adapter.submitPhotos(visibleAssets)
     }
 
-    private fun devicePermissions(): Array<String> = DevicePermissionPolicy.permissions(Build.VERSION.SDK_INT)
 
     private fun updateNavigationControls() {
         val destination = currentUiState.destination
@@ -622,9 +516,8 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
 
     private fun toggleOverviewFavorite(photo: GalleryAsset) {
         val userId = currentUiState.currentUserId ?: return
-        if (!photo.canFavoriteInProton) return
-        val nodeUids = photo.protonReplicaNodeUids.distinct()
-        if (nodeUids.isEmpty()) return
+        if (!photo.canFavorite) return
+        val nodeUids = listOf(photo.nodeUid)
         val favorite = !photo.isFavorite
         adapter.beginFavoriteUpdate(photo.stableId, favorite)
         lifecycleScope.launch {
@@ -719,11 +612,9 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
 
     private companion object {
         const val LATEST_RELEASE_PAGE_URL = "https://github.com/Bownee/Lenswave/releases/latest"
-        const val STATE_DELETION = "gallery.deletion"
         const val STATE_PENDING_UPDATE_VERSION = "gallery.pending-update-version"
         const val SETTINGS_CONNECT_PROTON = 1
         const val SETTINGS_DISCONNECT_PROTON = 2
-        const val SETTINGS_PHOTO_ACCESS = 3
         const val SETTINGS_PRIVACY = 4
         const val KEY_THUMBNAIL_NOTIFICATION_PERMISSION_REQUESTED =
             "thumbnail-notification-permission-requested-v2"

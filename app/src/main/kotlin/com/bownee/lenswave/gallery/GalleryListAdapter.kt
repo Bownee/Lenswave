@@ -217,7 +217,7 @@ class GalleryListAdapter(
                 true
             }
             val isSelected = photo.stableId in selected
-            val showFavorite = selected.isEmpty() && photo.canFavoriteInProton
+            val showFavorite = selected.isEmpty() && photo.canFavorite
             val displayedFavorite = favoriteState.displayedValue(photo.stableId, photo.isFavorite)
             val displayedPhoto = if (displayedFavorite == photo.isFavorite) {
                 photo

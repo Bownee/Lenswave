@@ -58,7 +58,6 @@ internal class PhotoViewerScreen(
     val retryButton: Button
     val mediaTitle: TextView
     val actions: LinearLayout
-    val editButton: ImageButton
     val favoriteButton: ImageButton
     val deleteButton: ImageButton
     val detailsSheet: LinearLayout
@@ -156,10 +155,6 @@ internal class PhotoViewerScreen(
             ),
         )
 
-        editButton = smallIconButton(context.getString(R.string.edit), R.drawable.ic_edit).apply {
-            isEnabled = false
-            setOnClickListener { actions.onEdit() }
-        }
         favoriteButton = smallIconButton(
             context.getString(R.string.add_to_favorites),
             R.drawable.ic_favorite_border,
@@ -183,14 +178,10 @@ internal class PhotoViewerScreen(
                 context.dp(48),
                 context.dp(48),
             ).apply { marginEnd = context.dp(8) })
-            addView(editButton, LinearLayout.LayoutParams(
-                context.dp(48),
-                context.dp(48),
-            ))
             addView(deleteButton, LinearLayout.LayoutParams(
                 context.dp(48),
                 context.dp(48),
-            ).apply { marginStart = context.dp(8) })
+            ))
         }
         this.actions = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
@@ -287,7 +278,6 @@ internal class PhotoViewerScreen(
         val gestureStartAllowed: (Float, Float) -> Boolean,
         val onVerticalDrag: (Float, Float, Boolean) -> Unit,
         val onHorizontalDrag: (Float, Boolean) -> Unit,
-        val onEdit: () -> Unit,
         val onFavorite: () -> Unit,
         val onDelete: () -> Unit,
         val onRetry: () -> Unit,

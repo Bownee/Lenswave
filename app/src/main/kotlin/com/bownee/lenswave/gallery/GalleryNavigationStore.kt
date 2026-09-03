@@ -10,64 +10,52 @@ import javax.inject.Singleton
 
 internal data class StoredGalleryNavigation(
     val destination: String?,
-    val deviceCollection: String? = null,
-    val trashSource: String? = null,
     val albumUid: String? = null,
     val albumName: String? = null,
-    val protonTag: String? = null,
+    val tag: String? = null,
 )
 
 internal object GalleryNavigationCodec {
     fun encode(destination: GalleryDestination): StoredGalleryNavigation = StoredGalleryNavigation(
         destination = when (destination) {
-            GalleryDestination.ProtonTimeline -> DESTINATION_PROTON_TIMELINE
+            GalleryDestination.Timeline -> DESTINATION_TIMELINE
             GalleryDestination.Library -> DESTINATION_LIBRARY
-            is GalleryDestination.Device -> DESTINATION_DEVICE
-            is GalleryDestination.ProtonTag -> DESTINATION_PROTON_TAG
-            is GalleryDestination.ProtonAlbumPhotos -> DESTINATION_PROTON_ALBUM
-            is GalleryDestination.Trash -> DESTINATION_TRASH
+            is GalleryDestination.Tag -> DESTINATION_TAG
+            is GalleryDestination.AlbumPhotos -> DESTINATION_ALBUM
+            GalleryDestination.Trash -> DESTINATION_TRASH
         },
-        deviceCollection = (destination as? GalleryDestination.Device)?.collection?.name,
-        trashSource = (destination as? GalleryDestination.Trash)?.source?.name,
-        albumUid = (destination as? GalleryDestination.ProtonAlbumPhotos)?.album?.nodeUid,
-        albumName = (destination as? GalleryDestination.ProtonAlbumPhotos)?.album?.name,
-        protonTag = (destination as? GalleryDestination.ProtonTag)?.tag?.name,
+        albumUid = (destination as? GalleryDestination.AlbumPhotos)?.album?.nodeUid,
+        albumName = (destination as? GalleryDestination.AlbumPhotos)?.album?.name,
+        tag = (destination as? GalleryDestination.Tag)?.tag?.name,
     )
 
     fun decode(stored: StoredGalleryNavigation): GalleryDestination? = when (stored.destination) {
-        DESTINATION_PROTON_TIMELINE, LEGACY_DESTINATION_COMBINED -> GalleryDestination.ProtonTimeline
-        DESTINATION_LIBRARY, LEGACY_DESTINATION_PROTON_ALBUMS -> GalleryDestination.Library
-        DESTINATION_DEVICE -> stored.deviceCollection
-            ?.let { runCatching { DeviceCollection.valueOf(it) }.getOrNull() }
-            ?.let(GalleryDestination::Device)
-            ?: GalleryDestination.Library
-        DESTINATION_PROTON_TAG -> stored.protonTag
+        DESTINATION_TIMELINE, LEGACY_DESTINATION_COMBINED -> GalleryDestination.Timeline
+        DESTINATION_LIBRARY, LEGACY_DESTINATION_PROTON_ALBUMS, LEGACY_DESTINATION_DEVICE -> GalleryDestination.Library
+        DESTINATION_TAG -> stored.tag
             ?.let { runCatching { ProtonMediaTag.valueOf(it) }.getOrNull() }
-            ?.let(GalleryDestination::ProtonTag)
+            ?.let(GalleryDestination::Tag)
             ?: GalleryDestination.Library
-        DESTINATION_PROTON_ALBUM -> stored.albumUid?.let { uid ->
-            GalleryDestination.ProtonAlbumPhotos(
+        DESTINATION_ALBUM -> stored.albumUid?.let { uid ->
+            GalleryDestination.AlbumPhotos(
                 ProtonAlbumReference(
                     nodeUid = uid,
                     name = stored.albumName.orEmpty(),
                 ),
             )
         } ?: GalleryDestination.Library
-        DESTINATION_TRASH -> stored.trashSource
-            ?.let { runCatching { PhotoSource.valueOf(it) }.getOrNull() }
-            ?.let(GalleryDestination::Trash)
-            ?: GalleryDestination.Library
+        DESTINATION_TRASH -> GalleryDestination.Trash
         else -> null
     }
 
-    private const val DESTINATION_PROTON_TIMELINE = "proton-timeline"
+    private const val DESTINATION_TIMELINE = "proton-timeline"
     private const val DESTINATION_LIBRARY = "library"
-    private const val DESTINATION_DEVICE = "device"
-    private const val DESTINATION_PROTON_TAG = "proton-tag"
-    private const val DESTINATION_PROTON_ALBUM = "proton-album"
+    private const val DESTINATION_TAG = "proton-tag"
+    private const val DESTINATION_ALBUM = "proton-album"
     private const val DESTINATION_TRASH = "trash"
     private const val LEGACY_DESTINATION_COMBINED = "combined"
     private const val LEGACY_DESTINATION_PROTON_ALBUMS = "proton-albums"
+    private const val LEGACY_DESTINATION_DEVICE = "device"
 }
 
 internal interface GalleryNavigationStore {
@@ -84,11 +72,9 @@ internal class SharedPreferencesGalleryNavigationStore @Inject constructor(
     override fun read(): GalleryDestination? = GalleryNavigationCodec.decode(
         StoredGalleryNavigation(
             destination = preferences.getString(KEY_DESTINATION, null),
-            deviceCollection = preferences.getString(KEY_DEVICE_COLLECTION, null),
-            trashSource = preferences.getString(KEY_TRASH_SOURCE, null),
             albumUid = preferences.getString(KEY_ALBUM_UID, null),
             albumName = preferences.getString(KEY_ALBUM_NAME, null),
-            protonTag = preferences.getString(KEY_PROTON_TAG, null),
+            tag = preferences.getString(KEY_TAG, null),
         ),
     )
 
@@ -96,21 +82,17 @@ internal class SharedPreferencesGalleryNavigationStore @Inject constructor(
         val stored = GalleryNavigationCodec.encode(destination)
         preferences.edit {
             putString(KEY_DESTINATION, stored.destination)
-            putString(KEY_DEVICE_COLLECTION, stored.deviceCollection)
-            putString(KEY_TRASH_SOURCE, stored.trashSource)
             putString(KEY_ALBUM_UID, stored.albumUid)
             putString(KEY_ALBUM_NAME, stored.albumName)
-            putString(KEY_PROTON_TAG, stored.protonTag)
+            putString(KEY_TAG, stored.tag)
         }
     }
 
     private companion object {
         const val PREFERENCES_NAME = "gallery-navigation"
         const val KEY_DESTINATION = "destination"
-        const val KEY_DEVICE_COLLECTION = "device-collection"
-        const val KEY_TRASH_SOURCE = "trash-source"
         const val KEY_ALBUM_UID = "album-uid"
         const val KEY_ALBUM_NAME = "album-name"
-        const val KEY_PROTON_TAG = "proton-tag"
+        const val KEY_TAG = "proton-tag"
     }
 }

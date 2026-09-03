@@ -1,17 +1,13 @@
 package com.bownee.lenswave
 
 import android.animation.ValueAnimator
-import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
-import android.app.RecoverableSecurityException
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
-import android.provider.MediaStore
 import android.text.format.DateFormat
 import android.text.format.Formatter
 import android.view.View
@@ -25,8 +21,6 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
-import androidx.activity.result.IntentSenderRequest
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.graphics.Insets
 import androidx.core.net.toUri
 import androidx.core.view.ViewCompat
@@ -42,18 +36,14 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import com.bownee.lenswave.gallery.GalleryAsset
-import com.bownee.lenswave.gallery.DeviceCollection
 import com.bownee.lenswave.gallery.MediaKind
 import com.bownee.lenswave.gallery.PhotoDeletionDecision
 import com.bownee.lenswave.gallery.PhotoDeletionOperation
 import com.bownee.lenswave.gallery.PhotoDeletionPolicy
 import com.bownee.lenswave.gallery.PhotoDeletionExecutor
-import com.bownee.lenswave.gallery.PhotoReplica
-import com.bownee.lenswave.gallery.PhotoSource
 import com.bownee.lenswave.metadata.PhotoMetadataItem
 import com.bownee.lenswave.metadata.PhotoMetadataAction
 import com.bownee.lenswave.metadata.PhotoMetadataReader
-import com.bownee.lenswave.metadata.requiresMediaLocationPermission
 import com.bownee.lenswave.proton.ProtonPhotoGateway
 import com.bownee.lenswave.proton.ProtonOriginalDownloadProgress
 import com.bownee.lenswave.proton.ProtonOriginalStream
@@ -95,7 +85,6 @@ class PhotoViewerActivity : FragmentActivity() {
     private val retryButton get() = screen.retryButton
     private val mediaTitle get() = screen.mediaTitle
     private val actions get() = screen.actions
-    private val editButton get() = screen.editButton
     private val favoriteButton get() = screen.favoriteButton
     private val deleteButton get() = screen.deleteButton
     private val detailsSheet get() = screen.detailsSheet
@@ -106,11 +95,9 @@ class PhotoViewerActivity : FragmentActivity() {
     private var resolvedUri: Uri? = null
     private var detailsShown = false
     private var metadataLoaded = false
-    private var mediaLocationPermissionHandled = false
     private var photoTransitioning = false
     private var deletionInProgress = false
     private var favoriteInProgress = false
-    private var transferredTransientPhoto = false
     private var dismissing = false
     private var photoReady = false
     private var thumbnailBitmap: Bitmap? = null
@@ -124,36 +111,6 @@ class PhotoViewerActivity : FragmentActivity() {
     private var detailsSheetAttachmentOffset = 0
     private val verticalSettleInterpolator = PathInterpolator(0.2f, 0f, 0f, 1f)
     private var player: ExoPlayer? = null
-
-    private val mediaLocationPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        mediaLocationPermissionHandled = true
-        if (!granted) {
-            Toast.makeText(
-                this,
-                getString(R.string.location_permission_metadata_notice),
-                Toast.LENGTH_LONG,
-            ).show()
-        }
-        resolvedUri?.let(::loadMetadata)
-    }
-
-    private val deleteConsentLauncher = registerForActivityResult(
-        ActivityResultContracts.StartIntentSenderForResult()
-    ) { result ->
-        if (result.resultCode != Activity.RESULT_OK) return@registerForActivityResult
-        if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q) {
-            val uri = (request as? PhotoRequest.Device)?.uri?.toUri()
-                ?: return@registerForActivityResult
-            lifecycleScope.launch {
-                val deleted = runCatching { photoDeletionExecutor.deleteDevice(uri) }.getOrDefault(0)
-                if (deleted > 0) finishDeleted() else setActionsEnabled(true)
-            }
-            return@registerForActivityResult
-        }
-        finishDeleted()
-    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -174,7 +131,7 @@ class PhotoViewerActivity : FragmentActivity() {
         clearThumbnailPreview()
         photoView.close()
         releasePlayer()
-        if (isFinishing && !transferredTransientPhoto) TransientPhotoFiles.deleteIfOwned(this, resolvedUri)
+        if (isFinishing) TransientPhotoFiles.deleteIfOwned(this, resolvedUri)
         super.onDestroy()
     }
 
@@ -210,7 +167,6 @@ class PhotoViewerActivity : FragmentActivity() {
                 },
                 onVerticalDrag = ::handleDetailsDrag,
                 onHorizontalDrag = ::handleHorizontalPhotoDrag,
-                onEdit = ::openEditor,
                 onFavorite = ::toggleFavorite,
                 onDelete = ::deletePhoto,
                 onRetry = ::loadPhoto,
@@ -249,24 +205,18 @@ class PhotoViewerActivity : FragmentActivity() {
         photoView.contentDescription = getString(
             if (request.mediaKind == MediaKind.VIDEO) R.string.video_description
             else R.string.photo_image_description,
-            request.displayName.ifBlank { request.source.name.lowercase() },
+            request.displayName.ifBlank { getString(R.string.photo) },
         )
         playerView.contentDescription = photoView.contentDescription
         updateFavoriteButton()
         scheduleLoadingPanel()
         val requestedPhoto = request
-        if (requestedPhoto is PhotoRequest.Device) {
-            clearThumbnailPreview()
-            showMedia(requestedPhoto.uri.toUri())
-            return
-        }
-        requestedPhoto as PhotoRequest.Proton
         photoLoadJob = lifecycleScope.launch {
             showCachedProtonThumbnail(requestedPhoto)
             try {
                 val (file, originalFileName) = withContext(Dispatchers.IO) {
                     val userId = UserId(requestedPhoto.userId)
-                    val nodeUid = requestedPhoto.protonNodeUid
+                    val nodeUid = requestedPhoto.nodeUid
                     val original = if (requestedPhoto.mediaKind == MediaKind.VIDEO) {
                         protonRepository.downloadOriginalProgressively(userId, nodeUid) { stream ->
                             withContext(Dispatchers.Main.immediate) {
@@ -286,7 +236,7 @@ class PhotoViewerActivity : FragmentActivity() {
                 }
                 if (request.stableId != requestedPhoto.stableId) return@launch
                 if (originalFileName.isNotBlank()) {
-                    request = (request as PhotoRequest.Proton).copy(displayName = originalFileName)
+                    request = request.copy(displayName = originalFileName)
                     request.writeTo(intent)
                 }
                 if (requestedPhoto.mediaKind != MediaKind.VIDEO) showMedia(Uri.fromFile(file))
@@ -305,13 +255,12 @@ class PhotoViewerActivity : FragmentActivity() {
         if (request.mediaKind == MediaKind.VIDEO) showVideo(uri) else showPhoto(uri)
     }
 
-    private suspend fun showCachedProtonThumbnail(requestedPhoto: PhotoRequest.Proton) {
+    private suspend fun showCachedProtonThumbnail(requestedPhoto: PhotoRequest) {
         val bitmap = protonRepository.loadThumbnail(
             UserId(requestedPhoto.userId),
-            requestedPhoto.protonNodeUid,
+            requestedPhoto.nodeUid,
         )
         if (!PhotoPreviewPolicy.canShow(
-                requestedPhoto.source,
                 requestedPhoto.stableId,
                 request.stableId,
                 bitmap != null,
@@ -622,7 +571,6 @@ class PhotoViewerActivity : FragmentActivity() {
         resolvedUri = null
         photoReady = false
         metadataLoaded = false
-        mediaLocationPermissionHandled = false
         detailsContent.removeAllViews()
         detailsProgress.visibility = View.VISIBLE
         detailsSheetAttachmentOffset = 0
@@ -690,17 +638,13 @@ class PhotoViewerActivity : FragmentActivity() {
     }
 
     private fun setActionsEnabled(enabled: Boolean) {
-        editButton.isEnabled = enabled && !request.isTrashed && request.mediaKind == MediaKind.IMAGE
         deleteButton.isEnabled = enabled
-        editButton.alpha = if (editButton.isEnabled) 1f else 0.45f
         deleteButton.alpha = if (enabled) 1f else 0.45f
         updateFavoriteButton(enabled)
     }
 
     private fun updateFavoriteButton(enabled: Boolean = photoReady) {
-        val supported = !request.isTrashed &&
-            request.protonUserId != null &&
-            request.protonFavoriteNodeUids.isNotEmpty()
+        val supported = !request.isTrashed
         favoriteButton.visibility = if (supported) View.VISIBLE else View.GONE
         favoriteButton.isEnabled = supported && enabled && !favoriteInProgress
         favoriteButton.alpha = if (favoriteButton.isEnabled) 1f else 0.45f
@@ -714,16 +658,15 @@ class PhotoViewerActivity : FragmentActivity() {
 
     private fun toggleFavorite() {
         if (favoriteInProgress) return
-        val userId = request.protonUserId?.let(::UserId) ?: return
-        val nodeUids = request.protonFavoriteNodeUids
-        if (nodeUids.isEmpty()) return
+        val userId = UserId(request.userId)
+        val nodeUids = listOf(request.nodeUid)
         val favorite = !request.isFavorite
         favoriteInProgress = true
         updateFavoriteButton()
         lifecycleScope.launch {
             try {
                 val result = protonRepository.setFavorite(userId, nodeUids, favorite)
-                if (result.updatedCount != nodeUids.distinct().size) {
+                if (result.updatedCount != 1) {
                     Toast.makeText(
                         this@PhotoViewerActivity,
                         R.string.could_not_update_favorite,
@@ -778,12 +721,8 @@ class PhotoViewerActivity : FragmentActivity() {
                     metadataReader.read(
                         this@PhotoViewerActivity,
                         uri,
-                        metadataRequest.source,
                         metadataRequest.displayName,
                         metadataRequest.capturedAt,
-                        (metadataRequest as? PhotoRequest.Device)
-                            ?.protonBackingNodeUids
-                            ?.isNotEmpty() == true,
                     )
                 }
             }
@@ -1174,12 +1113,6 @@ class PhotoViewerActivity : FragmentActivity() {
     private fun ensureMetadataLoaded() {
         if (metadataLoaded) return
         val uri = resolvedUri ?: return
-        if (!mediaLocationPermissionHandled &&
-            requiresMediaLocationPermission(this, uri, request.source)
-        ) {
-            mediaLocationPermissionLauncher.launch(Manifest.permission.ACCESS_MEDIA_LOCATION)
-            return
-        }
         loadMetadata(uri)
     }
 
@@ -1196,77 +1129,15 @@ class PhotoViewerActivity : FragmentActivity() {
         startActivity(intent)
     }
 
-    private fun openEditor() {
-        val uri = resolvedUri ?: return
-        transferredTransientPhoto = true
-        startActivity(Intent(this, PhotoEditorActivity::class.java).apply {
-            putExtra(PhotoEditorActivity.EXTRA_PHOTO_URI, uri.toString())
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        })
-        finish()
-    }
-
     private fun deletePhoto() {
         val decision = PhotoDeletionPolicy.decide(
             targets = listOf(request.toPhotoTarget()),
             permanently = request.isTrashed,
         ) as? PhotoDeletionDecision.Allowed ?: return
         when (decision.plan.operation) {
-            PhotoDeletionOperation.DELETE_PERMANENTLY -> when (decision.plan.source) {
-                PhotoSource.DEVICE -> confirmDeleteDevicePhotoPermanently()
-                PhotoSource.PROTON -> confirmDeleteProtonPhotoPermanently()
-            }
-            PhotoDeletionOperation.MOVE_TO_TRASH -> when (decision.plan.source) {
-                PhotoSource.DEVICE -> deleteDevicePhoto()
-                PhotoSource.PROTON -> confirmTrashProtonPhoto()
-            }
+            PhotoDeletionOperation.DELETE_PERMANENTLY -> confirmDeleteProtonPhotoPermanently()
+            PhotoDeletionOperation.MOVE_TO_TRASH -> confirmTrashProtonPhoto()
         }
-    }
-
-    private fun deleteDevicePhoto() {
-        val uri = (request as? PhotoRequest.Device)?.uri?.toUri() ?: return
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val pendingIntent = MediaStore.createTrashRequest(contentResolver, listOf(uri), true)
-            deleteConsentLauncher.launch(IntentSenderRequest.Builder(pendingIntent.intentSender).build())
-            return
-        }
-        AlertDialog.Builder(this)
-            .setTitle(R.string.delete_photo_question)
-            .setMessage(R.string.delete_device_photo_message)
-            .setNegativeButton(R.string.cancel, null)
-            .setPositiveButton(R.string.delete) { _, _ -> deleteAndroidTenPhoto(uri) }
-            .show()
-    }
-
-    private fun deleteAndroidTenPhoto(uri: Uri) {
-        setActionsEnabled(false)
-        lifecycleScope.launch {
-            try {
-                val deleted = photoDeletionExecutor.deleteDevice(uri)
-                if (deleted > 0) finishDeleted() else setActionsEnabled(true)
-            } catch (error: RecoverableSecurityException) {
-                deleteConsentLauncher.launch(
-                    IntentSenderRequest.Builder(error.userAction.actionIntent.intentSender).build()
-                )
-            } catch (_: Throwable) {
-                setActionsEnabled(true)
-                Toast.makeText(this@PhotoViewerActivity, R.string.delete_failed, Toast.LENGTH_LONG).show()
-            }
-        }
-    }
-
-    private fun confirmDeleteDevicePhotoPermanently() {
-        val uri = (request as? PhotoRequest.Device)?.uri?.toUri() ?: return
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
-        AlertDialog.Builder(this)
-            .setTitle(R.string.delete_photo_permanently_question)
-            .setMessage(R.string.delete_device_trash_message)
-            .setNegativeButton(R.string.cancel, null)
-            .setPositiveButton(R.string.delete_forever) { _, _ ->
-                val pendingIntent = MediaStore.createDeleteRequest(contentResolver, listOf(uri))
-                deleteConsentLauncher.launch(IntentSenderRequest.Builder(pendingIntent.intentSender).build())
-            }
-            .show()
     }
 
     private fun confirmTrashProtonPhoto() {
@@ -1280,9 +1151,8 @@ class PhotoViewerActivity : FragmentActivity() {
 
     private fun trashProtonPhoto() {
         if (deletionInProgress) return
-        val requestedPhoto = request as? PhotoRequest.Proton ?: return
-        val userId = UserId(requestedPhoto.userId)
-        val nodeUid = requestedPhoto.protonNodeUid
+        val userId = UserId(request.userId)
+        val nodeUid = request.nodeUid
         deletionInProgress = true
         setActionsEnabled(false)
         lifecycleScope.launch {
@@ -1316,9 +1186,8 @@ class PhotoViewerActivity : FragmentActivity() {
 
     private fun deleteProtonPhotoPermanently() {
         if (deletionInProgress) return
-        val requestedPhoto = request as? PhotoRequest.Proton ?: return
-        val userId = UserId(requestedPhoto.userId)
-        val nodeUid = requestedPhoto.protonNodeUid
+        val userId = UserId(request.userId)
+        val nodeUid = request.nodeUid
         deletionInProgress = true
         setActionsEnabled(false)
         lifecycleScope.launch {
@@ -1418,10 +1287,7 @@ class PhotoViewerActivity : FragmentActivity() {
     )
 
     companion object {
-        const val EXTRA_SOURCE = "com.bownee.lenswave.extra.SOURCE"
-        const val EXTRA_URI = "com.bownee.lenswave.extra.URI"
         const val EXTRA_PROTON_NODE_UID = "com.bownee.lenswave.extra.PROTON_NODE_UID"
-        const val EXTRA_PROTON_BACKING_NODE_UIDS = "com.bownee.lenswave.extra.PROTON_BACKING_NODE_UIDS"
         const val EXTRA_USER_ID = "com.bownee.lenswave.extra.USER_ID"
         const val EXTRA_CAPTURED_AT = "com.bownee.lenswave.extra.CAPTURED_AT"
         const val EXTRA_DISPLAY_NAME = "com.bownee.lenswave.extra.DISPLAY_NAME"
@@ -1443,10 +1309,10 @@ class PhotoViewerActivity : FragmentActivity() {
         fun createIntent(
             context: Context,
             photo: GalleryAsset,
-            userId: UserId?,
+            userId: UserId,
             navigation: List<GalleryAsset> = listOf(photo),
         ): Intent {
-            val request = PhotoRequest.from(photo, userId?.id)
+            val request = PhotoRequest.from(photo, userId.id)
             val currentIndex = navigation.indexOfFirst { it.stableId == photo.stableId }.coerceAtLeast(0)
             val from = (currentIndex - NAVIGATION_RADIUS).coerceAtLeast(0)
             val to = (currentIndex + NAVIGATION_RADIUS + 1).coerceAtMost(navigation.size)
@@ -1454,7 +1320,7 @@ class PhotoViewerActivity : FragmentActivity() {
                 putParcelableArrayListExtra(
                     EXTRA_NAVIGATION,
                     ArrayList(navigation.subList(from, to).map {
-                        PhotoRequest.from(it, userId?.id).toBundle()
+                        PhotoRequest.from(it, userId.id).toBundle()
                     }),
                 )
             }

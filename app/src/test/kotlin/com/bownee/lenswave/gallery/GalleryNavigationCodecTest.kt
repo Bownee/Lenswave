@@ -10,13 +10,11 @@ class GalleryNavigationCodecTest {
     @Test
     fun `all gallery screens survive a persistence round trip`() {
         val destinations = listOf(
-            GalleryDestination.ProtonTimeline,
+            GalleryDestination.Timeline,
             GalleryDestination.Library,
-            GalleryDestination.Device(DeviceCollection.SCREENSHOTS),
-            GalleryDestination.ProtonTag(ProtonMediaTag.FAVORITES),
-            GalleryDestination.ProtonAlbumPhotos(ProtonAlbumReference("album-id", "Favorites")),
-            GalleryDestination.Trash(PhotoSource.DEVICE),
-            GalleryDestination.Trash(PhotoSource.PROTON),
+            GalleryDestination.Tag(ProtonMediaTag.FAVORITES),
+            GalleryDestination.AlbumPhotos(ProtonAlbumReference("album-id", "Favorites")),
+            GalleryDestination.Trash,
         )
 
         destinations.forEach { destination ->
@@ -31,8 +29,8 @@ class GalleryNavigationCodecTest {
     }
 
     @Test
-    fun `incomplete collections fall back to the Library`() {
-        listOf("proton-album", "proton-tag", "trash", "device", "proton-albums").forEach { stored ->
+    fun `incomplete or retired collections fall back to the Library`() {
+        listOf("proton-album", "proton-tag", "proton-albums", "device").forEach { stored ->
             assertEquals(
                 GalleryDestination.Library,
                 GalleryNavigationCodec.decode(StoredGalleryNavigation(destination = stored)),
@@ -41,9 +39,9 @@ class GalleryNavigationCodecTest {
     }
 
     @Test
-    fun `the retired combined timeline reopens as the Proton timeline`() {
+    fun `the retired combined timeline reopens as the timeline`() {
         assertEquals(
-            GalleryDestination.ProtonTimeline,
+            GalleryDestination.Timeline,
             GalleryNavigationCodec.decode(StoredGalleryNavigation(destination = "combined")),
         )
     }

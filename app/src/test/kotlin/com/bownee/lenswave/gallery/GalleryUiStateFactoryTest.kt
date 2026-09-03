@@ -54,7 +54,7 @@ class GalleryUiStateFactoryTest {
     fun `restoring Proton session shows metadata loading without connect action`() {
         val state = factory.create(
             GalleryUiInputs(
-                destination = GalleryDestination.ProtonTimeline,
+                destination = GalleryDestination.Timeline,
                 protonAccountStatus = ProtonAccountStatus.CONNECTING,
             ),
         )
@@ -69,7 +69,7 @@ class GalleryUiStateFactoryTest {
     fun `Proton trash does not claim to be empty before metadata loads`() {
         val state = factory.create(
             GalleryUiInputs(
-                destination = GalleryDestination.Trash(PhotoSource.PROTON),
+                destination = GalleryDestination.Trash,
                 protonAccountStatus = ProtonAccountStatus.CONNECTED,
                 protonTrash = ProtonTrashState(syncing = true),
             ),
@@ -85,7 +85,7 @@ class GalleryUiStateFactoryTest {
     fun `loaded empty Proton trash shows its empty state`() {
         val state = factory.create(
             GalleryUiInputs(
-                destination = GalleryDestination.Trash(PhotoSource.PROTON),
+                destination = GalleryDestination.Trash,
                 protonAccountStatus = ProtonAccountStatus.CONNECTED,
                 protonTrash = ProtonTrashState(hasLoaded = true),
             ),
@@ -120,15 +120,14 @@ class GalleryUiStateFactoryTest {
         )
 
         assertNull(state.emptyState)
-        assertEquals(listOf("media-types", "device", "trash"), state.librarySectionKeys())
+        assertEquals(listOf("media-types", "trash"), state.librarySectionKeys())
     }
 
     @Test
-    fun `library lists Proton media types, device folders and trash when connected`() {
+    fun `library lists media types and trash when connected`() {
         val state = factory.create(
             GalleryUiInputs(
                 destination = GalleryDestination.Library,
-                hasDeviceAccess = true,
                 protonAccountStatus = ProtonAccountStatus.CONNECTED,
                 protonAlbums = ProtonAlbumsState(hasLoaded = true),
             ),
@@ -136,58 +135,28 @@ class GalleryUiStateFactoryTest {
 
         val sections = (state.content as GalleryContent.Library).sections.associateBy { it.key }
         assertEquals(
-            ProtonMediaTag.entries.map { GalleryDestination.ProtonTag(it) },
+            ProtonMediaTag.entries.map { GalleryDestination.Tag(it) },
             sections.getValue("media-types").openedDestinations(),
         )
-        assertEquals(
-            DeviceCollection.entries.map { GalleryDestination.Device(it) },
-            sections.getValue("device").openedDestinations(),
-        )
-        assertEquals(
-            listOf(GalleryDestination.Trash(PhotoSource.PROTON), GalleryDestination.Trash(PhotoSource.DEVICE)),
-            sections.getValue("trash").openedDestinations(),
-        )
+        assertEquals(listOf(GalleryDestination.Trash), sections.getValue("trash").openedDestinations())
     }
 
     @Test
-    fun `library offers connect and access prompts when nothing is available`() {
+    fun `library offers only a connect prompt when disconnected`() {
         val state = factory.create(
             GalleryUiInputs(
                 destination = GalleryDestination.Library,
-                hasDeviceAccess = false,
-                supportsDeviceTrash = false,
                 protonAccountStatus = ProtonAccountStatus.DISCONNECTED,
             ),
         )
 
-        assertEquals(listOf("proton", "device"), state.librarySectionKeys())
+        assertEquals(listOf("proton"), state.librarySectionKeys())
         val actions = (state.content as GalleryContent.Library).sections
             .flatMap { it.items }
             .filterIsInstance<LibraryItem.Entry>()
             .map { it.action }
-        assertEquals(
-            listOf(
-                LibraryAction.Request(GalleryEmptyAction.CONNECT_PROTON),
-                LibraryAction.Request(GalleryEmptyAction.REQUEST_DEVICE_ACCESS),
-            ),
-            actions,
-        )
+        assertEquals(listOf(LibraryAction.Request(GalleryEmptyAction.CONNECT_PROTON)), actions)
         assertTrue(state.statusText.contains(R.string.proton_not_connected.toString()))
-    }
-
-    @Test
-    fun `library opens device trash when Proton is disconnected`() {
-        val state = factory.create(
-            GalleryUiInputs(
-                destination = GalleryDestination.Library,
-                hasDeviceAccess = true,
-                supportsDeviceTrash = true,
-                protonAccountStatus = ProtonAccountStatus.DISCONNECTED,
-            ),
-        )
-
-        val trash = (state.content as GalleryContent.Library).sections.single { it.key == "trash" }
-        assertEquals(listOf(GalleryDestination.Trash(PhotoSource.DEVICE)), trash.openedDestinations())
     }
 
     @Test
@@ -209,13 +178,11 @@ class GalleryUiStateFactoryTest {
     fun `every destination carries a title`() {
         val album = ProtonAlbumReference("album", "Trip")
         val titles = listOf(
-            GalleryDestination.ProtonTimeline to R.string.photos.toString(),
-            GalleryDestination.Device(DeviceCollection.SCREENSHOTS) to R.string.collection_screenshots.toString(),
-            GalleryDestination.ProtonTag(ProtonMediaTag.VIDEOS) to R.string.proton_tag_videos.toString(),
+            GalleryDestination.Timeline to R.string.photos.toString(),
+            GalleryDestination.Tag(ProtonMediaTag.VIDEOS) to R.string.proton_tag_videos.toString(),
             GalleryDestination.Library to R.string.library.toString(),
-            GalleryDestination.ProtonAlbumPhotos(album) to "Trip",
-            GalleryDestination.Trash(PhotoSource.DEVICE) to R.string.device_trash.toString(),
-            GalleryDestination.Trash(PhotoSource.PROTON) to R.string.proton_trash.toString(),
+            GalleryDestination.AlbumPhotos(album) to "Trip",
+            GalleryDestination.Trash to R.string.trash.toString(),
         )
 
         titles.forEach { (destination, expected) ->
@@ -227,7 +194,7 @@ class GalleryUiStateFactoryTest {
     fun `trash does not show albums metadata activity`() {
         val state = factory.create(
             GalleryUiInputs(
-                destination = GalleryDestination.Trash(PhotoSource.PROTON),
+                destination = GalleryDestination.Trash,
                 protonAccountStatus = ProtonAccountStatus.CONNECTED,
                 protonAlbums = ProtonAlbumsState(syncing = true),
                 protonTrash = ProtonTrashState(hasLoaded = true),
@@ -242,7 +209,7 @@ class GalleryUiStateFactoryTest {
     fun `timeline does not show trash metadata activity`() {
         val state = factory.create(
             GalleryUiInputs(
-                destination = GalleryDestination.ProtonTimeline,
+                destination = GalleryDestination.Timeline,
                 protonAccountStatus = ProtonAccountStatus.CONNECTED,
                 protonGallery = ProtonGalleryState(hasLoaded = true),
                 protonTrash = ProtonTrashState(syncing = true),
@@ -257,7 +224,7 @@ class GalleryUiStateFactoryTest {
     fun `cached timeline background refresh is visually silent`() {
         val state = factory.create(
             GalleryUiInputs(
-                destination = GalleryDestination.ProtonTimeline,
+                destination = GalleryDestination.Timeline,
                 protonAccountStatus = ProtonAccountStatus.CONNECTED,
                 protonGallery = ProtonGalleryState(hasLoaded = true, syncing = true),
             ),
@@ -285,7 +252,7 @@ class GalleryUiStateFactoryTest {
     fun `cached trash background refresh is visually silent`() {
         val state = factory.create(
             GalleryUiInputs(
-                destination = GalleryDestination.Trash(PhotoSource.PROTON),
+                destination = GalleryDestination.Trash,
                 protonAccountStatus = ProtonAccountStatus.CONNECTED,
                 protonTrash = ProtonTrashState(hasLoaded = true, syncing = true),
             ),
@@ -325,7 +292,7 @@ class GalleryUiStateFactoryTest {
         val album = ProtonAlbumReference("album", "Trip")
         val state = factory.create(
             GalleryUiInputs(
-                destination = GalleryDestination.ProtonAlbumPhotos(album),
+                destination = GalleryDestination.AlbumPhotos(album),
                 protonAccountStatus = ProtonAccountStatus.CONNECTED,
                 protonAlbumPhotos = ProtonAlbumPhotosState(
                     albumUid = album.nodeUid,
@@ -345,7 +312,7 @@ class GalleryUiStateFactoryTest {
         val album = ProtonAlbumReference("album", "Trip")
         val state = factory.create(
             GalleryUiInputs(
-                destination = GalleryDestination.ProtonAlbumPhotos(album),
+                destination = GalleryDestination.AlbumPhotos(album),
                 protonAccountStatus = ProtonAccountStatus.CONNECTED,
                 protonGallery = ProtonGalleryState(
                     thumbnailWorkStatus = ProtonThumbnailWorkStatus.Running(1, 25),
@@ -372,7 +339,7 @@ class GalleryUiStateFactoryTest {
         val album = ProtonAlbumReference("album", "Trip")
         val state = factory.create(
             GalleryUiInputs(
-                destination = GalleryDestination.ProtonAlbumPhotos(album),
+                destination = GalleryDestination.AlbumPhotos(album),
                 protonAccountStatus = ProtonAccountStatus.CONNECTED,
                 protonAlbumPhotos = ProtonAlbumPhotosState(
                     albumUid = album.nodeUid,
@@ -390,7 +357,7 @@ class GalleryUiStateFactoryTest {
     fun `trash metadata is visible before its thumbnail loads`() {
         val state = factory.create(
             GalleryUiInputs(
-                destination = GalleryDestination.Trash(PhotoSource.PROTON),
+                destination = GalleryDestination.Trash,
                 protonAccountStatus = ProtonAccountStatus.CONNECTED,
                 protonTrash = ProtonTrashState(
                     photos = listOf(ProtonTrashPhoto("photo", 2, hasThumbnail = false)),
@@ -404,48 +371,10 @@ class GalleryUiStateFactoryTest {
     }
 
     @Test
-    fun `device destination filters the shared device snapshot by collection`() {
-        val camera = deviceAsset("camera", DeviceCollection.CAMERA)
-        val screenshot = deviceAsset("screenshot", DeviceCollection.SCREENSHOTS)
-
-        val state = factory.create(
-            GalleryUiInputs(
-                destination = GalleryDestination.Device(DeviceCollection.SCREENSHOTS),
-                hasDeviceAccess = true,
-                devicePhotos = GallerySourceSnapshot(
-                    items = listOf(camera, screenshot),
-                    hasLoaded = true,
-                ),
-            ),
-        )
-
-        assertEquals(listOf(screenshot), state.visibleAssets)
-    }
-
-    @Test
-    fun `device trash exposes delete all only after content is available`() {
-        val trashedPhoto = deviceAsset("trashed", DeviceCollection.CAMERA, isTrashed = true)
-
-        val state = factory.create(
-            GalleryUiInputs(
-                destination = GalleryDestination.Trash(PhotoSource.DEVICE),
-                hasDeviceAccess = true,
-                deviceTrash = GallerySourceSnapshot(
-                    items = listOf(trashedPhoto),
-                    hasLoaded = true,
-                ),
-            ),
-        )
-
-        assertTrue(state.showDeleteAll)
-        assertEquals(listOf(trashedPhoto), state.visibleAssets)
-    }
-
-    @Test
     fun `Proton timeline maps remote photos into gallery assets`() {
         val state = factory.create(
             GalleryUiInputs(
-                destination = GalleryDestination.ProtonTimeline,
+                destination = GalleryDestination.Timeline,
                 protonAccountStatus = ProtonAccountStatus.CONNECTED,
                 protonGallery = ProtonGalleryState(
                     photos = listOf(ProtonGalleryPhoto("node", 42, hasThumbnail = true)),
@@ -455,14 +384,13 @@ class GalleryUiStateFactoryTest {
         )
 
         assertEquals("proton:node", state.visibleAssets.single().stableId)
-        assertTrue(state.visibleAssets.single().isStoredInProton)
     }
 
     @Test
     fun `background worker with no pending thumbnails uses the normal count`() {
         val state = factory.create(
             GalleryUiInputs(
-                destination = GalleryDestination.ProtonTimeline,
+                destination = GalleryDestination.Timeline,
                 protonAccountStatus = ProtonAccountStatus.CONNECTED,
                 protonGallery = ProtonGalleryState(
                     hasLoaded = true,
@@ -480,7 +408,7 @@ class GalleryUiStateFactoryTest {
     fun `background Proton thumbnail sync reports progress without refresh indicator`() {
         val state = factory.create(
             GalleryUiInputs(
-                destination = GalleryDestination.ProtonTimeline,
+                destination = GalleryDestination.Timeline,
                 protonAccountStatus = ProtonAccountStatus.CONNECTED,
                 protonGallery = ProtonGalleryState(
                     photos = listOf(
@@ -526,7 +454,7 @@ class GalleryUiStateFactoryTest {
     fun `trash reports trash thumbnail progress rather than timeline progress`() {
         val state = factory.create(
             GalleryUiInputs(
-                destination = GalleryDestination.Trash(PhotoSource.PROTON),
+                destination = GalleryDestination.Trash,
                 protonAccountStatus = ProtonAccountStatus.CONNECTED,
                 protonGallery = ProtonGalleryState(
                     photos = listOf(ProtonGalleryPhoto("timeline", 1, hasThumbnail = false)),
@@ -550,7 +478,7 @@ class GalleryUiStateFactoryTest {
     fun `initial Proton metadata sync does not display refresh indicator`() {
         val state = factory.create(
             GalleryUiInputs(
-                destination = GalleryDestination.ProtonTimeline,
+                destination = GalleryDestination.Timeline,
                 protonAccountStatus = ProtonAccountStatus.CONNECTED,
                 protonGallery = ProtonGalleryState(syncing = true),
             ),
@@ -564,7 +492,7 @@ class GalleryUiStateFactoryTest {
     fun `manual refresh displays the refresh state and metadata status`() {
         val state = factory.create(
             GalleryUiInputs(
-                destination = GalleryDestination.ProtonTimeline,
+                destination = GalleryDestination.Timeline,
                 protonAccountStatus = ProtonAccountStatus.CONNECTED,
                 protonGallery = ProtonGalleryState(hasLoaded = true, syncing = true),
                 isRefreshing = true,
@@ -579,7 +507,7 @@ class GalleryUiStateFactoryTest {
     fun `thumbnail retry keeps durable readiness visible`() {
         val state = factory.create(
             GalleryUiInputs(
-                destination = GalleryDestination.ProtonTimeline,
+                destination = GalleryDestination.Timeline,
                 protonAccountStatus = ProtonAccountStatus.CONNECTED,
                 protonGallery = ProtonGalleryState(
                     photos = listOf(ProtonGalleryPhoto("pending", 42, hasThumbnail = false)),
@@ -601,7 +529,7 @@ class GalleryUiStateFactoryTest {
     fun `stopped thumbnail work is silent`() {
         val state = factory.create(
             GalleryUiInputs(
-                destination = GalleryDestination.ProtonTimeline,
+                destination = GalleryDestination.Timeline,
                 protonAccountStatus = ProtonAccountStatus.CONNECTED,
                 protonGallery = ProtonGalleryState(
                     hasLoaded = true,
@@ -623,7 +551,7 @@ class GalleryUiStateFactoryTest {
         val video = ProtonGalleryPhoto("volume~video", 42, hasThumbnail = true)
         val state = factory.create(
             GalleryUiInputs(
-                destination = GalleryDestination.ProtonTag(ProtonMediaTag.VIDEOS),
+                destination = GalleryDestination.Tag(ProtonMediaTag.VIDEOS),
                 protonAccountStatus = ProtonAccountStatus.CONNECTED,
                 protonGallery = ProtonGalleryState(
                     photos = listOf(video, ProtonGalleryPhoto("volume~image", 41, true)),
@@ -648,18 +576,4 @@ class GalleryUiStateFactoryTest {
         .filterIsInstance<LibraryItem.Entry>()
         .map { (it.action as LibraryAction.Open).destination }
 
-    private fun deviceAsset(
-        id: String,
-        collection: DeviceCollection,
-        isTrashed: Boolean = false,
-    ) = GalleryAsset.device(
-        stableId = id,
-        capturedAtEpochMillis = 1,
-        displayName = "$id.jpg",
-        uri = "content://photos/$id",
-        collection = collection,
-        sizeBytes = 100,
-        modifiedAtEpochMillis = 2,
-        isTrashed = isTrashed,
-    )
 }

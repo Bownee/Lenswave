@@ -33,7 +33,6 @@ sealed interface LibraryAction {
 
 enum class GalleryEmptyAction {
     CONNECT_PROTON,
-    REQUEST_DEVICE_ACCESS,
 }
 
 data class GalleryEmptyState(
@@ -44,7 +43,7 @@ data class GalleryEmptyState(
 )
 
 data class GalleryUiState(
-    val destination: GalleryDestination = GalleryDestination.ProtonTimeline,
+    val destination: GalleryDestination = GalleryDestination.Timeline,
     val title: String = "",
     val content: GalleryContent = GalleryContent.Photos(emptyList()),
     val statusText: String = "",

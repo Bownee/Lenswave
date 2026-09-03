@@ -1,14 +1,11 @@
 package com.bownee.lenswave.metadata
 
-import android.Manifest
 import android.content.Context
-import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.provider.MediaStore
 import android.provider.OpenableColumns
 import androidx.exifinterface.media.ExifInterface
-import com.bownee.lenswave.gallery.PhotoSource
 import java.io.File
 import java.text.DateFormat
 import java.util.Date
@@ -33,26 +30,14 @@ data class PhotoLocation(
     fun coordinateText(): String = String.format(Locale.US, "%.5f, %.5f", latitude, longitude)
 }
 
-fun requiresMediaLocationPermission(
-    context: Context,
-    uri: Uri,
-    source: PhotoSource,
-): Boolean = source == PhotoSource.DEVICE &&
-    uri.scheme == "content" &&
-    uri.authority == MediaStore.AUTHORITY &&
-    context.checkSelfPermission(Manifest.permission.ACCESS_MEDIA_LOCATION) != PackageManager.PERMISSION_GRANTED
-
 class PhotoMetadataReader @Inject constructor() {
     fun read(
         context: Context,
         uri: Uri,
-        source: PhotoSource,
         fallbackName: String,
         fallbackTimestamp: Long,
-        alsoInProton: Boolean = false,
     ): List<PhotoMetadataItem> {
         val resolver = context.contentResolver
-        val metadataUri = originalMetadataUri(context, uri, source)
         var displayName = fallbackName
         var size = 0L
         var capturedAt = fallbackTimestamp
@@ -82,16 +67,14 @@ class PhotoMetadataReader @Inject constructor() {
             }
         }
         if (uri.scheme == "file") {
-            val file = File(requireNotNull(uri.path))
-            if (source == PhotoSource.DEVICE) displayName = displayName.ifBlank { file.name }
-            size = size.takeIf { it > 0 } ?: file.length()
+            size = size.takeIf { it > 0 } ?: File(requireNotNull(uri.path)).length()
         }
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         runCatching {
-            resolver.openInputStream(metadataUri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+            resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
         }
         val exif = runCatching {
-            resolver.openFileDescriptor(metadataUri, "r")?.use { descriptor ->
+            resolver.openFileDescriptor(uri, "r")?.use { descriptor ->
                 ExifSnapshot.from(ExifInterface(descriptor.fileDescriptor))
             }
         }.getOrNull()
@@ -103,12 +86,6 @@ class PhotoMetadataReader @Inject constructor() {
         val height = if (rotated) rawWidth else rawHeight
 
         return buildList {
-            val sourceLabel = when {
-                source == PhotoSource.PROTON -> "Proton Photos"
-                alsoInProton -> "Device · Backed up to Proton"
-                else -> "Device"
-            }
-            add(PhotoMetadataItem("Source", sourceLabel))
             displayName.takeIf(String::isNotBlank)?.let { add(PhotoMetadataItem("File name", it)) }
             capturedAt.takeIf { it > 0 }?.let {
                 add(PhotoMetadataItem("Captured", DateFormat.getDateTimeInstance().format(Date(it))))
@@ -137,15 +114,6 @@ class PhotoMetadataReader @Inject constructor() {
             }
             exif?.gpsDirection.takeIfNotBlank()?.let { add(PhotoMetadataItem("GPS direction", "$it°")) }
         }
-    }
-
-    private fun originalMetadataUri(context: Context, uri: Uri, source: PhotoSource): Uri {
-        if (source != PhotoSource.DEVICE ||
-            uri.scheme != "content" ||
-            uri.authority != MediaStore.AUTHORITY ||
-            context.checkSelfPermission(Manifest.permission.ACCESS_MEDIA_LOCATION) != PackageManager.PERMISSION_GRANTED
-        ) return uri
-        return runCatching { MediaStore.setRequireOriginal(uri) }.getOrDefault(uri)
     }
 
     private fun formatBytes(bytes: Long): String {

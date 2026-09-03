@@ -53,7 +53,6 @@ internal class GalleryScreen(
     private val selectionCount: TextView
     private val selectionDeleteButton: Button
     val settingsButton: ImageButton
-    val refreshButton: ImageButton
     private val backButton: ImageButton
     val trashDeleteAllButton: Button
     private val photosTabButton: Button
@@ -73,7 +72,6 @@ internal class GalleryScreen(
         pageTitle = header.pageTitle
         status = header.status
         settingsButton = header.settingsButton
-        refreshButton = header.refreshButton
         backButton = header.backButton
         trashDeleteAllButton = header.trashDeleteAllButton
         emptyPanel = header.emptyPanel
@@ -84,7 +82,6 @@ internal class GalleryScreen(
         adapter = GalleryListAdapter(
             context = activity,
             thumbnailLoader = GalleryThumbnailLoader(
-                context = activity,
                 scope = scope,
                 protonRepository = repository,
                 protonUserId = currentUserId,
@@ -181,8 +178,6 @@ internal class GalleryScreen(
 
     fun renderHeader(statusText: String, showDeleteAll: Boolean, refreshing: Boolean) {
         status.text = statusText
-        refreshButton.isEnabled = !refreshing
-        refreshButton.alpha = if (refreshing) 0.5f else 1f
         trashDeleteAllButton.visibility = if (showDeleteAll) View.VISIBLE else View.GONE
         trashDeleteAllButton.isEnabled = !refreshing
         trashDeleteAllButton.alpha = if (refreshing) 0.5f else 1f
@@ -316,17 +311,6 @@ internal class GalleryScreen(
             setPadding(activity.dp(10), activity.dp(10), activity.dp(10), activity.dp(10))
             setOnClickListener { actions.onSettings() }
         }
-        val refresh = ImageButton(activity).apply {
-            setImageResource(R.drawable.ic_refresh)
-            imageTintList = ColorStateList.valueOf(UiStyle.text)
-            background = UiStyle.rounded(activity, UiStyle.surface, 16)
-            contentDescription = activity.getString(R.string.refresh)
-            setPadding(activity.dp(10), activity.dp(10), activity.dp(10), activity.dp(10))
-            setOnClickListener { actions.onRefresh() }
-        }
-        titleRow.addView(refresh, LinearLayout.LayoutParams(activity.dp(48), activity.dp(48)).apply {
-            marginEnd = activity.dp(8)
-        })
         titleRow.addView(settings, LinearLayout.LayoutParams(activity.dp(48), activity.dp(48)))
         container.addView(titleRow, matchWrap())
 
@@ -368,7 +352,6 @@ internal class GalleryScreen(
             title,
             status,
             settings,
-            refresh,
             back,
             deleteAll,
             empty,
@@ -540,7 +523,6 @@ internal class GalleryScreen(
         val onAlbumClicked: (ProtonAlbum) -> Unit,
         val onLibraryAction: (LibraryAction) -> Unit,
         val onSelectionChanged: (List<GalleryAsset>) -> Unit,
-        val onRefresh: () -> Unit,
         val onBack: () -> Unit,
         val onSettings: () -> Unit,
         val onDeleteAllTrash: () -> Unit,
@@ -561,7 +543,6 @@ internal class GalleryScreen(
         val pageTitle: TextView,
         val status: TextView,
         val settingsButton: ImageButton,
-        val refreshButton: ImageButton,
         val backButton: ImageButton,
         val trashDeleteAllButton: Button,
         val empty: EmptyPanel,

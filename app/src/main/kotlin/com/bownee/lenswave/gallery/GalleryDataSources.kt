@@ -14,11 +14,6 @@ import dagger.hilt.components.SingletonComponent
 import kotlinx.coroutines.flow.StateFlow
 import me.proton.core.domain.entity.UserId
 
-interface DevicePhotoSource {
-    suspend fun loadPhotos(): List<GalleryAsset>
-    suspend fun loadTrashedPhotos(): List<GalleryAsset>
-}
-
 interface ProtonGalleryReader {
     val state: StateFlow<ProtonGalleryState>
     val albumsState: StateFlow<ProtonAlbumsState>
@@ -45,7 +40,6 @@ interface ProtonSessionLifecycle {
 @Module
 @InstallIn(SingletonComponent::class)
 internal abstract class GalleryDataModule {
-    @Binds abstract fun bindDevicePhotoSource(implementation: DevicePhotoRepository): DevicePhotoSource
     @Binds abstract fun bindGalleryNavigationStore(
         implementation: SharedPreferencesGalleryNavigationStore,
     ): GalleryNavigationStore

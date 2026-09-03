@@ -1,6 +1,7 @@
 package com.bownee.lenswave.gallery
 
 import com.bownee.lenswave.proton.ProtonAlbumReference
+import com.bownee.lenswave.proton.ProtonMediaTag
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -9,9 +10,9 @@ class GalleryScrollPositionStoreTest {
     @Test
     fun destinationsKeepIndependentScrollPositions() {
         val store = GalleryScrollPositionStore()
-        val timeline = GalleryDestination.ProtonTimeline
+        val timeline = GalleryDestination.Timeline
         val albums = GalleryDestination.Library
-        val trash = GalleryDestination.Trash(PhotoSource.PROTON)
+        val trash = GalleryDestination.Trash
 
         store.save(timeline, GalleryScrollPosition(42, -17))
         store.save(albums, GalleryScrollPosition(8, -3))
@@ -20,14 +21,14 @@ class GalleryScrollPositionStoreTest {
         assertEquals(GalleryScrollPosition(42, -17), store.positionFor(timeline))
         assertEquals(GalleryScrollPosition(8, -3), store.positionFor(albums))
         assertEquals(GalleryScrollPosition(19, 4), store.positionFor(trash))
-        assertNull(store.positionFor(GalleryDestination.Device(DeviceCollection.CAMERA)))
+        assertNull(store.positionFor(GalleryDestination.Tag(ProtonMediaTag.VIDEOS)))
     }
 
     @Test
     fun individualAlbumsKeepIndependentScrollPositions() {
         val store = GalleryScrollPositionStore()
-        val first = GalleryDestination.ProtonAlbumPhotos(ProtonAlbumReference("first", "First"))
-        val second = GalleryDestination.ProtonAlbumPhotos(ProtonAlbumReference("second", "Second"))
+        val first = GalleryDestination.AlbumPhotos(ProtonAlbumReference("first", "First"))
+        val second = GalleryDestination.AlbumPhotos(ProtonAlbumReference("second", "Second"))
 
         store.save(first, GalleryScrollPosition(12, -9))
         store.save(second, GalleryScrollPosition(27, -2))
