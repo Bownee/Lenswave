@@ -76,21 +76,13 @@ internal class ProtonThumbnailStore @Inject constructor(
         }
     }
 
-    fun trim(userId: String, limitBytes: Long, ttlMillis: Long) {
+    fun count(userId: String): Int = directory(userId).listFiles()
+        ?.count { file -> file.isFile && file.extension == "thumb" && file.length() > 0L }
+        ?: 0
+
+    fun maintain(userId: String) {
         val directory = directory(userId)
-        directory.listFiles()
-            ?.filter(File::isFile)
-            ?.filter { file -> isExpired(file, ttlMillis) }
-            ?.forEach(File::delete)
-        val remaining = directory.listFiles()?.filter(File::isFile)
-            ?.sortedBy(File::lastModified)
-            .orEmpty()
-        var totalBytes = remaining.sumOf(File::length)
-        for (file in remaining) {
-            if (totalBytes <= limitBytes) break
-            val length = file.length()
-            if (file.delete()) totalBytes -= length
-        }
+        directory.listFiles()?.filter(::isStalePartial)?.forEach(File::delete)
         pruneMemoryCache(userId)
     }
 

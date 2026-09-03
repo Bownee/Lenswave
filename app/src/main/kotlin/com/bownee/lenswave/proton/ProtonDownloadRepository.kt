@@ -86,6 +86,8 @@ internal class ProtonDownloadRepository @Inject constructor(
         cache.removeThumbnail(userId.id, nodeUid)
     }
 
+    internal fun storedThumbnailCount(userId: UserId): Int = cache.thumbnailCount(userId.id)
+
     suspend fun findPhotoDuplicates(
         userId: UserId,
         name: String,

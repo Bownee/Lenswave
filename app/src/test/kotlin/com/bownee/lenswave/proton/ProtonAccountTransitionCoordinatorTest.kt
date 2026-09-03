@@ -74,6 +74,14 @@ class ProtonAccountTransitionCoordinatorTest {
             events += "enqueue:${userId.id}"
         }
 
+        override suspend fun resume(userId: UserId) {
+            events += "resume:${userId.id}"
+        }
+
+        override suspend fun restart(userId: UserId) {
+            events += "restart:${userId.id}"
+        }
+
         override suspend fun cancelAndAwait(userId: UserId) {
             events += "cancel:${userId.id}"
         }

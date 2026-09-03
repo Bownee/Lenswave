@@ -22,20 +22,21 @@ class ProtonThumbnailNotificationProgressTest {
     }
 
     @Test
-    fun trackerStartsDeterminateAndAdvancesFromThePendingQueue() {
-        val tracker = ProtonThumbnailNotificationProgressTracker(initialRemaining = 100)
+    fun workProgressUsesThePersistentStoredCount() {
+        val progress = ProtonThumbnailWorkProgress(stored = 800, pending = 1_191)
 
-        assertEquals(ProtonThumbnailNotificationProgress(0, 100), tracker.current)
-        assertEquals(ProtonThumbnailNotificationProgress(4, 100), tracker.update(96))
-        assertEquals(ProtonThumbnailNotificationProgress(100, 100), tracker.update(0))
+        assertEquals(
+            ProtonThumbnailNotificationProgress(downloaded = 800, total = 1_991),
+            progress.notificationProgress(),
+        )
+        assertEquals(1_191, progress.notificationProgress().remaining)
     }
 
     @Test
-    fun trackerExpandsTheTotalWhenNewWorkIsQueued() {
-        val tracker = ProtonThumbnailNotificationProgressTracker(initialRemaining = 10)
+    fun storedProgressContinuesAcrossWorkerRestarts() {
+        val beforeRestart = ProtonThumbnailWorkProgress(stored = 800, pending = 1_191)
+        val afterRestart = ProtonThumbnailWorkProgress(stored = 800, pending = 1_191)
 
-        tracker.update(6)
-
-        assertEquals(ProtonThumbnailNotificationProgress(4, 13), tracker.update(9))
+        assertEquals(beforeRestart.notificationProgress(), afterRestart.notificationProgress())
     }
 }

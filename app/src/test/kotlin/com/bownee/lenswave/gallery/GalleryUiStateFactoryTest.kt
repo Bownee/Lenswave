@@ -279,7 +279,7 @@ class GalleryUiStateFactoryTest {
     }
 
     @Test
-    fun `paused album thumbnail hydration is silent`() {
+    fun `paused album thumbnail hydration still reports durable readiness`() {
         val album = ProtonAlbumReference("album", "Trip")
         val state = factory.create(
             GalleryUiInputs(
@@ -294,7 +294,7 @@ class GalleryUiStateFactoryTest {
             ),
         )
 
-        assertFalse(state.statusText.contains(R.string.downloading_thumbnails_progress.toString()))
+        assertTrue(state.statusText.contains(R.string.downloading_thumbnails_progress.toString()))
     }
 
     @Test
@@ -487,7 +487,7 @@ class GalleryUiStateFactoryTest {
     }
 
     @Test
-    fun `thumbnail retry is silent`() {
+    fun `thumbnail retry keeps durable readiness visible`() {
         val state = factory.create(
             GalleryUiInputs(
                 destination = GalleryDestination.ProtonTimeline,
@@ -505,7 +505,7 @@ class GalleryUiStateFactoryTest {
         )
 
         assertFalse(state.isRefreshing)
-        assertFalse(state.statusText.contains(R.string.downloading_thumbnails_progress.toString()))
+        assertTrue(state.statusText.contains(R.string.downloading_thumbnails_progress.toString()))
     }
 
     @Test

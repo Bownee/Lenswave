@@ -187,7 +187,9 @@ class GalleryViewModel @Inject internal constructor(
     fun resumeThumbnailDownloads() {
         val userId = currentUserId ?: return
         if (!destination.usesProton()) return
-        protonThumbnailScheduler.enqueue(userId)
+        viewModelScope.launch(Dispatchers.IO) {
+            protonThumbnailScheduler.resume(userId)
+        }
     }
 
     fun disconnectProton() {
@@ -274,7 +276,10 @@ class GalleryViewModel @Inject internal constructor(
             saveDestination()
         }
         publishUiState()
-        if (userChanged && nextUserId != null && requestMissingProtonMetadata(nextUserId)) return
+        if (userChanged && nextUserId != null) {
+            if (requestMissingProtonMetadata(nextUserId)) return
+            protonThumbnailScheduler.restart(nextUserId)
+        }
         requestRefresh(manual = false)
     }
 
@@ -301,7 +306,7 @@ class GalleryViewModel @Inject internal constructor(
             }
             if (currentUserId == userId) {
                 prioritizeThumbnailSection(userId, destination)
-                protonThumbnailScheduler.enqueue(userId)
+                protonThumbnailScheduler.restart(userId)
             }
         }
         return true

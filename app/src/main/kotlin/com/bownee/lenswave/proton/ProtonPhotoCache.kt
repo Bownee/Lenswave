@@ -45,6 +45,8 @@ internal class ProtonPhotoCache @Inject constructor(
         thumbnails.remove(userId, nodeUid)
     }
 
+    override fun thumbnailCount(userId: String): Int = thumbnails.count(userId)
+
     override fun readIndex(userId: String): List<ProtonGalleryPhoto> {
         return readPhotoIndex(userId, indexFile(userId))
     }
@@ -279,16 +281,8 @@ internal class ProtonPhotoCache @Inject constructor(
 
     override fun trimUser(userId: String) {
         trimDirectory(originalDirectory(userId), ORIGINAL_CACHE_LIMIT_BYTES, ORIGINAL_TTL_MILLIS)
-        trimThumbnails(userId)
+        thumbnails.maintain(userId)
         trimDirectory(decryptedDirectory(userId), DECRYPTED_CACHE_LIMIT_BYTES, DECRYPTED_TTL_MILLIS)
-    }
-
-    internal fun trimThumbnails(
-        userId: String,
-        limitBytes: Long = THUMBNAIL_CACHE_LIMIT_BYTES,
-        ttlMillis: Long = THUMBNAIL_TTL_MILLIS,
-    ) {
-        thumbnails.trim(userId, limitBytes, ttlMillis)
     }
 
     override fun reconcilePhotos(
@@ -297,15 +291,15 @@ internal class ProtonPhotoCache @Inject constructor(
         remoteNodeUids: Collection<String>,
     ): ProtonPhotoChanges {
         val changes = ProtonPhotoReconciliation.compare(cachedNodeUids, remoteNodeUids)
-        val albumNodeUids = albumReferencedNodeUids(userId)
+        val retainedNodeUids = nonTimelineReferencedNodeUids(userId)
         changes.removedNodeUids.forEach { nodeUid ->
-            if (nodeUid in albumNodeUids) return@forEach
+            if (nodeUid in retainedNodeUids) return@forEach
             thumbnails.remove(userId, nodeUid)
             originalFile(userId, nodeUid).delete()
             decryptedOriginalFile(userId, nodeUid).delete()
         }
-        val validNames = (remoteNodeUids + albumNodeUids).mapTo(mutableSetOf(), ::safeName)
-        thumbnails.removeUnreferenced(userId, remoteNodeUids + albumNodeUids)
+        val validNames = (remoteNodeUids + retainedNodeUids).mapTo(mutableSetOf(), ::safeName)
+        thumbnails.removeUnreferenced(userId, remoteNodeUids + retainedNodeUids)
         originalDirectory(userId).listFiles()?.forEach { file ->
             if (isStalePartial(file) || file.extension != "part" && file.nameWithoutExtension !in validNames) {
                 file.delete()
@@ -429,11 +423,12 @@ internal class ProtonPhotoCache @Inject constructor(
         writeAtomically(userId, target, array.toString(), "Could not commit Proton Photos index")
     }
 
-    private fun albumReferencedNodeUids(userId: String): Set<String> = buildSet {
+    private fun nonTimelineReferencedNodeUids(userId: String): Set<String> = buildSet {
         readAlbums(userId).mapNotNullTo(this) { it.coverPhotoNodeUid }
         albumPhotosDirectory(userId).listFiles()
             ?.filter { it.extension == "json" }
             ?.forEach { file -> readPhotoIndex(userId, file).mapTo(this, ProtonGalleryPhoto::nodeUid) }
+        readTrash(userId).mapTo(this, ProtonTrashPhoto::nodeUid)
     }
 
     private fun writeAtomically(userId: String, target: File, contents: String, failureMessage: String) {
@@ -476,10 +471,8 @@ internal class ProtonPhotoCache @Inject constructor(
     private companion object {
         const val ORIGINAL_CACHE_LIMIT_BYTES = 256L * 1024L * 1024L
         const val DECRYPTED_CACHE_LIMIT_BYTES = 64L * 1024L * 1024L
-        const val THUMBNAIL_CACHE_LIMIT_BYTES = 96L * 1024L * 1024L
         const val ORIGINAL_TTL_MILLIS = 60L * 60L * 1_000L
         const val DECRYPTED_TTL_MILLIS = 30L * 60L * 1_000L
-        const val THUMBNAIL_TTL_MILLIS = 7L * 24L * 60L * 60L * 1_000L
         const val STALE_PART_TTL_MILLIS = 24L * 60L * 60L * 1_000L
     }
 }

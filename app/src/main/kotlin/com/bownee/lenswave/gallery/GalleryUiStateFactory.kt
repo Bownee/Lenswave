@@ -4,7 +4,6 @@ import com.bownee.lenswave.R
 import com.bownee.lenswave.proton.ProtonAlbumPhotosState
 import com.bownee.lenswave.proton.ProtonAlbumsState
 import com.bownee.lenswave.proton.ProtonGalleryState
-import com.bownee.lenswave.proton.ProtonThumbnailWorkStatus
 import com.bownee.lenswave.proton.ProtonTrashState
 import me.proton.core.domain.entity.UserId
 
@@ -84,7 +83,6 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
                     text.string(R.string.loading_metadata)
                 } else {
                     protonLoadingDetail(
-                        inputs,
                         ProtonThumbnailProgressCalculator.timeline(inputs.protonGallery.photos),
                     )
                 }
@@ -173,7 +171,6 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
             ) -> text.string(R.string.loading_metadata)
             inputs.protonGallery.errorMessage != null -> text.string(R.string.could_not_refresh)
             else -> protonLoadingDetail(
-                inputs,
                 ProtonThumbnailProgressCalculator.timeline(inputs.protonGallery.photos),
             ) ?: photoCountStatus(assets.size)
         }
@@ -202,7 +199,6 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
                 text.string(R.string.loading_metadata)
             state.errorMessage != null -> text.string(R.string.could_not_refresh)
             else -> protonLoadingDetail(
-                inputs,
                 ProtonThumbnailProgressCalculator.albumCovers(albums),
             ) ?: albumCountStatus(albums.size)
         }
@@ -235,7 +231,6 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
                 text.string(R.string.loading_metadata)
             albumState.errorMessage != null -> text.string(R.string.could_not_refresh)
             else -> protonLoadingDetail(
-                inputs,
                 ProtonThumbnailProgressCalculator.timeline(albumState.photos),
             ) ?: photoCountStatus(assets.size)
         }
@@ -308,7 +303,6 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
                 text.string(R.string.loading_metadata)
             state.errorMessage != null -> text.string(R.string.could_not_refresh)
             else -> protonLoadingDetail(
-                inputs,
                 ProtonThumbnailProgressCalculator.trash(state.photos),
             ) ?: photoCountStatus(assets.size)
         }
@@ -379,11 +373,7 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
         hasLoaded: Boolean,
     ): Boolean = syncing && (!hasLoaded || isRefreshing)
 
-    private fun protonLoadingDetail(
-        inputs: GalleryUiInputs,
-        progress: ProtonThumbnailProgress,
-    ): String? {
-        if (inputs.protonGallery.thumbnailWorkStatus !is ProtonThumbnailWorkStatus.Running) return null
+    private fun protonLoadingDetail(progress: ProtonThumbnailProgress): String? {
         if (progress.downloaded >= progress.total) return null
         return text.string(
             R.string.downloading_thumbnails_progress,

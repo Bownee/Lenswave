@@ -26,29 +26,21 @@ internal data class ProtonThumbnailNotificationProgress(
     }
 
     val isDeterminate: Boolean get() = total > 0
+    val remaining: Int get() = total - downloaded
 }
 
-internal class ProtonThumbnailNotificationProgressTracker(initialRemaining: Int) {
-    private var previousRemaining = initialRemaining
-    private var total = initialRemaining
-
+internal data class ProtonThumbnailWorkProgress(
+    val stored: Int,
+    val pending: Int,
+) {
     init {
-        require(initialRemaining > 0) { "Initial pending thumbnail count must be positive" }
+        require(stored >= 0) { "Stored thumbnail count cannot be negative" }
+        require(pending >= 0) { "Pending thumbnail count cannot be negative" }
     }
 
-    val current: ProtonThumbnailNotificationProgress
-        get() = progress(previousRemaining)
-
-    fun update(remaining: Int): ProtonThumbnailNotificationProgress {
-        require(remaining >= 0) { "Pending thumbnail count cannot be negative" }
-        if (remaining > previousRemaining) total += remaining - previousRemaining
-        previousRemaining = remaining
-        return progress(remaining)
-    }
-
-    private fun progress(remaining: Int) = ProtonThumbnailNotificationProgress(
-        downloaded = (total - remaining).coerceAtLeast(0),
-        total = total,
+    fun notificationProgress() = ProtonThumbnailNotificationProgress(
+        downloaded = stored,
+        total = stored + pending,
     )
 }
 
@@ -88,7 +80,7 @@ internal class ProtonThumbnailForegroundInfoFactory(
 
     private fun ProtonThumbnailNotificationProgress.contentText(): String =
         if (isDeterminate) {
-            context.getString(R.string.thumbnail_download_notification_progress, downloaded, total)
+            context.getString(R.string.thumbnail_download_notification_progress, downloaded, remaining)
         } else {
             context.getString(R.string.thumbnail_download_notification_detail)
         }

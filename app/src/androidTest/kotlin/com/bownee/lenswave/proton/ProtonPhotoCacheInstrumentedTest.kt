@@ -62,7 +62,7 @@ class ProtonPhotoCacheInstrumentedTest {
         }
     }
 
-    @Test fun thumbnailRetentionIsEnforcedDuringTheActiveSession() {
+    @Test fun thumbnailDatasetSurvivesMaintenanceAndAndroidCacheClearing() {
         val context = isolatedContext()
         val userId = "retention-${UUID.randomUUID()}"
         val clock = FakeClock(System.currentTimeMillis())
@@ -74,12 +74,15 @@ class ProtonPhotoCacheInstrumentedTest {
             clock.value += 60_000
             cache.writeThumbnail(userId, "current", thumbnail)
 
-            cache.trimThumbnails(userId, limitBytes = Long.MAX_VALUE, ttlMillis = 30_000)
-            assertFalse(cache.thumbnailExists(userId, "old"))
-            assertTrue(cache.thumbnailExists(userId, "current"))
+            clock.value += 8L * 24L * 60L * 60L * 1_000L
+            context.cacheDir.deleteRecursively()
+            context.cacheDir.mkdirs()
+            cache.trimUser(userId)
 
-            cache.trimThumbnails(userId, limitBytes = 1, ttlMillis = Long.MAX_VALUE)
-            assertFalse(cache.thumbnailExists(userId, "current"))
+            assertTrue(cache.thumbnailExists(userId, "old"))
+            assertTrue(cache.thumbnailExists(userId, "current"))
+            assertEquals(2, cache.thumbnailCount(userId))
+            assertTrue(cache.loadThumbnail(userId, "old") != null)
         } finally {
             cache.clearUser(userId)
             context.testRoot.deleteRecursively()

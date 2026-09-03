@@ -124,7 +124,7 @@ class ProtonPhotoGateway @Inject internal constructor(
 
     internal suspend fun downloadNextQueuedThumbnailBatch(
         userId: UserId,
-        onProgress: suspend (remaining: Int) -> Unit,
+        onProgress: suspend (ProtonThumbnailWorkProgress) -> Unit,
     ): ProtonThumbnailQueueStep =
         withContext(Dispatchers.IO) {
             sessionGuard.withActiveSession(userId) {
@@ -139,9 +139,16 @@ class ProtonPhotoGateway @Inject internal constructor(
             }
         }
 
-    internal suspend fun pendingThumbnailCount(userId: UserId): Int = withContext(Dispatchers.IO) {
-        sessionGuard.withActiveSession(userId) { thumbnailQueue.pendingCount(userId.id) }
-    }
+    internal suspend fun thumbnailWorkProgress(userId: UserId): ProtonThumbnailWorkProgress =
+        withContext(Dispatchers.IO) {
+            sessionGuard.withActiveSession(userId) { thumbnailWorkProgressInActiveSession(userId) }
+        }
+
+    private suspend fun thumbnailWorkProgressInActiveSession(userId: UserId) =
+        ProtonThumbnailWorkProgress(
+            stored = downloads.storedThumbnailCount(userId),
+            pending = thumbnailQueue.pendingCount(userId.id),
+        )
 
     internal suspend fun flushThumbnailQueue(userId: UserId) {
         thumbnailQueue.flush(userId.id)
@@ -225,7 +232,7 @@ class ProtonPhotoGateway @Inject internal constructor(
     private suspend fun processThumbnailBatch(
         userId: UserId,
         entries: List<ProtonThumbnailQueueEntry>,
-        onProgress: suspend (remaining: Int) -> Unit = {},
+        onProgress: suspend (ProtonThumbnailWorkProgress) -> Unit = {},
     ): ProtonThumbnailQueueStep {
         if (entries.isEmpty()) {
             return ProtonThumbnailQueueStep.Idle(thumbnailQueue.hasPending(userId.id))
@@ -236,7 +243,7 @@ class ProtonPhotoGateway @Inject internal constructor(
             val result = downloads.downloadThumbnails(userId, nodeUids) { progress ->
                 progressMutex.withLock {
                     settleThumbnailProgress(userId, progress)
-                    onProgress(thumbnailQueue.pendingCount(userId.id))
+                    onProgress(thumbnailWorkProgressInActiveSession(userId))
                 }
             }
             if (result.failures.isEmpty()) {
@@ -249,7 +256,7 @@ class ProtonPhotoGateway @Inject internal constructor(
             throw error
         } catch (_: Throwable) {
             thumbnailQueue.settle(userId.id, emptySet(), nodeUids.toSet())
-            onProgress(thumbnailQueue.pendingCount(userId.id))
+            onProgress(thumbnailWorkProgressInActiveSession(userId))
             ProtonThumbnailQueueStep.Failed
         }
     }

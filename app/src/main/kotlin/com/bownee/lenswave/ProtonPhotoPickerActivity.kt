@@ -36,7 +36,6 @@ import com.bownee.lenswave.gallery.toGalleryAsset
 import com.bownee.lenswave.proton.ProtonGalleryPhoto
 import com.bownee.lenswave.proton.ProtonGalleryState
 import com.bownee.lenswave.proton.ProtonThumbnailScheduler
-import com.bownee.lenswave.proton.ProtonThumbnailWorkStatus
 import com.bownee.lenswave.proton.ProtonAccountSessionManager
 import com.bownee.lenswave.proton.ProtonAccountSessionState
 import com.bownee.lenswave.proton.ProtonPhotoGateway
@@ -88,7 +87,9 @@ class ProtonPhotoPickerActivity : FragmentActivity() {
         grid.post {
             prioritizeVisibleThumbnails(grid.firstVisiblePosition, grid.childCount)
         }
-        currentUserId?.let(thumbnailScheduler::enqueue)
+        currentUserId?.let { userId ->
+            lifecycleScope.launch(Dispatchers.IO) { thumbnailScheduler.resume(userId) }
+        }
     }
 
     private fun configureWindow() {
@@ -216,8 +217,7 @@ class ProtonPhotoPickerActivity : FragmentActivity() {
             openingPhoto -> getString(R.string.downloading_full_resolution)
             state.syncing -> getString(R.string.loading_metadata)
             state.errorMessage != null -> getString(R.string.could_not_refresh_detail, state.errorMessage)
-            state.thumbnailWorkStatus is ProtonThumbnailWorkStatus.Running &&
-                thumbnailProgress.downloaded < thumbnailProgress.total -> getString(
+            thumbnailProgress.downloaded < thumbnailProgress.total -> getString(
                 R.string.downloading_thumbnails_progress,
                 thumbnailProgress.downloaded,
                 thumbnailProgress.total,
@@ -250,7 +250,7 @@ class ProtonPhotoPickerActivity : FragmentActivity() {
                 userId,
                 repository.state.value.photos.map(ProtonGalleryPhoto::nodeUid),
             )
-            thumbnailScheduler.enqueue(userId)
+            thumbnailScheduler.restart(userId)
         }
     }
 
