@@ -9,8 +9,8 @@ import android.content.pm.ServiceInfo
 import androidx.core.app.NotificationCompat
 import androidx.work.ForegroundInfo
 import androidx.work.WorkManager
-import com.bownee.lenswave.gallery.GalleryActivity
 import com.bownee.lenswave.R
+import com.bownee.lenswave.gallery.GalleryActivity
 import java.util.UUID
 
 internal data class ProtonThumbnailNotificationProgress(
@@ -38,39 +38,46 @@ internal data class ProtonThumbnailWorkProgress(
         require(pending >= 0) { "Pending thumbnail count cannot be negative" }
     }
 
-    fun notificationProgress() = ProtonThumbnailNotificationProgress(
-        downloaded = stored,
-        total = stored + pending,
-    )
+    fun notificationProgress() =
+        ProtonThumbnailNotificationProgress(
+            downloaded = stored,
+            total = stored + pending,
+        )
 }
 
 internal class ProtonThumbnailForegroundInfoFactory(
     private val context: Context,
 ) {
-    fun create(workerId: UUID, progress: ProtonThumbnailNotificationProgress): ForegroundInfo {
+    fun create(
+        workerId: UUID,
+        progress: ProtonThumbnailNotificationProgress,
+    ): ForegroundInfo {
         createNotificationChannel()
-        val openApp = PendingIntent.getActivity(
-            context,
-            OPEN_APP_REQUEST_CODE,
-            Intent(context, GalleryActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-            },
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
+        val openApp =
+            PendingIntent.getActivity(
+                context,
+                OPEN_APP_REQUEST_CODE,
+                Intent(context, GalleryActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                },
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
         val cancelWork = WorkManager.getInstance(context).createCancelPendingIntent(workerId)
-        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_cloud)
-            .setContentTitle(context.getString(R.string.thumbnail_download_notification_title))
-            .setContentText(progress.contentText())
-            .setContentIntent(openApp)
-            .setOngoing(true)
-            .setOnlyAlertOnce(true)
-            .setSilent(true)
-            .setCategory(NotificationCompat.CATEGORY_PROGRESS)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .setProgress(progress.total, progress.downloaded, !progress.isDeterminate)
-            .addAction(R.drawable.ic_close, context.getString(R.string.cancel), cancelWork)
-            .build()
+        val notification =
+            NotificationCompat
+                .Builder(context, CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_cloud)
+                .setContentTitle(context.getString(R.string.thumbnail_download_notification_title))
+                .setContentText(progress.contentText())
+                .setContentIntent(openApp)
+                .setOngoing(true)
+                .setOnlyAlertOnce(true)
+                .setSilent(true)
+                .setCategory(NotificationCompat.CATEGORY_PROGRESS)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .setProgress(progress.total, progress.downloaded, !progress.isDeterminate)
+                .addAction(R.drawable.ic_close, context.getString(R.string.cancel), cancelWork)
+                .build()
         return ForegroundInfo(
             NOTIFICATION_ID,
             notification,

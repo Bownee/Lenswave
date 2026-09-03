@@ -17,27 +17,33 @@ internal class GalleryStickyDateController(
 ) {
     private var pendingPosition: Int? = null
     private var updatePosted = false
-    private val update = Runnable {
-        updatePosted = false
-        val position = pendingPosition ?: return@Runnable
-        pendingPosition = null
-        render(position)
-    }
+    private val update =
+        Runnable {
+            updatePosted = false
+            val position = pendingPosition ?: return@Runnable
+            pendingPosition = null
+            render(position)
+        }
 
     /** Follows the list's own scrolling; fast-scroll interaction is reported separately by the screen. */
     fun attach() {
-        list.setOnScrollListener(object : AbsListView.OnScrollListener {
-            override fun onScrollStateChanged(view: AbsListView?, scrollState: Int) = Unit
+        list.setOnScrollListener(
+            object : AbsListView.OnScrollListener {
+                override fun onScrollStateChanged(
+                    view: AbsListView?,
+                    scrollState: Int,
+                ) = Unit
 
-            override fun onScroll(
-                view: AbsListView?,
-                firstVisibleItem: Int,
-                visibleItemCount: Int,
-                totalItemCount: Int,
-            ) {
-                schedule(firstVisibleItem)
-            }
-        })
+                override fun onScroll(
+                    view: AbsListView?,
+                    firstVisibleItem: Int,
+                    visibleItemCount: Int,
+                    totalItemCount: Int,
+                ) {
+                    schedule(firstVisibleItem)
+                }
+            },
+        )
     }
 
     fun schedule(firstVisibleItem: Int) {

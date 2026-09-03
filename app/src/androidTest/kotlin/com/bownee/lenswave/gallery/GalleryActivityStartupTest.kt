@@ -1,6 +1,5 @@
 package com.bownee.lenswave.gallery
 
-import com.bownee.lenswave.R
 import android.app.AlertDialog
 import android.content.ComponentName
 import android.content.pm.PackageManager
@@ -8,6 +7,7 @@ import android.widget.TextView
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.bownee.lenswave.R
 import com.bownee.lenswave.update.UpdateAvailableDialogFragment
 import me.proton.core.auth.presentation.ui.LoginSsoActivity
 import me.proton.core.auth.presentation.ui.LoginTwoStepActivity
@@ -26,10 +26,11 @@ internal class GalleryActivityStartupTest {
         val packageManager = context.packageManager
 
         listOf(LoginTwoStepActivity::class.java, LoginSsoActivity::class.java).forEach { activity ->
-            val activityInfo = packageManager.getActivityInfo(
-                ComponentName(context, activity),
-                PackageManager.MATCH_DISABLED_COMPONENTS,
-            )
+            val activityInfo =
+                packageManager.getActivityInfo(
+                    ComponentName(context, activity),
+                    PackageManager.MATCH_DISABLED_COMPONENTS,
+                )
 
             assertFalse(activityInfo.enabled)
             assertFalse(activityInfo.exported)
@@ -60,8 +61,9 @@ internal class GalleryActivityStartupTest {
             scenario.recreate()
             InstrumentationRegistry.getInstrumentation().waitForIdleSync()
             scenario.onActivity { activity ->
-                val fragments = activity.supportFragmentManager.fragments
-                    .filterIsInstance<UpdateAvailableDialogFragment>()
+                val fragments =
+                    activity.supportFragmentManager.fragments
+                        .filterIsInstance<UpdateAvailableDialogFragment>()
                 assertEquals(1, fragments.size)
                 val dialog = fragments.single().dialog as AlertDialog
                 assertTrue(dialog.isShowing)

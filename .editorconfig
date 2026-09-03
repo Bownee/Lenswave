@@ -12,6 +12,9 @@ indent_size = 4
 max_line_length = 120
 ij_kotlin_allow_trailing_comma = true
 ij_kotlin_allow_trailing_comma_on_call_site = true
+ktlint_code_style = ktlint_official
+# Test names use backticked sentences; hand-written view code keeps long builder chains readable.
+ktlint_function_naming_ignore_when_annotated_with = Test, Composable
 
 [*.{yml,yaml,toml,json}]
 indent_size = 2

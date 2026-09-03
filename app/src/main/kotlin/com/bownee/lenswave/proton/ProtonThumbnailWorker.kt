@@ -1,7 +1,5 @@
 package com.bownee.lenswave.proton
 
-import com.bownee.lenswave.LenswaveDiagnostics
-import com.bownee.lenswave.LenswaveOperation
 import android.content.Context
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
@@ -11,6 +9,8 @@ import androidx.work.OneTimeWorkRequest
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
+import com.bownee.lenswave.LenswaveDiagnostics
+import com.bownee.lenswave.LenswaveOperation
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
 import dagger.hilt.android.EntryPointAccessors
@@ -27,20 +27,22 @@ class ProtonThumbnailWorker(
 ) : CoroutineWorker(appContext, workerParameters) {
     override suspend fun doWork(): Result {
         val userId = inputData.getString(KEY_USER_ID) ?: return Result.failure()
-        val entryPoint = EntryPointAccessors.fromApplication(
-            applicationContext,
-            RepositoryEntryPoint::class.java,
-        )
+        val entryPoint =
+            EntryPointAccessors.fromApplication(
+                applicationContext,
+                RepositoryEntryPoint::class.java,
+            )
         val repository = entryPoint.thumbnailWork()
         val attempt = (runAttemptCount + 1).coerceAtMost(ProtonThumbnailWorkPolicy.MAX_ATTEMPTS)
         var statusPublished = false
         return try {
             val requestedUserId = UserId(userId)
-            val session = withTimeoutOrNull(SESSION_READY_TIMEOUT_MILLIS) {
-                entryPoint.accountSessionManager().state.first { state ->
-                    state.initialized && !state.transitioning
-                }
-            } ?: return resolve(repository, ProtonThumbnailWorkIssue.TIMEOUT, publishStatus = false)
+            val session =
+                withTimeoutOrNull(SESSION_READY_TIMEOUT_MILLIS) {
+                    entryPoint.accountSessionManager().state.first { state ->
+                        state.initialized && !state.transitioning
+                    }
+                } ?: return resolve(repository, ProtonThumbnailWorkIssue.TIMEOUT, publishStatus = false)
             if (session.activeUserId != requestedUserId) {
                 return Result.failure()
             }
@@ -59,39 +61,50 @@ class ProtonThumbnailWorker(
             val foregroundInfoFactory = ProtonThumbnailForegroundInfoFactory(applicationContext)
             publishForeground(foregroundInfoFactory, initialProgress.notificationProgress())
             repository.updateThumbnailWorkStatus(
-                ProtonThumbnailWorkStatus.Running(attempt, ProtonThumbnailWorkPolicy.MAX_ATTEMPTS)
+                ProtonThumbnailWorkStatus.Running(attempt, ProtonThumbnailWorkPolicy.MAX_ATTEMPTS),
             )
             statusPublished = true
             var completedWithinTime = false
-            val issue = withTimeoutOrNull<ProtonThumbnailWorkIssue?>(
-                ProtonThumbnailWorkPolicy.MAX_RUN_MILLIS
-            ) {
-                var sawFailure = false
-                var runIssue: ProtonThumbnailWorkIssue? = null
-                while (true) {
-                    if (!networkMonitor.awaitValidatedUnmeteredNetwork(NETWORK_READY_TIMEOUT_MILLIS)) {
-                        completedWithinTime = true
-                        runIssue = ProtonThumbnailWorkIssue.INCOMPLETE
-                        break
-                    }
-                    when (val step = repository.downloadNextQueuedThumbnailBatch(requestedUserId) { progress ->
-                        publishForeground(foregroundInfoFactory, progress.notificationProgress())
-                    }) {
-                        ProtonThumbnailQueueStep.Downloaded -> Unit
-                        ProtonThumbnailQueueStep.Failed -> sawFailure = true
-                        is ProtonThumbnailQueueStep.Idle -> {
+            val issue =
+                withTimeoutOrNull<ProtonThumbnailWorkIssue?>(
+                    ProtonThumbnailWorkPolicy.MAX_RUN_MILLIS,
+                ) {
+                    var sawFailure = false
+                    var runIssue: ProtonThumbnailWorkIssue? = null
+                    while (true) {
+                        if (!networkMonitor.awaitValidatedUnmeteredNetwork(NETWORK_READY_TIMEOUT_MILLIS)) {
                             completedWithinTime = true
-                            runIssue = when {
-                                !step.hasPending -> null
-                                sawFailure -> ProtonThumbnailWorkIssue.ERROR
-                                else -> ProtonThumbnailWorkIssue.INCOMPLETE
-                            }
+                            runIssue = ProtonThumbnailWorkIssue.INCOMPLETE
                             break
                         }
+                        when (
+                            val step =
+                                repository.downloadNextQueuedThumbnailBatch(requestedUserId) { progress ->
+                                    publishForeground(foregroundInfoFactory, progress.notificationProgress())
+                                }
+                        ) {
+                            ProtonThumbnailQueueStep.Downloaded -> {
+                                Unit
+                            }
+
+                            ProtonThumbnailQueueStep.Failed -> {
+                                sawFailure = true
+                            }
+
+                            is ProtonThumbnailQueueStep.Idle -> {
+                                completedWithinTime = true
+                                runIssue =
+                                    when {
+                                        !step.hasPending -> null
+                                        sawFailure -> ProtonThumbnailWorkIssue.ERROR
+                                        else -> ProtonThumbnailWorkIssue.INCOMPLETE
+                                    }
+                                break
+                            }
+                        }
                     }
+                    runIssue
                 }
-                runIssue
-            }
             publishForeground(
                 foregroundInfoFactory,
                 repository.thumbnailWorkProgress(requestedUserId).notificationProgress(),
@@ -147,6 +160,7 @@ class ProtonThumbnailWorker(
     @InstallIn(SingletonComponent::class)
     internal interface RepositoryEntryPoint {
         fun thumbnailWork(): ProtonThumbnailWorkGateway
+
         fun accountSessionManager(): ProtonAccountSessionManager
     }
 
@@ -154,20 +168,21 @@ class ProtonThumbnailWorker(
         const val KEY_USER_ID = "user-id"
         private const val SESSION_READY_TIMEOUT_MILLIS = 30_000L
         private const val NETWORK_READY_TIMEOUT_MILLIS = 5_000L
+
         fun request(userId: UserId): OneTimeWorkRequest =
             OneTimeWorkRequestBuilder<ProtonThumbnailWorker>()
                 .setInputData(workDataOf(KEY_USER_ID to userId.id))
                 .setConstraints(
-                    Constraints.Builder()
+                    Constraints
+                        .Builder()
                         // A network JobScheduler constraint can be revoked as the phone enters
                         // Doze, even after this worker has promoted itself to a foreground service.
                         // The worker checks for validated unmetered access between batches instead.
                         .setRequiredNetworkType(NetworkType.NOT_REQUIRED)
                         .setRequiresBatteryNotLow(true)
                         .setRequiresStorageNotLow(true)
-                        .build()
-                )
-                .setBackoffCriteria(BackoffPolicy.LINEAR, 30L, TimeUnit.SECONDS)
+                        .build(),
+                ).setBackoffCriteria(BackoffPolicy.LINEAR, 30L, TimeUnit.SECONDS)
                 .build()
     }
 }
@@ -217,11 +232,12 @@ internal object ProtonThumbnailWorkPolicy {
     fun retryStatus(
         runAttemptCount: Int,
         issue: ProtonThumbnailWorkIssue,
-    ): ProtonThumbnailWorkStatus.RetryScheduled = ProtonThumbnailWorkStatus.RetryScheduled(
-        attempt = (runAttemptCount + 2).coerceAtMost(MAX_ATTEMPTS),
-        maximumAttempts = MAX_ATTEMPTS,
-        issue = issue,
-    )
+    ): ProtonThumbnailWorkStatus.RetryScheduled =
+        ProtonThumbnailWorkStatus.RetryScheduled(
+            attempt = (runAttemptCount + 2).coerceAtMost(MAX_ATTEMPTS),
+            maximumAttempts = MAX_ATTEMPTS,
+            issue = issue,
+        )
 
     private fun ProtonThumbnailWorkIssue.diagnosticName(): String = name.lowercase()
 }

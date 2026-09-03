@@ -1,10 +1,10 @@
 package com.bownee.lenswave.viewer
 
-import com.bownee.lenswave.dp
 import android.graphics.Bitmap
 import android.graphics.drawable.BitmapDrawable
 import android.view.View
 import androidx.core.view.isVisible
+import com.bownee.lenswave.dp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -30,6 +30,7 @@ internal class ViewerSwipeController(
 
         /** True while the details sheet is open, a photo transition runs or the viewer dismisses. */
         val gesturesBlocked: Boolean
+
         fun activeMediaView(): View
 
         /** Called before the slide-out animation: raise `photoTransitioning`, remember the fallback. */
@@ -58,7 +59,10 @@ internal class ViewerSwipeController(
     private var peekDragDistance = 0f
     private var peekJob: Job? = null
 
-    fun handleHorizontalPhotoDrag(distance: Float, finished: Boolean) {
+    fun handleHorizontalPhotoDrag(
+        distance: Float,
+        finished: Boolean,
+    ) {
         if (host.gesturesBlocked) return
         if (distance == 0f) {
             if (finished) resetHorizontalPhotoDrag()
@@ -88,7 +92,8 @@ internal class ViewerSwipeController(
         mediaTransform.animateMediaTranslationX(0f, SWIPE_SETTLE_MILLIS)
         if (peekPreview.isVisible) {
             val settledPeek = peekStableId
-            peekPreview.animate()
+            peekPreview
+                .animate()
                 .translationX(peekOffset * peekDistance())
                 .setDuration(SWIPE_SETTLE_MILLIS)
                 // A new drag may have started a different peek before this one settled.
@@ -100,7 +105,11 @@ internal class ViewerSwipeController(
     }
 
     /** Positions the neighbour's thumbnail one screen away in the drag direction, loading it first. */
-    private fun showPeek(adjacent: PhotoRequest, offset: Int, dragDistance: Float) {
+    private fun showPeek(
+        adjacent: PhotoRequest,
+        offset: Int,
+        dragDistance: Float,
+    ) {
         peekDragDistance = dragDistance
         if (peekStableId != adjacent.stableId || peekOffset != offset) {
             peekJob?.cancel()
@@ -108,14 +117,15 @@ internal class ViewerSwipeController(
             peekOffset = offset
             peekPreview.setImageDrawable(null)
             peekPreview.visibility = View.GONE
-            peekJob = scope.launch {
-                val bitmap = loadThumbnail(adjacent)
-                if (bitmap == null || peekStableId != adjacent.stableId) return@launch
-                peekPreview.setImageBitmap(bitmap)
-                peekPreview.alpha = 1f
-                peekPreview.visibility = View.VISIBLE
-                positionPeek(peekDragDistance)
-            }
+            peekJob =
+                scope.launch {
+                    val bitmap = loadThumbnail(adjacent)
+                    if (bitmap == null || peekStableId != adjacent.stableId) return@launch
+                    peekPreview.setImageBitmap(bitmap)
+                    peekPreview.alpha = 1f
+                    peekPreview.visibility = View.VISIBLE
+                    positionPeek(peekDragDistance)
+                }
         }
         positionPeek(dragDistance)
     }
@@ -160,39 +170,57 @@ internal class ViewerSwipeController(
         host.beginNavigation()
         mediaTransform.cancelMediaAnimations()
         if (peekPreview.isVisible && peekStableId == adjacent.stableId) {
-            peekPreview.animate().translationX(0f).setDuration(SWIPE_SETTLE_MILLIS).start()
+            peekPreview
+                .animate()
+                .translationX(0f)
+                .setDuration(SWIPE_SETTLE_MILLIS)
+                .start()
         }
         val activeMedia = host.activeMediaView()
-        activeMedia.animate()
+        activeMedia
+            .animate()
             .translationX(-offset * peekDistance())
             .setDuration(SWIPE_SETTLE_MILLIS)
             .withEndAction {
                 thumbnailPreview.animate().cancel()
                 loadingPanel.animate().cancel()
                 host.commitNavigation(adjacent)
-            }
-            .start()
+            }.start()
         if (activeMedia !== photoView) {
-            photoView.animate().translationX(-offset * peekDistance()).setDuration(SWIPE_SETTLE_MILLIS).start()
+            photoView
+                .animate()
+                .translationX(-offset * peekDistance())
+                .setDuration(SWIPE_SETTLE_MILLIS)
+                .start()
         }
         if (activeMedia !== playerView) {
-            playerView.animate().translationX(-offset * peekDistance()).setDuration(SWIPE_SETTLE_MILLIS).start()
+            playerView
+                .animate()
+                .translationX(-offset * peekDistance())
+                .setDuration(SWIPE_SETTLE_MILLIS)
+                .start()
         }
-        thumbnailPreview.animate()
+        thumbnailPreview
+            .animate()
             .translationX(-offset * peekDistance())
             .setDuration(SWIPE_SETTLE_MILLIS)
             .start()
-        loadingPanel.animate()
+        loadingPanel
+            .animate()
             .translationX(-offset * peekDistance())
             .setDuration(SWIPE_SETTLE_MILLIS)
             .start()
-        mediaTitle.animate()
+        mediaTitle
+            .animate()
             .translationX(-offset * peekDistance())
             .setDuration(SWIPE_SETTLE_MILLIS)
             .start()
     }
 
-    fun adjacentTo(stableId: String, offset: Int): PhotoRequest? {
+    fun adjacentTo(
+        stableId: String,
+        offset: Int,
+    ): PhotoRequest? {
         val requests = host.navigationRequests
         val index = requests.indexOfFirst { it.stableId == stableId }
         return if (index < 0) null else requests.getOrNull(index + offset)

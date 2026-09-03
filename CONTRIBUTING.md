@@ -11,8 +11,10 @@
 This is what CI runs on every pull request. Run it before pushing:
 
 ```shell
-./gradlew testDebugUnitTest jacocoDebugCoverageVerification lintDebug lintRelease assembleDebug
+./gradlew ktlintCheck testDebugUnitTest jacocoDebugCoverageVerification lintDebug lintRelease assembleDebug
 ```
+
+`ktlintCheck` fails on formatting drift; `./gradlew ktlintFormat` fixes it in place.
 
 On Windows use `gradlew.bat`. The release build and the license inventory need one extra invocation
 because the SBOM task is not configuration-cache compatible:
@@ -49,7 +51,8 @@ licenses outside the approved list in `build.gradle.kts`.
 
 ## Coding conventions
 
-- Kotlin official style, enforced by `.editorconfig`; 120-column lines.
+- ktlint's official code style, enforced by `ktlintCheck` and configured in `.editorconfig`;
+  120-column lines.
 - The UI is built from programmatic Views. Compose exists only because Proton Core's presentation
   artifact needs an `AppTheme` binding (`LenswaveTheme.kt`); do not add Compose screens.
 - Put decisions in small pure objects (`*Policy`, `*Formatter`, `*Codec`) and unit-test them; keep

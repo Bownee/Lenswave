@@ -6,8 +6,9 @@ internal object ThumbnailNotificationPermissionPolicy {
         protonConnected: Boolean,
         permissionGranted: Boolean,
         requestedBefore: Boolean,
-    ): Boolean = apiLevel >= 33 &&
-        protonConnected &&
-        !permissionGranted &&
-        !requestedBefore
+    ): Boolean =
+        apiLevel >= 33 &&
+            protonConnected &&
+            !permissionGranted &&
+            !requestedBefore
 }

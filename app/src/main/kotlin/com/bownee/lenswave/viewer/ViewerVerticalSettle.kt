@@ -1,7 +1,7 @@
 package com.bownee.lenswave.viewer
 
-import com.bownee.lenswave.dp
 import android.view.animation.PathInterpolator
+import com.bownee.lenswave.dp
 import kotlin.math.abs
 import kotlin.math.roundToLong
 
@@ -18,7 +18,11 @@ internal object ViewerVerticalSettle {
      * How long a settle animation covering [remainingDistance] pixels should take when the finger
      * let go at [velocity] pixels per second; [density] converts the velocity floor from dp.
      */
-    fun duration(remainingDistance: Float, velocity: Float, density: Float): Long {
+    fun duration(
+        remainingDistance: Float,
+        velocity: Float,
+        density: Float,
+    ): Long {
         val absoluteDistance = abs(remainingDistance)
         val absoluteVelocity = abs(velocity)
         if (absoluteDistance < 1f) return 0L

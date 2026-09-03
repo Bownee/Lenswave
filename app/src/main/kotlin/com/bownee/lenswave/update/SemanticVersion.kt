@@ -25,24 +25,25 @@ internal data class SemanticVersion(
     }
 
     companion object {
-        private val pattern = Regex(
-            """^[vV]?([0-9]+)\.([0-9]+)\.([0-9]+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"""
-        )
+        private val pattern =
+            Regex(
+                """^[vV]?([0-9]+)\.([0-9]+)\.([0-9]+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$""",
+            )
 
         fun parse(value: String): SemanticVersion? {
             val match = pattern.matchEntire(value) ?: return null
             val major = match.groupValues[1].toVersionNumber() ?: return null
             val minor = match.groupValues[2].toVersionNumber() ?: return null
             val patch = match.groupValues[3].toVersionNumber() ?: return null
-            val prerelease = match.groupValues[4]
-                .takeIf(String::isNotEmpty)
-                ?.split('.')
-                ?.map { identifier ->
-                    val numeric = identifier.all(Char::isDigit)
-                    if (numeric && identifier.length > 1 && identifier.startsWith('0')) return null
-                    identifier
-                }
-                .orEmpty()
+            val prerelease =
+                match.groupValues[4]
+                    .takeIf(String::isNotEmpty)
+                    ?.split('.')
+                    ?.map { identifier ->
+                        val numeric = identifier.all(Char::isDigit)
+                        if (numeric && identifier.length > 1 && identifier.startsWith('0')) return null
+                        identifier
+                    }.orEmpty()
             return SemanticVersion(major, minor, patch, prerelease)
         }
 
@@ -51,11 +52,17 @@ internal data class SemanticVersion(
             return toIntOrNull()
         }
 
-        private fun compareNumericStrings(left: String, right: String): Int =
+        private fun compareNumericStrings(
+            left: String,
+            right: String,
+        ): Int =
             compareValues(left.length, right.length).takeIf { it != 0 }
                 ?: left.compareTo(right)
 
-        private fun comparePrereleaseIdentifiers(left: String, right: String): Int {
+        private fun comparePrereleaseIdentifiers(
+            left: String,
+            right: String,
+        ): Int {
             val leftNumeric = left.all(Char::isDigit)
             val rightNumeric = right.all(Char::isDigit)
             return when {

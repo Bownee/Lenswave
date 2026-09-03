@@ -1,10 +1,10 @@
 package com.bownee.lenswave
 
-import com.bownee.lenswave.viewer.PhotoViewerScreen
-import com.bownee.lenswave.gallery.GalleryActivity
 import android.view.View
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.bownee.lenswave.gallery.GalleryActivity
+import com.bownee.lenswave.viewer.PhotoViewerScreen
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -14,19 +14,21 @@ class AccessibilityContractInstrumentedTest {
     @Test fun viewerHasNamedIconActionsAndFortyEightDpTargets() {
         ActivityScenario.launch(GalleryActivity::class.java).use { scenario ->
             scenario.onActivity { activity ->
-                val screen = PhotoViewerScreen(
-                    context = activity,
-                    callbacks = PhotoViewerScreen.Actions(
-                        gesturesEnabled = { true },
-                        gestureStartAllowed = { _, _ -> true },
-                        onVerticalDrag = { _, _, _ -> },
-                        onHorizontalDrag = { _, _ -> },
-                        onFavorite = {},
-                        onDelete = {},
-                        onRetry = {},
-                        onLayoutChanged = {},
-                    ),
-                )
+                val screen =
+                    PhotoViewerScreen(
+                        context = activity,
+                        callbacks =
+                            PhotoViewerScreen.Actions(
+                                gesturesEnabled = { true },
+                                gestureStartAllowed = { _, _ -> true },
+                                onVerticalDrag = { _, _, _ -> },
+                                onHorizontalDrag = { _, _ -> },
+                                onFavorite = {},
+                                onDelete = {},
+                                onRetry = {},
+                                onLayoutChanged = {},
+                            ),
+                    )
                 screen.root.measure(
                     View.MeasureSpec.makeMeasureSpec(1_080, View.MeasureSpec.EXACTLY),
                     View.MeasureSpec.makeMeasureSpec(1_920, View.MeasureSpec.EXACTLY),

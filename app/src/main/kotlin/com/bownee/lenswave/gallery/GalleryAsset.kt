@@ -20,7 +20,8 @@ data class GalleryAsset(
     val isFavorite: Boolean
         get() = ProtonMediaTag.FAVORITES in tags
 
-    fun withFavorite(favorite: Boolean): GalleryAsset = copy(
-        tags = if (favorite) tags + ProtonMediaTag.FAVORITES else tags - ProtonMediaTag.FAVORITES,
-    )
+    fun withFavorite(favorite: Boolean): GalleryAsset =
+        copy(
+            tags = if (favorite) tags + ProtonMediaTag.FAVORITES else tags - ProtonMediaTag.FAVORITES,
+        )
 }

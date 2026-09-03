@@ -23,29 +23,32 @@ internal class GalleryFastScroller(
     context: Context,
 ) {
     private val handleSize = context.resources.getDimensionPixelSize(R.dimen.gallery_fast_scroll_handle_size)
-    private val defaultDrawable = requireNotNull(
-        ResourcesCompat.getDrawable(
-            context.resources,
-            R.drawable.gallery_fast_scroll_thumb_default,
-            context.theme,
-        ),
-    ).mutate()
-    private val pressedDrawable = requireNotNull(
-        ResourcesCompat.getDrawable(
-            context.resources,
-            R.drawable.gallery_fast_scroll_thumb_pressed,
-            context.theme,
-        ),
-    ).mutate()
+    private val defaultDrawable =
+        requireNotNull(
+            ResourcesCompat.getDrawable(
+                context.resources,
+                R.drawable.gallery_fast_scroll_thumb_default,
+                context.theme,
+            ),
+        ).mutate()
+    private val pressedDrawable =
+        requireNotNull(
+            ResourcesCompat.getDrawable(
+                context.resources,
+                R.drawable.gallery_fast_scroll_thumb_pressed,
+                context.theme,
+            ),
+        ).mutate()
     private val handleBounds = Rect()
     private var topInset = 0
     private var bottomInset = 0
     private var pointerOffset = 0f
-    private val hideHandle = Runnable {
-        if (isDragging) return@Runnable
-        isVisible = false
-        listView.invalidate()
-    }
+    private val hideHandle =
+        Runnable {
+            if (isDragging) return@Runnable
+            isVisible = false
+            listView.invalidate()
+        }
 
     /** Whether the handle is offered at all; when false the list falls back to the platform scrollbar. */
     var isEnabled = true
@@ -64,7 +67,10 @@ internal class GalleryFastScroller(
     var interactionListener: ((Boolean) -> Unit)? = null
 
     /** The track runs from [top] below the list's top edge to [bottom] above its bottom edge. */
-    fun setEdgeInsets(top: Int, bottom: Int) {
+    fun setEdgeInsets(
+        top: Int,
+        bottom: Int,
+    ) {
         topInset = top.coerceAtLeast(0)
         bottomInset = bottom.coerceAtLeast(0)
         listView.invalidate()
@@ -85,7 +91,8 @@ internal class GalleryFastScroller(
         if (!isDragging) return false
         when (event.actionMasked) {
             MotionEvent.ACTION_MOVE,
-            MotionEvent.ACTION_UP -> scrollFromPointer(event.y)
+            MotionEvent.ACTION_UP,
+            -> scrollFromPointer(event.y)
         }
         if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
             end()
@@ -95,10 +102,12 @@ internal class GalleryFastScroller(
 
     /** Shows the handle while the list can scroll and schedules it to fade once scrolling settles. */
     fun updateVisibility() {
-        val shouldShow = isEnabled && GalleryFastScrollLayoutPolicy.shouldShow(
-            canScrollBackward = listView.canScrollVertically(-1),
-            canScrollForward = listView.canScrollVertically(1),
-        )
+        val shouldShow =
+            isEnabled &&
+                GalleryFastScrollLayoutPolicy.shouldShow(
+                    canScrollBackward = listView.canScrollVertically(-1),
+                    canScrollForward = listView.canScrollVertically(1),
+                )
         if (!shouldShow) {
             hideNow()
             return
@@ -144,13 +153,14 @@ internal class GalleryFastScroller(
     }
 
     private fun scrollFromPointer(pointerY: Float) {
-        val progress = GalleryFastScrollLayoutPolicy.dragProgress(
-            pointerY = pointerY,
-            pointerOffsetInHandle = pointerOffset,
-            trackStart = trackStart(),
-            trackEnd = trackEnd(),
-            handleSize = handleSize,
-        )
+        val progress =
+            GalleryFastScrollLayoutPolicy.dragProgress(
+                pointerY = pointerY,
+                pointerOffsetInHandle = pointerOffset,
+                trackStart = trackStart(),
+                trackEnd = trackEnd(),
+                handleSize = handleSize,
+            )
         val target = GalleryFastScrollLayoutPolicy.target(listView.count, progress)
         val rowOffset = (averageVisibleRowHeight() * target.positionOffsetFraction).roundToInt()
         listView.setSelectionFromTop(target.position, -rowOffset)
@@ -173,14 +183,15 @@ internal class GalleryFastScroller(
     }
 
     private fun updateHandleBounds() {
-        val top = GalleryFastScrollLayoutPolicy.handleTop(
-            scrollOffset = listView.fastScrollOffset(),
-            scrollRange = listView.fastScrollRange(),
-            viewportExtent = listView.fastScrollExtent(),
-            trackStart = trackStart(),
-            trackEnd = trackEnd(),
-            handleSize = handleSize,
-        )
+        val top =
+            GalleryFastScrollLayoutPolicy.handleTop(
+                scrollOffset = listView.fastScrollOffset(),
+                scrollRange = listView.fastScrollRange(),
+                viewportExtent = listView.fastScrollExtent(),
+                trackStart = trackStart(),
+                trackEnd = trackEnd(),
+                handleSize = handleSize,
+            )
         val margin = listView.context.dp(EDGE_MARGIN_DP)
         if (isRtl()) {
             handleBounds.set(margin, top, margin + handleSize, top + handleSize)
@@ -194,8 +205,7 @@ internal class GalleryFastScroller(
 
     private fun trackEnd(): Int = (listView.height - bottomInset).coerceAtLeast(trackStart())
 
-    private fun isRtl(): Boolean =
-        listView.layoutDirection == View.LAYOUT_DIRECTION_RTL
+    private fun isRtl(): Boolean = listView.layoutDirection == View.LAYOUT_DIRECTION_RTL
 
     private companion object {
         const val EDGE_MARGIN_DP = 4

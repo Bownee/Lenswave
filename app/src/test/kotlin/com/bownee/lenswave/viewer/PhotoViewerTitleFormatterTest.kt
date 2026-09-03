@@ -1,10 +1,10 @@
 package com.bownee.lenswave.viewer
 
-import java.time.ZoneOffset
-import java.util.Locale
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+import java.time.ZoneOffset
+import java.util.Locale
 
 class PhotoViewerTitleFormatterTest {
     @Test
@@ -41,7 +41,7 @@ class PhotoViewerTitleFormatterTest {
                 zoneId = ZoneOffset.UTC,
                 locale = Locale.US,
                 use24HourTime = true,
-            )
+            ),
         )
     }
 }

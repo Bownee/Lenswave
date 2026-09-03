@@ -45,9 +45,10 @@ class GalleryThumbnailLoader(
         onLoaded: (Bitmap?) -> Unit,
     ) {
         val coverNodeUid = album.coverPhotoNodeUid
-        val key = coverNodeUid?.let {
-            "album-cover:${protonUserId()?.id}:$it:${album.hasCoverThumbnail}"
-        } ?: "album-empty:${protonUserId()?.id}:${album.nodeUid}"
+        val key =
+            coverNodeUid?.let {
+                "album-cover:${protonUserId()?.id}:$it:${album.hasCoverThumbnail}"
+            } ?: "album-empty:${protonUserId()?.id}:${album.nodeUid}"
         load(
             key = key,
             isAvailable = coverNodeUid != null && album.hasCoverThumbnail,
@@ -88,12 +89,13 @@ class GalleryThumbnailLoader(
         if (!isAvailable || !allowSourceRead) return
         callbacks.getOrPut(key, ::mutableListOf) += onLoaded
         if (!loadingKeys.add(key)) return
-        val job = scope.launch(start = CoroutineStart.LAZY) {
-            val bitmap = withContext(Dispatchers.IO) { runCatching { read() }.getOrNull() }
-            loadingJobs.remove(key)
-            loadingKeys.remove(key)
-            callbacks.remove(key).orEmpty().forEach { callback -> callback(bitmap) }
-        }
+        val job =
+            scope.launch(start = CoroutineStart.LAZY) {
+                val bitmap = withContext(Dispatchers.IO) { runCatching { read() }.getOrNull() }
+                loadingJobs.remove(key)
+                loadingKeys.remove(key)
+                callbacks.remove(key).orEmpty().forEach { callback -> callback(bitmap) }
+            }
         loadingJobs[key] = job
         job.start()
     }

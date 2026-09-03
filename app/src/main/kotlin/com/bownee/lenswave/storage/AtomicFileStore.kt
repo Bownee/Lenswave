@@ -7,11 +7,19 @@ import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 
 internal object AtomicFileStore {
-    fun write(target: File, contents: String, failureMessage: String) {
+    fun write(
+        target: File,
+        contents: String,
+        failureMessage: String,
+    ) {
         write(target, contents.toByteArray(Charsets.UTF_8), failureMessage)
     }
 
-    fun write(target: File, contents: ByteArray, failureMessage: String) {
+    fun write(
+        target: File,
+        contents: ByteArray,
+        failureMessage: String,
+    ) {
         target.parentFile?.mkdirs()
         val temporary = File.createTempFile("${target.name}.", ".part", target.parentFile)
         try {
@@ -24,7 +32,11 @@ internal object AtomicFileStore {
         }
     }
 
-    fun commit(temporary: File, target: File, failureMessage: String) {
+    fun commit(
+        temporary: File,
+        target: File,
+        failureMessage: String,
+    ) {
         target.parentFile?.mkdirs()
         try {
             Files.move(
@@ -48,7 +60,9 @@ internal object AtomicFileStore {
         }
     }
 
-    fun safeName(value: String): String = MessageDigest.getInstance("SHA-256")
-        .digest(value.toByteArray(Charsets.UTF_8))
-        .joinToString("") { byte -> "%02x".format(byte) }
+    fun safeName(value: String): String =
+        MessageDigest
+            .getInstance("SHA-256")
+            .digest(value.toByteArray(Charsets.UTF_8))
+            .joinToString("") { byte -> "%02x".format(byte) }
 }

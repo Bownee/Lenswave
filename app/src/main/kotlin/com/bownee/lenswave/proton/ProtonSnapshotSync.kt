@@ -2,8 +2,8 @@ package com.bownee.lenswave.proton
 
 import com.bownee.lenswave.LenswaveDiagnostics
 import com.bownee.lenswave.LenswaveOperation
-import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
+import javax.inject.Inject
 
 /**
  * Runs one authoritative snapshot refresh: decides whether the cached listing is fresh enough,
@@ -15,7 +15,8 @@ internal class ProtonSnapshotSync internal constructor(
     private val snapshots: ProtonSnapshotCoordinator,
     private val reportFailure: (LenswaveOperation, Throwable) -> Unit,
 ) {
-    @Inject constructor(snapshots: ProtonSnapshotCoordinator) :
+    @Inject
+    constructor(snapshots: ProtonSnapshotCoordinator) :
         this(snapshots, LenswaveDiagnostics::reportFailure)
 
     /**
@@ -44,13 +45,14 @@ internal class ProtonSnapshotSync internal constructor(
         publishFailed: () -> Unit,
     ) {
         try {
-            val shouldEnumerate = snapshots.shouldEnumerate(
-                userId,
-                source,
-                syncKey,
-                forceRemote,
-                hasSnapshot,
-            )
+            val shouldEnumerate =
+                snapshots.shouldEnumerate(
+                    userId,
+                    source,
+                    syncKey,
+                    forceRemote,
+                    hasSnapshot,
+                )
             if (!shouldEnumerate) {
                 publishFresh()
                 return

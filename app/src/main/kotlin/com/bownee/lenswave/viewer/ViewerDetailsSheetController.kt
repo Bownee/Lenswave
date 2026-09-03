@@ -1,6 +1,5 @@
 package com.bownee.lenswave.viewer
 
-import com.bownee.lenswave.R
 import android.animation.ValueAnimator
 import android.content.Context
 import android.content.Intent
@@ -8,6 +7,7 @@ import android.net.Uri
 import android.view.View
 import android.widget.Toast
 import androidx.core.net.toUri
+import com.bownee.lenswave.R
 import com.bownee.lenswave.metadata.PhotoMetadataAction
 import com.bownee.lenswave.metadata.PhotoMetadataItem
 import com.bownee.lenswave.metadata.PhotoMetadataReader
@@ -38,7 +38,13 @@ internal class ViewerDetailsSheetController(
 
         /** Bottom edge of the fitted media inside the media frame, if it is known yet. */
         fun fittedMediaBottom(): Float?
-        fun handlePhotoDismissDrag(distance: Float, velocity: Float, finished: Boolean)
+
+        fun handlePhotoDismissDrag(
+            distance: Float,
+            velocity: Float,
+            finished: Boolean,
+        )
+
         fun resetPhotoDismiss()
     }
 
@@ -60,7 +66,11 @@ internal class ViewerDetailsSheetController(
     private var detailsDragStartedShown = false
     private var detailsSheetAttachmentOffset = 0
 
-    fun handleDetailsDrag(distance: Float, velocity: Float, finished: Boolean) {
+    fun handleDetailsDrag(
+        distance: Float,
+        velocity: Float,
+        finished: Boolean,
+    ) {
         if (host.gesturesBlocked) return
         if (!shown && detailsDragStartOffset == null && distance < 0f) {
             host.handlePhotoDismissDrag(-distance, -velocity, finished)
@@ -68,11 +78,12 @@ internal class ViewerDetailsSheetController(
         }
 
         if (!finished) {
-            val startOffset = detailsDragStartOffset ?: photoDetailsScroll.scrollY.also {
-                detailsDragStartOffset = it
-                detailsDragStartedShown = shown
-                detailsScrollAnimator?.cancel()
-            }
+            val startOffset =
+                detailsDragStartOffset ?: photoDetailsScroll.scrollY.also {
+                    detailsDragStartOffset = it
+                    detailsDragStartedShown = shown
+                    detailsScrollAnimator?.cancel()
+                }
             setDetailsOffset((startOffset + distance).roundToInt())
             return
         }
@@ -89,11 +100,11 @@ internal class ViewerDetailsSheetController(
         if (!startedShown) {
             val initialOffset = initialDetailsOffset().toFloat()
             if (VerticalGesturePolicy.shouldSettleSheet(
-                distance,
-                velocity,
-                initialOffset,
-                resources.displayMetrics.density,
-            )
+                    distance,
+                    velocity,
+                    initialOffset,
+                    resources.displayMetrics.density,
+                )
             ) {
                 showDetails(velocity)
             } else {
@@ -103,12 +114,13 @@ internal class ViewerDetailsSheetController(
         }
 
         val initialOffset = initialDetailsOffset()
-        val targetOffset = VerticalGesturePolicy.detailsSettleOffset(
-            currentOffset = photoDetailsScroll.scrollY,
-            velocity = velocity,
-            initialOffset = initialOffset,
-            maximumOffset = maximumDetailsOffset(),
-        )
+        val targetOffset =
+            VerticalGesturePolicy.detailsSettleOffset(
+                currentOffset = photoDetailsScroll.scrollY,
+                velocity = velocity,
+                initialOffset = initialOffset,
+                maximumOffset = maximumDetailsOffset(),
+            )
         if (targetOffset == 0) hideDetails(velocity) else animateDetailsOffset(targetOffset, velocity)
     }
 
@@ -140,38 +152,45 @@ internal class ViewerDetailsSheetController(
         if (sheetProgress >= 1f && shown) actions.visibility = View.INVISIBLE
     }
 
-    private fun animateDetailsOffset(targetOffset: Int, velocity: Float) {
+    private fun animateDetailsOffset(
+        targetOffset: Int,
+        velocity: Float,
+    ) {
         detailsScrollAnimator?.cancel()
         val boundedTarget = targetOffset.coerceIn(0, maximumDetailsOffset())
         val startOffset = photoDetailsScroll.scrollY
-        val duration = ViewerVerticalSettle.duration(
-            (boundedTarget - startOffset).toFloat(),
-            velocity,
-            resources.displayMetrics.density,
-        )
-        detailsScrollAnimator = ValueAnimator.ofInt(startOffset, boundedTarget).apply {
-            this.duration = duration
-            interpolator = ViewerVerticalSettle.interpolator
-            addUpdateListener { animator -> setDetailsOffset(animator.animatedValue as Int) }
-            start()
-        }
+        val duration =
+            ViewerVerticalSettle.duration(
+                (boundedTarget - startOffset).toFloat(),
+                velocity,
+                resources.displayMetrics.density,
+            )
+        detailsScrollAnimator =
+            ValueAnimator.ofInt(startOffset, boundedTarget).apply {
+                this.duration = duration
+                interpolator = ViewerVerticalSettle.interpolator
+                addUpdateListener { animator -> setDetailsOffset(animator.animatedValue as Int) }
+                start()
+            }
     }
 
-    private fun initialDetailsOffset(): Int = PhotoDetailsLayoutPolicy.initialOffset(
-        mediaHeight = mediaFrame.height,
-        fittedImageBottom = host.fittedMediaBottom(),
-        overlap = resources.getDimensionPixelSize(R.dimen.photo_details_sheet_overlap),
-        fallbackOffset = (root.height * DETAILS_FALLBACK_OFFSET_FRACTION).roundToInt(),
-        maximumOffset = maximumDetailsOffset(),
-    )
-
-    private fun updateDetailsSheetAttachment(): Int {
-        val previousOffset = detailsSheetAttachmentOffset
-        detailsSheetAttachmentOffset = PhotoDetailsLayoutPolicy.attachmentOffset(
+    private fun initialDetailsOffset(): Int =
+        PhotoDetailsLayoutPolicy.initialOffset(
             mediaHeight = mediaFrame.height,
             fittedImageBottom = host.fittedMediaBottom(),
             overlap = resources.getDimensionPixelSize(R.dimen.photo_details_sheet_overlap),
+            fallbackOffset = (root.height * DETAILS_FALLBACK_OFFSET_FRACTION).roundToInt(),
+            maximumOffset = maximumDetailsOffset(),
         )
+
+    private fun updateDetailsSheetAttachment(): Int {
+        val previousOffset = detailsSheetAttachmentOffset
+        detailsSheetAttachmentOffset =
+            PhotoDetailsLayoutPolicy.attachmentOffset(
+                mediaHeight = mediaFrame.height,
+                fittedImageBottom = host.fittedMediaBottom(),
+                overlap = resources.getDimensionPixelSize(R.dimen.photo_details_sheet_overlap),
+            )
         detailsSheet.translationY = -detailsSheetAttachmentOffset.toFloat()
         return detailsSheetAttachmentOffset - previousOffset
     }
@@ -180,11 +199,12 @@ internal class ViewerDetailsSheetController(
     fun synchronizeWithImage() {
         val attachmentChange = updateDetailsSheetAttachment()
         val adjustedOffset = photoDetailsScroll.scrollY - attachmentChange
-        val target = if (shown) {
-            adjustedOffset.coerceAtLeast(initialDetailsOffset())
-        } else {
-            0
-        }
+        val target =
+            if (shown) {
+                adjustedOffset.coerceAtLeast(initialDetailsOffset())
+            } else {
+                0
+            }
         setDetailsOffset(target.coerceAtMost(maximumDetailsOffset()))
     }
 
@@ -219,19 +239,21 @@ internal class ViewerDetailsSheetController(
         metadataLoaded = true
         val metadataRequest = host.request
         scope.launch {
-            val result = withContext(Dispatchers.IO) {
-                runCatching {
-                    metadataReader.read(
-                        context,
-                        uri,
-                        metadataRequest.displayName,
-                        metadataRequest.capturedAt,
-                    )
+            val result =
+                withContext(Dispatchers.IO) {
+                    runCatching {
+                        metadataReader.read(
+                            context,
+                            uri,
+                            metadataRequest.displayName,
+                            metadataRequest.capturedAt,
+                        )
+                    }
                 }
-            }
             if (host.request.stableId != metadataRequest.stableId) return@launch
             detailsProgress.visibility = View.GONE
-            result.onSuccess { items -> items.forEach(::addDetailsRow) }
+            result
+                .onSuccess { items -> items.forEach(::addDetailsRow) }
                 .onFailure {
                     addDetailsRow(
                         PhotoMetadataItem(
@@ -249,10 +271,11 @@ internal class ViewerDetailsSheetController(
 
     private fun openMap(action: PhotoMetadataAction.OpenMap) {
         val coordinates = "${action.latitude},${action.longitude}"
-        val intent = Intent(
-            Intent.ACTION_VIEW,
-            "geo:$coordinates?q=$coordinates".toUri(),
-        )
+        val intent =
+            Intent(
+                Intent.ACTION_VIEW,
+                "geo:$coordinates?q=$coordinates".toUri(),
+            )
         if (intent.resolveActivity(context.packageManager) == null) {
             Toast.makeText(context, R.string.no_maps_app, Toast.LENGTH_SHORT).show()
             return

@@ -1,11 +1,5 @@
 package com.bownee.lenswave.gallery
 
-import com.bownee.lenswave.viewer.PhotoViewerActivity
-import com.bownee.lenswave.applyBottomOverlayInsets
-import com.bownee.lenswave.configureEdgeToEdgeWindow
-import com.bownee.lenswave.LenswaveApplication
-import com.bownee.lenswave.dp
-import com.bownee.lenswave.R
 import android.app.Activity
 import android.os.Bundle
 import androidx.activity.OnBackPressedCallback
@@ -18,6 +12,11 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import com.bownee.lenswave.LenswaveApplication
+import com.bownee.lenswave.R
+import com.bownee.lenswave.applyBottomOverlayInsets
+import com.bownee.lenswave.configureEdgeToEdgeWindow
+import com.bownee.lenswave.dp
 import com.bownee.lenswave.gallery.GalleryAsset
 import com.bownee.lenswave.gallery.GalleryAuthCoordinator
 import com.bownee.lenswave.gallery.GalleryContent
@@ -37,10 +36,11 @@ import com.bownee.lenswave.gallery.GalleryUpdatePresenter
 import com.bownee.lenswave.gallery.GalleryViewModel
 import com.bownee.lenswave.gallery.LibraryAction
 import com.bownee.lenswave.gallery.PhotoDeletionExecutor
-import com.bownee.lenswave.proton.ProtonAlbum
 import com.bownee.lenswave.gallery.ProtonThumbnailImageSource
+import com.bownee.lenswave.proton.ProtonAlbum
 import com.bownee.lenswave.update.AppUpdateChecker
 import com.bownee.lenswave.update.UpdateAvailableDialogFragment
+import com.bownee.lenswave.viewer.PhotoViewerActivity
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -52,13 +52,21 @@ import me.proton.core.usersettings.domain.usecase.PerformUpdateTelemetry
 import javax.inject.Inject
 
 @AndroidEntryPoint
-class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listener {
+class GalleryActivity :
+    FragmentActivity(),
+    UpdateAvailableDialogFragment.Listener {
     @Inject lateinit var accountManager: AccountManager
+
     @Inject lateinit var authOrchestrator: AuthOrchestrator
+
     @Inject lateinit var thumbnailSource: ProtonThumbnailImageSource
+
     @Inject lateinit var photoDeletionExecutor: PhotoDeletionExecutor
+
     @Inject lateinit var observeUserSettings: ObserveUserSettings
+
     @Inject lateinit var updateTelemetry: PerformUpdateTelemetry
+
     @Inject lateinit var appUpdateChecker: AppUpdateChecker
 
     private val viewModel: GalleryViewModel by lazy {
@@ -86,46 +94,53 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
     // Registers an activity result launcher, so it must exist before the activity is started.
     private val notificationPermissionPrompter = GalleryNotificationPermissionPrompter(this)
 
-    private val viewerLauncher = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode != Activity.RESULT_OK) return@registerForActivityResult
-        val data = result.data ?: return@registerForActivityResult
-        if (data.getBooleanExtra(PhotoViewerActivity.EXTRA_PHOTO_DELETED, false) ||
-            data.getBooleanExtra(PhotoViewerActivity.EXTRA_FAVORITE_CHANGED, false)
-        ) {
-            viewModel.refreshAfterMutation()
+    private val viewerLauncher =
+        registerForActivityResult(
+            ActivityResultContracts.StartActivityForResult(),
+        ) { result ->
+            if (result.resultCode != Activity.RESULT_OK) return@registerForActivityResult
+            val data = result.data ?: return@registerForActivityResult
+            if (data.getBooleanExtra(PhotoViewerActivity.EXTRA_PHOTO_DELETED, false) ||
+                data.getBooleanExtra(PhotoViewerActivity.EXTRA_FAVORITE_CHANGED, false)
+            ) {
+                viewModel.refreshAfterMutation()
+            }
         }
-    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         updatePresenter = GalleryUpdatePresenter(activity = this, appUpdateChecker = appUpdateChecker)
         updatePresenter.restore(savedInstanceState)
         configureEdgeToEdgeWindow()
-        authCoordinator = GalleryAuthCoordinator(
-            activity = this,
-            accountManager = accountManager,
-            authOrchestrator = authOrchestrator,
-        )
-        settingsPresenter = GallerySettingsPresenter(
-            activity = this,
-            observeUserSettings = observeUserSettings,
-            updateTelemetry = updateTelemetry,
-            currentUserId = { currentUiState.currentUserId },
-            onConnectProton = ::connectProton,
-            onDisconnectProton = viewModel::disconnectProton,
-        )
-        deletionCoordinator = GalleryDeletionCoordinator(
-            activity = this,
-            deletionExecutor = photoDeletionExecutor,
-            currentUserId = { currentUiState.currentUserId },
-            onSelectionCleared = { adapter.clearSelection() },
-        )
+        authCoordinator =
+            GalleryAuthCoordinator(
+                activity = this,
+                accountManager = accountManager,
+                authOrchestrator = authOrchestrator,
+            )
+        settingsPresenter =
+            GallerySettingsPresenter(
+                activity = this,
+                observeUserSettings = observeUserSettings,
+                updateTelemetry = updateTelemetry,
+                currentUserId = { currentUiState.currentUserId },
+                onConnectProton = ::connectProton,
+                onDisconnectProton = viewModel::disconnectProton,
+            )
+        deletionCoordinator =
+            GalleryDeletionCoordinator(
+                activity = this,
+                deletionExecutor = photoDeletionExecutor,
+                currentUserId = { currentUiState.currentUserId },
+                onSelectionCleared = { adapter.clearSelection() },
+            )
         buildInterface()
-        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
-            override fun handleOnBackPressed() = handleBack()
-        })
+        onBackPressedDispatcher.addCallback(
+            this,
+            object : OnBackPressedCallback(true) {
+                override fun handleOnBackPressed() = handleBack()
+            },
+        )
         authCoordinator.register()
         observeGalleryState()
         if (savedInstanceState == null && LenswaveApplication.isAppUpdateStartupEnabled()) {
@@ -155,23 +170,25 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
     override fun onUpdateSnoozed(versionName: String) = updatePresenter.onUpdateSnoozed(versionName)
 
     private fun buildInterface() {
-        screen = GalleryScreen(
-            activity = this,
-            scope = lifecycleScope,
-            repository = thumbnailSource,
-            currentUserId = { currentUiState.currentUserId },
-            actions = GalleryScreen.Actions(
-                onPhotoClicked = ::openPhoto,
-                onAlbumClicked = ::openAlbum,
-                onLibraryAction = ::performLibraryAction,
-                onSelectionChanged = ::showSelection,
-                onBack = ::navigateUp,
-                onSettings = ::showSettingsMenu,
-                onTabSelected = ::selectTab,
-                onFilterSelected = ::selectFilter,
-                onDeleteSelection = ::deleteSelectedPhotos,
-            ),
-        )
+        screen =
+            GalleryScreen(
+                activity = this,
+                scope = lifecycleScope,
+                repository = thumbnailSource,
+                currentUserId = { currentUiState.currentUserId },
+                actions =
+                    GalleryScreen.Actions(
+                        onPhotoClicked = ::openPhoto,
+                        onAlbumClicked = ::openAlbum,
+                        onLibraryAction = ::performLibraryAction,
+                        onSelectionChanged = ::showSelection,
+                        onBack = ::navigateUp,
+                        onSettings = ::showSettingsMenu,
+                        onTabSelected = ::selectTab,
+                        onFilterSelected = ::selectFilter,
+                        onDeleteSelection = ::deleteSelectedPhotos,
+                    ),
+            )
         setContentView(screen.root)
         screen.onHeaderHeightChanged = { updateFastScrollTrack() }
 
@@ -215,10 +232,11 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
                 title = empty.title,
                 message = empty.message,
                 action = empty.actionLabel,
-                onAction = when (empty.action) {
-                    GalleryEmptyAction.CONNECT_PROTON -> ::connectProton
-                    null -> null
-                },
+                onAction =
+                    when (empty.action) {
+                        GalleryEmptyAction.CONNECT_PROTON -> ::connectProton
+                        null -> null
+                    },
             )
         } ?: screen.showContent()
         updateNavigationControls()
@@ -271,9 +289,14 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
 
     private fun performLibraryAction(action: LibraryAction) {
         when (action) {
-            is LibraryAction.Open -> selectDestination(action.destination)
-            is LibraryAction.Request -> when (action.action) {
-                GalleryEmptyAction.CONNECT_PROTON -> connectProton()
+            is LibraryAction.Open -> {
+                selectDestination(action.destination)
+            }
+
+            is LibraryAction.Request -> {
+                when (action.action) {
+                    GalleryEmptyAction.CONNECT_PROTON -> connectProton()
+                }
             }
         }
     }
@@ -343,7 +366,9 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
             savedPosition.firstVisiblePosition > 0 &&
             adapter.count == 0 &&
             state.emptyState == null
-        ) return
+        ) {
+            return
+        }
 
         pendingScrollRestore = null
         screen.restoreScrollPosition(
@@ -353,9 +378,10 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
 
     private fun applySystemInsets() {
         ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
-            val safeArea: Insets = insets.getInsets(
-                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
-            )
+            val safeArea: Insets =
+                insets.getInsets(
+                    WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),
+                )
             safeBottom = safeArea.bottom
             screen.applySafeArea(safeArea)
             updateFastScrollTrack()

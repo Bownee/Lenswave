@@ -9,7 +9,16 @@ plugins {
     // Core's presentation-compose artifact needs an AppTheme binding (see LenswaveTheme).
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.androidx.room)
+    alias(libs.plugins.ktlint)
     jacoco
+}
+
+// Formatting and style are enforced by ktlint (rules configured in .editorconfig).
+// `ktlintFormat` rewrites the sources; `ktlintCheck` runs in CI.
+ktlint {
+    version.set(libs.versions.ktlintCli.get())
+    android.set(true)
+    filter { exclude { entry -> entry.file.path.contains("/build/") || entry.file.path.contains("\\build\\") } }
 }
 
 // Validated once in the root build script from version.properties.
@@ -20,23 +29,28 @@ val releaseStoreFile = providers.environmentVariable("LENSWAVE_SIGNING_STORE_FIL
 val releaseStorePassword = providers.environmentVariable("LENSWAVE_SIGNING_STORE_PASSWORD").orNull
 val releaseKeyAlias = providers.environmentVariable("LENSWAVE_SIGNING_KEY_ALIAS").orNull
 val releaseKeyPassword = providers.environmentVariable("LENSWAVE_SIGNING_KEY_PASSWORD").orNull
-val hasReleaseSigning = listOf(
-    releaseStoreFile,
-    releaseStorePassword,
-    releaseKeyAlias,
-    releaseKeyPassword,
-).all { !it.isNullOrBlank() }
+val hasReleaseSigning =
+    listOf(
+        releaseStoreFile,
+        releaseStorePassword,
+        releaseKeyAlias,
+        releaseKeyPassword,
+    ).all { !it.isNullOrBlank() }
 
 // Build knobs used by CI (see .github/workflows/android.yml):
 //  -Plenswave.instrumentationBuildType=minified  runs device tests against the R8-optimised build
 //  -Plenswave.includeX86TestAbi=true             adds an x86_64 split for the emulator
-val instrumentationBuildType = providers.gradleProperty("lenswave.instrumentationBuildType")
-    .orElse("debug")
-    .get()
-val includeX86TestAbi = providers.gradleProperty("lenswave.includeX86TestAbi")
-    .map(String::toBoolean)
-    .orElse(false)
-    .get()
+val instrumentationBuildType =
+    providers
+        .gradleProperty("lenswave.instrumentationBuildType")
+        .orElse("debug")
+        .get()
+val includeX86TestAbi =
+    providers
+        .gradleProperty("lenswave.includeX86TestAbi")
+        .map(String::toBoolean)
+        .orElse(false)
+        .get()
 
 require(instrumentationBuildType in setOf("debug", "minified")) {
     "lenswave.instrumentationBuildType must be debug or minified"
@@ -183,20 +197,28 @@ jacoco {
 // AGP 9 compiles Kotlin with its built-in compiler and writes the classes to this intermediate
 // directory. The coverage tasks assert that it is non-empty so a future AGP change cannot make
 // the gate pass vacuously.
-val authoredDebugClasses = files(
-    fileTree(layout.buildDirectory.dir("intermediates/built_in_kotlinc/debug/compileDebugKotlin/classes")) {
-        include("com/bownee/lenswave/**")
-        exclude(
-            "**/BuildConfig.*", "**/R.class", "**/R$*.class",
-            "**/*_Factory*.*", "**/*_Impl*.*", "**/Hilt_*.*", "**/*HiltModules*.*",
-            "dagger/**", "hilt_aggregated_deps/**",
-        )
-    },
-)
-val debugCoverageData = fileTree(layout.buildDirectory) {
-    include("jacoco/testDebugUnitTest.exec")
-    include("outputs/unit_test_code_coverage/debugUnitTest/testDebugUnitTest.exec")
-}
+val authoredDebugClasses =
+    files(
+        fileTree(layout.buildDirectory.dir("intermediates/built_in_kotlinc/debug/compileDebugKotlin/classes")) {
+            include("com/bownee/lenswave/**")
+            exclude(
+                "**/BuildConfig.*",
+                "**/R.class",
+                "**/R$*.class",
+                "**/*_Factory*.*",
+                "**/*_Impl*.*",
+                "**/Hilt_*.*",
+                "**/*HiltModules*.*",
+                "dagger/**",
+                "hilt_aggregated_deps/**",
+            )
+        },
+    )
+val debugCoverageData =
+    fileTree(layout.buildDirectory) {
+        include("jacoco/testDebugUnitTest.exec")
+        include("outputs/unit_test_code_coverage/debugUnitTest/testDebugUnitTest.exec")
+    }
 
 // Reads the task's own inputs rather than script-level values so the configuration cache can
 // serialize the action.
@@ -248,14 +270,15 @@ tasks.register<JacocoCoverageVerification>("jacocoDebugCoverageVerification") {
         // Pure decision objects carry the app's testable logic and must stay close to fully covered.
         rule {
             element = "CLASS"
-            includes = listOf(
-                "com.bownee.lenswave.*Policy",
-                "com.bownee.lenswave.proton.ProtonSessionGuard",
-                "com.bownee.lenswave.proton.ProtonAccountTransitionCoordinator",
-                "com.bownee.lenswave.proton.ProtonSnapshotCoordinator",
-                "com.bownee.lenswave.proton.ProtonThumbnailQueue",
-                "com.bownee.lenswave.gallery.GalleryUiStateFactory",
-            )
+            includes =
+                listOf(
+                    "com.bownee.lenswave.*Policy",
+                    "com.bownee.lenswave.proton.ProtonSessionGuard",
+                    "com.bownee.lenswave.proton.ProtonAccountTransitionCoordinator",
+                    "com.bownee.lenswave.proton.ProtonSnapshotCoordinator",
+                    "com.bownee.lenswave.proton.ProtonThumbnailQueue",
+                    "com.bownee.lenswave.gallery.GalleryUiStateFactory",
+                )
             limit {
                 counter = "LINE"
                 value = "COVEREDRATIO"

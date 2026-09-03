@@ -38,30 +38,39 @@ class ProtonThumbnailMarksTest {
     fun itemsWithoutANodeUidAreLeftAlone() {
         val albums = listOf(album("with-cover", "cover", false), album("without-cover", null, false))
 
-        val updated = albums.withThumbnailAvailability(
-            setOf("cover"),
-            available = true,
-            nodeUid = ProtonAlbum::coverPhotoNodeUid,
-            hasThumbnail = ProtonAlbum::hasCoverThumbnail,
-            copy = { album, hasCoverThumbnail -> album.copy(hasCoverThumbnail = hasCoverThumbnail) },
-        )
+        val updated =
+            albums.withThumbnailAvailability(
+                setOf("cover"),
+                available = true,
+                nodeUid = ProtonAlbum::coverPhotoNodeUid,
+                hasThumbnail = ProtonAlbum::hasCoverThumbnail,
+                copy = { album, hasCoverThumbnail -> album.copy(hasCoverThumbnail = hasCoverThumbnail) },
+            )
 
         assertEquals(listOf(album("with-cover", "cover", true), album("without-cover", null, false)), updated)
     }
 
-    private fun List<ProtonGalleryPhoto>.mark(nodeUids: Set<String>, available: Boolean) =
-        withThumbnailAvailability(
-            nodeUids,
-            available,
-            nodeUid = ProtonGalleryPhoto::nodeUid,
-            hasThumbnail = ProtonGalleryPhoto::hasThumbnail,
-            copy = { photo, hasThumbnail -> photo.copy(hasThumbnail = hasThumbnail) },
-        )
+    private fun List<ProtonGalleryPhoto>.mark(
+        nodeUids: Set<String>,
+        available: Boolean,
+    ) = withThumbnailAvailability(
+        nodeUids,
+        available,
+        nodeUid = ProtonGalleryPhoto::nodeUid,
+        hasThumbnail = ProtonGalleryPhoto::hasThumbnail,
+        copy = { photo, hasThumbnail -> photo.copy(hasThumbnail = hasThumbnail) },
+    )
 
-    private fun photo(nodeUid: String, hasThumbnail: Boolean) =
-        ProtonGalleryPhoto(nodeUid, captureTimeEpochSeconds = 1L, hasThumbnail = hasThumbnail)
+    private fun photo(
+        nodeUid: String,
+        hasThumbnail: Boolean,
+    ) = ProtonGalleryPhoto(nodeUid, captureTimeEpochSeconds = 1L, hasThumbnail = hasThumbnail)
 
-    private fun album(nodeUid: String, coverPhotoNodeUid: String?, hasCoverThumbnail: Boolean) = ProtonAlbum(
+    private fun album(
+        nodeUid: String,
+        coverPhotoNodeUid: String?,
+        hasCoverThumbnail: Boolean,
+    ) = ProtonAlbum(
         nodeUid = nodeUid,
         name = nodeUid,
         photoCount = 1L,

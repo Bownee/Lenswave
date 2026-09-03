@@ -15,20 +15,23 @@ import androidx.core.content.edit
  * Must be constructed before the activity is started (for example as a field initializer) because
  * it registers an activity result launcher.
  */
-internal class GalleryNotificationPermissionPrompter(private val activity: ComponentActivity) {
+internal class GalleryNotificationPermissionPrompter(
+    private val activity: ComponentActivity,
+) {
     private var requestInFlight = false
     private val preferences by lazy {
         activity.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
     }
 
-    private val launcher = activity.registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) {
-        requestInFlight = false
-        preferences.edit {
-            putBoolean(KEY_THUMBNAIL_NOTIFICATION_PERMISSION_REQUESTED, true)
+    private val launcher =
+        activity.registerForActivityResult(
+            ActivityResultContracts.RequestPermission(),
+        ) {
+            requestInFlight = false
+            preferences.edit {
+                putBoolean(KEY_THUMBNAIL_NOTIFICATION_PERMISSION_REQUESTED, true)
+            }
         }
-    }
 
     fun requestIfNeeded(protonConnected: Boolean) {
         // Runtime notification permission only exists from Android 13; the explicit check also
@@ -37,16 +40,20 @@ internal class GalleryNotificationPermissionPrompter(private val activity: Compo
         if (!ThumbnailNotificationPermissionPolicy.shouldRequest(
                 apiLevel = Build.VERSION.SDK_INT,
                 protonConnected = protonConnected,
-                permissionGranted = ContextCompat.checkSelfPermission(
-                    activity,
-                    Manifest.permission.POST_NOTIFICATIONS,
-                ) == PackageManager.PERMISSION_GRANTED,
-                requestedBefore = preferences.getBoolean(
-                    KEY_THUMBNAIL_NOTIFICATION_PERMISSION_REQUESTED,
-                    false,
-                ) || requestInFlight,
+                permissionGranted =
+                    ContextCompat.checkSelfPermission(
+                        activity,
+                        Manifest.permission.POST_NOTIFICATIONS,
+                    ) == PackageManager.PERMISSION_GRANTED,
+                requestedBefore =
+                    preferences.getBoolean(
+                        KEY_THUMBNAIL_NOTIFICATION_PERMISSION_REQUESTED,
+                        false,
+                    ) || requestInFlight,
             )
-        ) return
+        ) {
+            return
+        }
         requestInFlight = true
         launcher.launch(Manifest.permission.POST_NOTIFICATIONS)
     }

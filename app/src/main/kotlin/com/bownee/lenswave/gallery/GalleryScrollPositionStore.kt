@@ -8,7 +8,10 @@ internal data class GalleryScrollPosition(
 internal class GalleryScrollPositionStore {
     private val positions = mutableMapOf<GalleryDestination, GalleryScrollPosition>()
 
-    fun save(destination: GalleryDestination, position: GalleryScrollPosition) {
+    fun save(
+        destination: GalleryDestination,
+        position: GalleryScrollPosition,
+    ) {
         positions[destination] = position
     }
 

@@ -1,11 +1,5 @@
 package com.bownee.lenswave.proton
 
-import java.io.IOException
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.ExecutionException
-import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.TimeoutException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
@@ -13,6 +7,12 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import java.io.IOException
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 
 class ProtonOriginalStreamTest {
     @get:Rule
@@ -38,10 +38,11 @@ class ProtonOriginalStreamTest {
         val executor = Executors.newSingleThreadExecutor()
         val started = CountDownLatch(1)
         try {
-            val readState = executor.submit<ProtonOriginalReadState> {
-                started.countDown()
-                stream.awaitReadable(0L)
-            }
+            val readState =
+                executor.submit<ProtonOriginalReadState> {
+                    started.countDown()
+                    stream.awaitReadable(0L)
+                }
             assertTrue(started.await(1L, TimeUnit.SECONDS))
             assertThrows(TimeoutException::class.java) {
                 readState.get(50L, TimeUnit.MILLISECONDS)
@@ -64,17 +65,19 @@ class ProtonOriginalStreamTest {
         val executor = Executors.newSingleThreadExecutor()
         val started = CountDownLatch(1)
         try {
-            val readState = executor.submit<ProtonOriginalReadState> {
-                started.countDown()
-                stream.awaitReadable(0L)
-            }
+            val readState =
+                executor.submit<ProtonOriginalReadState> {
+                    started.countDown()
+                    stream.awaitReadable(0L)
+                }
             assertTrue(started.await(1L, TimeUnit.SECONDS))
 
             stream.fail(IllegalStateException("network stopped"))
 
-            val failure = assertThrows(ExecutionException::class.java) {
-                readState.get(1L, TimeUnit.SECONDS)
-            }
+            val failure =
+                assertThrows(ExecutionException::class.java) {
+                    readState.get(1L, TimeUnit.SECONDS)
+                }
             assertTrue(failure.cause is IOException)
             assertTrue(failure.cause?.cause is IllegalStateException)
             assertFalse(stream.progress.value.complete)

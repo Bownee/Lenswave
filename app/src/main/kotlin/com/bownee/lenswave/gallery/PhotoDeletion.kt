@@ -17,7 +17,10 @@ data class PhotoDeletionPlan(
 fun GalleryAsset.toPhotoTarget(): PhotoTarget = PhotoTarget(stableId, nodeUid)
 
 sealed interface PhotoDeletionDecision {
-    data class Allowed(val plan: PhotoDeletionPlan) : PhotoDeletionDecision
+    data class Allowed(
+        val plan: PhotoDeletionPlan,
+    ) : PhotoDeletionDecision
+
     data object Empty : PhotoDeletionDecision
 }
 

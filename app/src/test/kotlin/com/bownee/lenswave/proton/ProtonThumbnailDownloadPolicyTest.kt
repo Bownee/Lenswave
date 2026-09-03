@@ -13,19 +13,23 @@ class ProtonThumbnailDownloadPolicyTest {
         val windows = ProtonThumbnailDownloadPolicy.concurrentWindows(nodeUids)
 
         assertEquals(nodeUids, windows.flatten().flatten())
-        assertTrue(windows.all { window ->
-            window.size <= ProtonThumbnailDownloadPolicy.MAX_CONCURRENT_BATCHES
-        })
-        assertTrue(windows.flatten().all { batch ->
-            batch.size <= ProtonThumbnailDownloadPolicy.SDK_BATCH_SIZE
-        })
+        assertTrue(
+            windows.all { window ->
+                window.size <= ProtonThumbnailDownloadPolicy.MAX_CONCURRENT_BATCHES
+            },
+        )
+        assertTrue(
+            windows.flatten().all { batch ->
+                batch.size <= ProtonThumbnailDownloadPolicy.SDK_BATCH_SIZE
+            },
+        )
     }
 
     @Test
     fun progressIsPublishedBeforeAnSdkBatchCanComplete() {
         assertTrue(
             ProtonThumbnailDownloadPolicy.PROGRESS_BATCH_SIZE <
-                ProtonThumbnailDownloadPolicy.SDK_BATCH_SIZE
+                ProtonThumbnailDownloadPolicy.SDK_BATCH_SIZE,
         )
         assertTrue(ProtonThumbnailDownloadPolicy.SDK_PASS_TIMEOUT_MILLIS > 0L)
     }
@@ -39,14 +43,14 @@ class ProtonThumbnailDownloadPolicyTest {
                 requested,
                 successfulNodeUids = setOf("success"),
                 failedNodeUids = setOf("failure"),
-            )
+            ),
         )
         assertFalse(
             ThumbnailPassCompletionPolicy.hasResponseForEveryNode(
                 requested,
                 successfulNodeUids = setOf("success"),
                 failedNodeUids = emptySet(),
-            )
+            ),
         )
     }
 }

@@ -18,11 +18,12 @@ class GalleryAssetTest {
         assertEquals(setOf(ProtonMediaTag.VIDEOS), restored.tags)
     }
 
-    private fun asset() = GalleryAsset(
-        stableId = "proton:node",
-        capturedAtEpochMillis = 1,
-        nodeUid = "node",
-        hasThumbnail = true,
-        tags = setOf(ProtonMediaTag.VIDEOS),
-    )
+    private fun asset() =
+        GalleryAsset(
+            stableId = "proton:node",
+            capturedAtEpochMillis = 1,
+            nodeUid = "node",
+            hasThumbnail = true,
+            tags = setOf(ProtonMediaTag.VIDEOS),
+        )
 }

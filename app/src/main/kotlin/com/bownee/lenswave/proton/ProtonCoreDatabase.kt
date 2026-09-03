@@ -142,15 +142,18 @@ abstract class ProtonCoreDatabase :
     NotificationDatabase,
     DeviceRecoveryDatabase,
     AuthDatabase {
-
     companion object {
-        fun create(context: Context, passphraseStore: DatabasePassphraseStore): ProtonCoreDatabase {
+        fun create(
+            context: Context,
+            passphraseStore: DatabasePassphraseStore,
+        ): ProtonCoreDatabase {
             System.loadLibrary("sqlcipher")
             // The factory keeps this array by reference and SQLCipher reads it on the first real
             // open, so it must stay intact for the lifetime of the database. Never zero it here.
             val passphrase = passphraseStore.getOrCreate()
             ProtonDatabaseKeyMigration.rekeyLegacyDatabase(context.getDatabasePath(NAME), passphrase)
-            return Room.databaseBuilder(context, ProtonCoreDatabase::class.java, NAME)
+            return Room
+                .databaseBuilder(context, ProtonCoreDatabase::class.java, NAME)
                 .openHelperFactory(SupportOpenHelperFactory(passphrase))
                 .build()
         }

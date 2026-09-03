@@ -11,11 +11,12 @@ import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import dagger.multibindings.ElementsIntoSet
+import kotlinx.coroutines.flow.first
 import me.proton.core.account.data.db.AccountDatabase
 import me.proton.core.account.domain.entity.AccountType
 import me.proton.core.auth.data.db.AuthDatabase
-import me.proton.core.auth.domain.usecase.PostLoginAccountSetup
 import me.proton.core.auth.domain.repository.AuthRepository
+import me.proton.core.auth.domain.usecase.PostLoginAccountSetup
 import me.proton.core.auth.presentation.DefaultHelpOptionHandler
 import me.proton.core.auth.presentation.DefaultUserCheck
 import me.proton.core.auth.presentation.HelpOptionHandler
@@ -27,6 +28,7 @@ import me.proton.core.devicemigration.domain.usecase.IsEasyDeviceMigrationAvaila
 import me.proton.core.devicemigration.domain.usecase.ObserveEdmCode
 import me.proton.core.domain.entity.AppStore
 import me.proton.core.domain.entity.Product
+import me.proton.core.domain.entity.UserId
 import me.proton.core.eventmanager.data.db.EventMetadataDatabase
 import me.proton.core.eventmanager.domain.EventListener
 import me.proton.core.featureflag.data.db.FeatureFlagDatabase
@@ -71,8 +73,6 @@ import me.proton.core.usersettings.data.db.UserSettingsDatabase
 import me.proton.core.usersettings.domain.usecase.ObserveUserSettings
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
-import kotlinx.coroutines.flow.first
-import me.proton.core.domain.entity.UserId
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -87,7 +87,9 @@ object ProtonCoreModule {
     ): ProtonCoreDatabase = ProtonCoreDatabase.create(context, passphraseStore)
 
     @Provides fun provideProduct(): Product = Product.Drive
+
     @Provides fun provideAppStore(): AppStore = AppStore.GooglePlay
+
     @Provides fun provideAccountType(): AccountType = AccountType.External
 
     @Provides
@@ -99,17 +101,35 @@ object ProtonCoreModule {
     fun provideHumanVerificationHost(): String = "https://verify.proton.me/"
 
     @Provides fun provideHumanVerificationVersion(): HumanVerificationVersion = HumanVerificationVersion.HV3
+
     @Provides fun provideExtraHeaders(): ExtraHeaderProvider = ExtraHeaderProviderImpl()
-    @Provides @DohProviderUrls fun provideDohUrls(): Array<String> = Constants.DOH_PROVIDERS_URLS
-    @Provides @CertificatePins fun providePins(): Array<String> = Constants.DEFAULT_SPKI_PINS
-    @Provides @AlternativeApiPins fun provideAlternativePins(): List<String> = Constants.ALTERNATIVE_API_SPKI_PINS
+
+    @Provides @DohProviderUrls
+    fun provideDohUrls(): Array<String> = Constants.DOH_PROVIDERS_URLS
+
+    @Provides @CertificatePins
+    fun providePins(): Array<String> = Constants.DEFAULT_SPKI_PINS
+
+    @Provides @AlternativeApiPins
+    fun provideAlternativePins(): List<String> = Constants.ALTERNATIVE_API_SPKI_PINS
+
     @Provides fun provideDohListener(): DohAlternativesListener? = null
+
     @Provides fun provideFeatureFlagOverrider(): FeatureFlagOverrider = FeatureFlagOverrider { null }
-    @Provides fun provideWorkManager(@ApplicationContext context: Context): WorkManager = WorkManager.getInstance(context)
+
+    @Provides fun provideWorkManager(
+        @ApplicationContext context: Context,
+    ): WorkManager = WorkManager.getInstance(context)
+
     @Provides fun provideAppTheme(): AppTheme = AppTheme { content -> LenswaveTheme { content() } }
+
     @Provides fun provideHelpOptionHandler(): HelpOptionHandler = DefaultHelpOptionHandler()
-    @Provides @SupportSignupPaidPlans fun provideSupportSignupPaidPlans(): Boolean = false
-    @Provides @SupportUpgradePaidPlans fun provideSupportUpgradePaidPlans(): Boolean = false
+
+    @Provides @SupportSignupPaidPlans
+    fun provideSupportSignupPaidPlans(): Boolean = false
+
+    @Provides @SupportUpgradePaidPlans
+    fun provideSupportUpgradePaidPlans(): Boolean = false
 
     @Provides
     fun provideDeviceMigrationAvailability(): IsEasyDeviceMigrationAvailable =
@@ -147,46 +167,70 @@ abstract class ProtonCoreBindings {
     @Binds abstract fun bindApiClient(client: LenswaveApiClient): ApiClient
 
     @Binds abstract fun bindAccountDatabase(database: ProtonCoreDatabase): AccountDatabase
+
     @Binds abstract fun bindAuthDatabase(database: ProtonCoreDatabase): AuthDatabase
+
     @Binds abstract fun bindChallengeDatabase(database: ProtonCoreDatabase): ChallengeDatabase
+
     @Binds abstract fun bindEventMetadataDatabase(database: ProtonCoreDatabase): EventMetadataDatabase
+
     @Binds abstract fun bindFeatureFlagDatabase(database: ProtonCoreDatabase): FeatureFlagDatabase
+
     @Binds abstract fun bindHumanVerificationDatabase(database: ProtonCoreDatabase): HumanVerificationDatabase
+
     @Binds abstract fun bindKeySaltDatabase(database: ProtonCoreDatabase): KeySaltDatabase
+
     @Binds abstract fun bindPublicAddressDatabase(database: ProtonCoreDatabase): PublicAddressDatabase
+
     @Binds abstract fun bindKeyTransparencyDatabase(database: ProtonCoreDatabase): KeyTransparencyDatabase
+
     @Binds abstract fun bindNotificationDatabase(database: ProtonCoreDatabase): NotificationDatabase
+
     @Binds abstract fun bindObservabilityDatabase(database: ProtonCoreDatabase): ObservabilityDatabase
+
     @Binds abstract fun bindPaymentDatabase(database: ProtonCoreDatabase): PaymentDatabase
+
     @Binds abstract fun bindPushDatabase(database: ProtonCoreDatabase): PushDatabase
+
     @Binds abstract fun bindTelemetryDatabase(database: ProtonCoreDatabase): TelemetryDatabase
+
     @Binds abstract fun bindAddressDatabase(database: ProtonCoreDatabase): AddressDatabase
+
     @Binds abstract fun bindUserDatabase(database: ProtonCoreDatabase): UserDatabase
+
     @Binds abstract fun bindDeviceRecoveryDatabase(database: ProtonCoreDatabase): DeviceRecoveryDatabase
+
     @Binds abstract fun bindOrganizationDatabase(database: ProtonCoreDatabase): OrganizationDatabase
+
     @Binds abstract fun bindUserSettingsDatabase(database: ProtonCoreDatabase): UserSettingsDatabase
 }
 
 /** Keeps Proton telemetry disabled while the authoritative account setting is unavailable. */
 @Singleton
-class LenswaveIsTelemetryEnabled @Inject constructor(
-    private val observeUserSettings: ObserveUserSettings,
-) : IsTelemetryEnabled {
-    override suspend fun invoke(userId: UserId?): Boolean {
-        userId ?: return false
-        return runCatching {
-        observeUserSettings(userId, refresh = false).first()?.telemetry == true
-        }.getOrDefault(false)
+class LenswaveIsTelemetryEnabled
+    @Inject
+    constructor(
+        private val observeUserSettings: ObserveUserSettings,
+    ) : IsTelemetryEnabled {
+        override suspend fun invoke(userId: UserId?): Boolean {
+            userId ?: return false
+            return runCatching {
+                observeUserSettings(userId, refresh = false).first()?.telemetry == true
+            }.getOrDefault(false)
+        }
     }
-}
 
 /** Mirrors Proton's telemetry plumbing while replacing only its fail-open policy binding. */
 @Module
 @InstallIn(SingletonComponent::class)
 abstract class LenswaveTelemetryBindings {
     @Binds abstract fun bindIsTelemetryEnabled(impl: LenswaveIsTelemetryEnabled): IsTelemetryEnabled
+
     @Binds abstract fun bindTelemetryRepository(impl: TelemetryRepositoryImpl): TelemetryRepository
+
     @Binds abstract fun bindTelemetryLocalDataSource(impl: TelemetryLocalDataSourceImpl): TelemetryLocalDataSource
+
     @Binds abstract fun bindTelemetryRemoteDataSource(impl: TelemetryRemoteDataSourceImpl): TelemetryRemoteDataSource
+
     @Binds abstract fun bindTelemetryWorkerManager(impl: TelemetryWorkerManagerImpl): TelemetryWorkerManager
 }

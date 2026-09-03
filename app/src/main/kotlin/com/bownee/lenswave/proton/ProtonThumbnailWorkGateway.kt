@@ -22,6 +22,5 @@ internal interface ProtonThumbnailWorkGateway {
 @InstallIn(SingletonComponent::class)
 internal object ProtonThumbnailWorkModule {
     @Provides
-    fun provideThumbnailWorkGateway(gateway: ProtonPhotoGateway): ProtonThumbnailWorkGateway =
-        gateway.thumbnailWork
+    fun provideThumbnailWorkGateway(gateway: ProtonPhotoGateway): ProtonThumbnailWorkGateway = gateway.thumbnailWork
 }

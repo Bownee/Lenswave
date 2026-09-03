@@ -39,7 +39,8 @@ object ProtonPresentationInitializer {
     ) {
         with(authOrchestrator) {
             register(activity)
-            accountManager.observe(activity.lifecycle, minActiveState = Lifecycle.State.CREATED)
+            accountManager
+                .observe(activity.lifecycle, minActiveState = Lifecycle.State.CREATED)
                 .onSessionSecondFactorNeeded { startSecondFactorWorkflow(it) }
                 .onSessionSecondFactorFailed { startLoginWorkflow(it.username) }
                 .onAccountTwoPassModeNeeded { startTwoPassModeWorkflow(it) }

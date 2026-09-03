@@ -6,10 +6,11 @@ import org.junit.Test
 class ProtonPhotoReconciliationTest {
     @Test
     fun reportsRemoteAdditionsAndCachedRemovals() {
-        val changes = ProtonPhotoReconciliation.compare(
-            cachedNodeUids = listOf("kept", "removed"),
-            remoteNodeUids = listOf("kept", "added"),
-        )
+        val changes =
+            ProtonPhotoReconciliation.compare(
+                cachedNodeUids = listOf("kept", "removed"),
+                remoteNodeUids = listOf("kept", "added"),
+            )
 
         assertEquals(setOf("added"), changes.addedNodeUids)
         assertEquals(setOf("removed"), changes.removedNodeUids)
@@ -17,10 +18,11 @@ class ProtonPhotoReconciliationTest {
 
     @Test
     fun ignoresOrderingAndDuplicates() {
-        val changes = ProtonPhotoReconciliation.compare(
-            cachedNodeUids = listOf("a", "b", "b"),
-            remoteNodeUids = listOf("b", "a"),
-        )
+        val changes =
+            ProtonPhotoReconciliation.compare(
+                cachedNodeUids = listOf("a", "b", "b"),
+                remoteNodeUids = listOf("b", "a"),
+            )
 
         assertEquals(ProtonPhotoChanges(), changes)
     }

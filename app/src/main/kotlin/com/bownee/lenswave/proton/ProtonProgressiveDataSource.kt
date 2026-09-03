@@ -34,11 +34,12 @@ internal class ProtonProgressiveDataSource(
         // The SDK's progress total describes the encrypted transfer, not the decrypted file, so
         // it must not bound the reads: a too-small total would end the stream early and fail the
         // first playback. Only the finished file's real length is trusted.
-        bytesRemaining = when {
-            dataSpec.length != C.LENGTH_UNSET.toLong() -> dataSpec.length
-            state.complete -> state.availableBytes - dataSpec.position
-            else -> C.LENGTH_UNSET.toLong()
-        }
+        bytesRemaining =
+            when {
+                dataSpec.length != C.LENGTH_UNSET.toLong() -> dataSpec.length
+                state.complete -> state.availableBytes - dataSpec.position
+                else -> C.LENGTH_UNSET.toLong()
+            }
         if (bytesRemaining < 0L) {
             closeInput()
             throw DataSourceException(PlaybackException.ERROR_CODE_IO_READ_POSITION_OUT_OF_RANGE)
@@ -48,7 +49,11 @@ internal class ProtonProgressiveDataSource(
         return bytesRemaining
     }
 
-    override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+    override fun read(
+        buffer: ByteArray,
+        offset: Int,
+        length: Int,
+    ): Int {
         if (length == 0) return 0
         if (bytesRemaining == 0L) return C.RESULT_END_OF_INPUT
         val source = checkNotNull(input) { "Data source is not open" }
@@ -57,10 +62,15 @@ internal class ProtonProgressiveDataSource(
             val available = state.availableBytes - readPosition
             if (available <= 0L && state.complete) return C.RESULT_END_OF_INPUT
             if (available <= 0L) continue
-            val requested = min(length.toLong(), available).let { availableLength ->
-                if (bytesRemaining == C.LENGTH_UNSET.toLong()) availableLength
-                else min(availableLength, bytesRemaining)
-            }.toInt()
+            val requested =
+                min(length.toLong(), available)
+                    .let { availableLength ->
+                        if (bytesRemaining == C.LENGTH_UNSET.toLong()) {
+                            availableLength
+                        } else {
+                            min(availableLength, bytesRemaining)
+                        }
+                    }.toInt()
             if (requested == 0) return C.RESULT_END_OF_INPUT
             val read = source.read(buffer, offset, requested)
             if (read < 0) {

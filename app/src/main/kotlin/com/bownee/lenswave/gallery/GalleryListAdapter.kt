@@ -29,10 +29,11 @@ class GalleryListAdapter(
 
     fun submitPhotos(photos: List<GalleryAsset>) {
         val stableIds = photos.mapTo(mutableSetOf(), GalleryAsset::stableId)
-        rows = GalleryGrouping.createRows(
-            photos = photos,
-            unknownDateLabel = context.getString(R.string.unknown_date),
-        )
+        rows =
+            GalleryGrouping.createRows(
+                photos = photos,
+                unknownDateLabel = context.getString(R.string.unknown_date),
+            )
         selected.keys.retainAll(stableIds)
         notifyDataSetChanged()
         notifySelectionChanged()
@@ -80,27 +81,59 @@ class GalleryListAdapter(
 
     override fun getItem(position: Int): GalleryRow = rows[position]
 
-    override fun getItemId(position: Int): Long = when (val row = rows[position]) {
-        is GalleryRow.DateHeader -> row.key.hashCode().toLong()
-        is GalleryRow.SectionHeading -> row.key.hashCode().toLong()
-        is GalleryRow.Photos -> row.items.first().stableId.hashCode().toLong()
-        is GalleryRow.Albums -> row.items.first().nodeUid.hashCode().toLong()
-        is GalleryRow.Entries -> row.items.first().key.hashCode().toLong()
-    }
+    override fun getItemId(position: Int): Long =
+        when (val row = rows[position]) {
+            is GalleryRow.DateHeader -> {
+                row.key.hashCode().toLong()
+            }
+
+            is GalleryRow.SectionHeading -> {
+                row.key.hashCode().toLong()
+            }
+
+            is GalleryRow.Photos -> {
+                row.items
+                    .first()
+                    .stableId
+                    .hashCode()
+                    .toLong()
+            }
+
+            is GalleryRow.Albums -> {
+                row.items
+                    .first()
+                    .nodeUid
+                    .hashCode()
+                    .toLong()
+            }
+
+            is GalleryRow.Entries -> {
+                row.items
+                    .first()
+                    .key
+                    .hashCode()
+                    .toLong()
+            }
+        }
 
     override fun getViewTypeCount(): Int = 5
 
-    override fun getItemViewType(position: Int): Int = when (rows[position]) {
-        is GalleryRow.DateHeader -> TYPE_DATE_HEADER
-        is GalleryRow.SectionHeading -> TYPE_SECTION_HEADING
-        is GalleryRow.Photos -> TYPE_PHOTOS
-        is GalleryRow.Albums -> TYPE_ALBUMS
-        is GalleryRow.Entries -> TYPE_ENTRIES
-    }
+    override fun getItemViewType(position: Int): Int =
+        when (rows[position]) {
+            is GalleryRow.DateHeader -> TYPE_DATE_HEADER
+            is GalleryRow.SectionHeading -> TYPE_SECTION_HEADING
+            is GalleryRow.Photos -> TYPE_PHOTOS
+            is GalleryRow.Albums -> TYPE_ALBUMS
+            is GalleryRow.Entries -> TYPE_ENTRIES
+        }
 
     override fun isEnabled(position: Int): Boolean = false
 
-    override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View =
+    override fun getView(
+        position: Int,
+        convertView: View?,
+        parent: ViewGroup?,
+    ): View =
         when (val row = rows[position]) {
             is GalleryRow.DateHeader -> headerView(row.label, convertView, sizeSp = 15f, heightDp = 46)
             is GalleryRow.SectionHeading -> headerView(row.label, convertView, sizeSp = 17f, heightDp = 60)
@@ -109,21 +142,30 @@ class GalleryListAdapter(
             is GalleryRow.Entries -> entriesView(row, convertView)
         }
 
-    private fun headerView(text: String, convertView: View?, sizeSp: Float, heightDp: Int): View {
-        val label = (convertView as? TextView) ?: TextView(context).apply {
-            setTextColor(UiStyle.text)
-            textSize = sizeSp
-            typeface = UiStyle.medium
-            gravity = Gravity.BOTTOM
-            setPadding(context.dp(EDGE_DP), 0, context.dp(EDGE_DP), context.dp(10))
-            layoutParams = AbsListView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, context.dp(heightDp))
-        }
+    private fun headerView(
+        text: String,
+        convertView: View?,
+        sizeSp: Float,
+        heightDp: Int,
+    ): View {
+        val label =
+            (convertView as? TextView) ?: TextView(context).apply {
+                setTextColor(UiStyle.text)
+                textSize = sizeSp
+                typeface = UiStyle.medium
+                gravity = Gravity.BOTTOM
+                setPadding(context.dp(EDGE_DP), 0, context.dp(EDGE_DP), context.dp(10))
+                layoutParams = AbsListView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, context.dp(heightDp))
+            }
         label.text = text
         ViewCompat.setAccessibilityHeading(label, true)
         return label
     }
 
-    private fun entriesView(row: GalleryRow.Entries, convertView: View?): View {
+    private fun entriesView(
+        row: GalleryRow.Entries,
+        convertView: View?,
+    ): View {
         val container = (convertView as? LinearLayout) ?: createEntryRow()
         for (column in 0 until ENTRY_COLUMN_COUNT) {
             val cell = container.getChildAt(column) as EntryCell
@@ -142,26 +184,31 @@ class GalleryListAdapter(
         return container
     }
 
-    private fun createEntryRow() = LinearLayout(context).apply {
-        orientation = LinearLayout.HORIZONTAL
-        gravity = Gravity.CENTER_VERTICAL
-        setPadding(context.dp(EDGE_DP), 0, context.dp(EDGE_DP), 0)
-        layoutParams = AbsListView.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            context.dp(ENTRY_HEIGHT_DP + ENTRY_GAP_DP),
-        )
-        repeat(ENTRY_COLUMN_COUNT) { column ->
-            addView(
-                EntryCell(context),
-                LinearLayout.LayoutParams(0, context.dp(ENTRY_HEIGHT_DP), 1f).apply {
-                    if (column > 0) marginStart = context.dp(ENTRY_GAP_DP / 2)
-                    if (column < ENTRY_COLUMN_COUNT - 1) marginEnd = context.dp(ENTRY_GAP_DP / 2)
-                },
-            )
+    private fun createEntryRow() =
+        LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(context.dp(EDGE_DP), 0, context.dp(EDGE_DP), 0)
+            layoutParams =
+                AbsListView.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    context.dp(ENTRY_HEIGHT_DP + ENTRY_GAP_DP),
+                )
+            repeat(ENTRY_COLUMN_COUNT) { column ->
+                addView(
+                    EntryCell(context),
+                    LinearLayout.LayoutParams(0, context.dp(ENTRY_HEIGHT_DP), 1f).apply {
+                        if (column > 0) marginStart = context.dp(ENTRY_GAP_DP / 2)
+                        if (column < ENTRY_COLUMN_COUNT - 1) marginEnd = context.dp(ENTRY_GAP_DP / 2)
+                    },
+                )
+            }
         }
-    }
 
-    private fun photosView(row: GalleryRow.Photos, convertView: View?): View {
+    private fun photosView(
+        row: GalleryRow.Photos,
+        convertView: View?,
+    ): View {
         val container = (convertView as? LinearLayout) ?: createPhotoRow()
         for (column in 0 until COLUMN_COUNT) {
             val cell = container.getChildAt(column) as PhotoCell
@@ -179,9 +226,12 @@ class GalleryListAdapter(
             cell.visibility = View.VISIBLE
             image.tag = photo.stableId
             val description = photo.displayName.ifBlank { context.getString(R.string.photo) }
-            cell.contentDescription = if (photo.hasThumbnail) description else {
-                context.getString(R.string.photo_thumbnail_unavailable, description)
-            }
+            cell.contentDescription =
+                if (photo.hasThumbnail) {
+                    description
+                } else {
+                    context.getString(R.string.photo_thumbnail_unavailable, description)
+                }
             image.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             cell.videoBadge.visibility = if (photo.mediaKind == MediaKind.VIDEO) View.VISIBLE else View.GONE
             cell.setOnClickListener {
@@ -203,24 +253,32 @@ class GalleryListAdapter(
         return container
     }
 
-    private fun createPhotoRow() = LinearLayout(context).apply {
-        orientation = LinearLayout.HORIZONTAL
-        gravity = Gravity.CENTER_VERTICAL
-        val gap = context.dp(PHOTO_GAP_DP)
-        layoutParams = AbsListView.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            (context.resources.displayMetrics.widthPixels - gap * (COLUMN_COUNT - 1)) / COLUMN_COUNT + gap,
-        )
-        repeat(COLUMN_COUNT) { column ->
-            addView(PhotoCell(context), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
-                if (column > 0) marginStart = gap / 2
-                if (column < COLUMN_COUNT - 1) marginEnd = gap - gap / 2
-                bottomMargin = gap
-            })
+    private fun createPhotoRow() =
+        LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            val gap = context.dp(PHOTO_GAP_DP)
+            layoutParams =
+                AbsListView.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    (context.resources.displayMetrics.widthPixels - gap * (COLUMN_COUNT - 1)) / COLUMN_COUNT + gap,
+                )
+            repeat(COLUMN_COUNT) { column ->
+                addView(
+                    PhotoCell(context),
+                    LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
+                        if (column > 0) marginStart = gap / 2
+                        if (column < COLUMN_COUNT - 1) marginEnd = gap - gap / 2
+                        bottomMargin = gap
+                    },
+                )
+            }
         }
-    }
 
-    private fun albumsView(row: GalleryRow.Albums, convertView: View?): View {
+    private fun albumsView(
+        row: GalleryRow.Albums,
+        convertView: View?,
+    ): View {
         val container = (convertView as? LinearLayout) ?: createAlbumRow()
         for (column in 0 until ALBUM_COLUMN_COUNT) {
             val cell = container.getChildAt(column) as AlbumCell
@@ -234,16 +292,18 @@ class GalleryListAdapter(
             }
             cell.visibility = View.VISIBLE
             val albumName = album.name.ifBlank { context.getString(R.string.untitled_album) }
-            val photoCount = context.resources.getQuantityString(
-                R.plurals.photo_count,
-                album.photoCount.toInt(),
-                album.photoCount,
-            )
-            val details = if (album.isShared) {
-                context.getString(R.string.shared_album_details, photoCount)
-            } else {
-                photoCount
-            }
+            val photoCount =
+                context.resources.getQuantityString(
+                    R.plurals.photo_count,
+                    album.photoCount.toInt(),
+                    album.photoCount,
+                )
+            val details =
+                if (album.isShared) {
+                    context.getString(R.string.shared_album_details, photoCount)
+                } else {
+                    photoCount
+                }
             cell.name.text = albumName
             cell.details.text = details
             cell.contentDescription = context.getString(R.string.album_accessibility, albumName, details)
@@ -253,23 +313,28 @@ class GalleryListAdapter(
         return container
     }
 
-    private fun createAlbumRow() = LinearLayout(context).apply {
-        orientation = LinearLayout.HORIZONTAL
-        gravity = Gravity.TOP
-        val gap = context.dp(ALBUM_GAP_DP)
-        setPadding(context.dp(EDGE_DP), 0, context.dp(EDGE_DP), 0)
-        val cellWidth = (context.resources.displayMetrics.widthPixels - context.dp(EDGE_DP) * 2 - gap) /
-            ALBUM_COLUMN_COUNT
-        val rowHeight = (cellWidth * ALBUM_COVER_ASPECT).roundToInt() + context.dp(58)
-        layoutParams = AbsListView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, rowHeight)
-        repeat(ALBUM_COLUMN_COUNT) { column ->
-            addView(AlbumCell(context), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
-                if (column > 0) marginStart = gap / 2
-                if (column < ALBUM_COLUMN_COUNT - 1) marginEnd = gap - gap / 2
-                bottomMargin = gap
-            })
+    private fun createAlbumRow() =
+        LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.TOP
+            val gap = context.dp(ALBUM_GAP_DP)
+            setPadding(context.dp(EDGE_DP), 0, context.dp(EDGE_DP), 0)
+            val cellWidth =
+                (context.resources.displayMetrics.widthPixels - context.dp(EDGE_DP) * 2 - gap) /
+                    ALBUM_COLUMN_COUNT
+            val rowHeight = (cellWidth * ALBUM_COVER_ASPECT).roundToInt() + context.dp(58)
+            layoutParams = AbsListView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, rowHeight)
+            repeat(ALBUM_COLUMN_COUNT) { column ->
+                addView(
+                    AlbumCell(context),
+                    LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
+                        if (column > 0) marginStart = gap / 2
+                        if (column < ALBUM_COLUMN_COUNT - 1) marginEnd = gap - gap / 2
+                        bottomMargin = gap
+                    },
+                )
+            }
         }
-    }
 
     private fun toggleSelection(photo: GalleryAsset) {
         if (selected.remove(photo.stableId) == null) selected[photo.stableId] = photo
@@ -281,7 +346,10 @@ class GalleryListAdapter(
         onSelectionChanged(selected.values.toList())
     }
 
-    private fun bindThumbnail(cell: PhotoCell, photo: GalleryAsset) {
+    private fun bindThumbnail(
+        cell: PhotoCell,
+        photo: GalleryAsset,
+    ) {
         val image = cell.image
         thumbnailLoader.load(
             asset = photo,
@@ -294,7 +362,10 @@ class GalleryListAdapter(
         }
     }
 
-    private fun bindAlbumCover(cell: AlbumCell, album: ProtonAlbum) {
+    private fun bindAlbumCover(
+        cell: AlbumCell,
+        album: ProtonAlbum,
+    ) {
         val image = cell.image
         val coverNodeUid = album.coverPhotoNodeUid
         val key = coverNodeUid?.let { "album-cover:$it" } ?: "album-empty:${album.nodeUid}"
@@ -305,9 +376,14 @@ class GalleryListAdapter(
         ) { bitmap ->
             if (image.tag != key) return@load
             image.setImageBitmap(bitmap)
-            cell.loading.visibility = if (
-                bitmap == null && coverNodeUid != null && !isFastScrolling
-            ) View.VISIBLE else View.GONE
+            cell.loading.visibility =
+                if (
+                    bitmap == null && coverNodeUid != null && !isFastScrolling
+                ) {
+                    View.VISIBLE
+                } else {
+                    View.GONE
+                }
             image.alpha = if (bitmap == null) 0.48f else 1f
         }
     }

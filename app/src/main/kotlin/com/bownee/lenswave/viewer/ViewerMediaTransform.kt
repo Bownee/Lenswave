@@ -30,12 +30,35 @@ internal class ViewerMediaTransform(
         mediaTitle.translationX = translationX
     }
 
-    fun animateMediaTranslationX(translationX: Float, duration: Long) {
-        photoView.animate().translationX(translationX).setDuration(duration).start()
-        playerView.animate().translationX(translationX).setDuration(duration).start()
-        thumbnailPreview.animate().translationX(translationX).setDuration(duration).start()
-        loadingPanel.animate().translationX(translationX).setDuration(duration).start()
-        mediaTitle.animate().translationX(translationX).setDuration(duration).start()
+    fun animateMediaTranslationX(
+        translationX: Float,
+        duration: Long,
+    ) {
+        photoView
+            .animate()
+            .translationX(translationX)
+            .setDuration(duration)
+            .start()
+        playerView
+            .animate()
+            .translationX(translationX)
+            .setDuration(duration)
+            .start()
+        thumbnailPreview
+            .animate()
+            .translationX(translationX)
+            .setDuration(duration)
+            .start()
+        loadingPanel
+            .animate()
+            .translationX(translationX)
+            .setDuration(duration)
+            .start()
+        mediaTitle
+            .animate()
+            .translationX(translationX)
+            .setDuration(duration)
+            .start()
     }
 
     fun setMediaTranslationY(translationY: Float) {
@@ -46,7 +69,10 @@ internal class ViewerMediaTransform(
         mediaTitle.translationY = translationY
     }
 
-    fun setMediaDismissTransform(translationY: Float, scale: Float) {
+    fun setMediaDismissTransform(
+        translationY: Float,
+        scale: Float,
+    ) {
         setMediaTranslationY(translationY)
         photoView.scaleX = scale
         photoView.scaleY = scale
@@ -62,7 +88,8 @@ internal class ViewerMediaTransform(
         alpha: Float,
         duration: Long,
     ) {
-        photoView.animate()
+        photoView
+            .animate()
             .translationY(translationY)
             .scaleX(scale)
             .scaleY(scale)
@@ -70,7 +97,8 @@ internal class ViewerMediaTransform(
             .setDuration(duration)
             .setInterpolator(ViewerVerticalSettle.interpolator)
             .start()
-        playerView.animate()
+        playerView
+            .animate()
             .translationY(translationY)
             .scaleX(scale)
             .scaleY(scale)
@@ -78,7 +106,8 @@ internal class ViewerMediaTransform(
             .setDuration(duration)
             .setInterpolator(ViewerVerticalSettle.interpolator)
             .start()
-        thumbnailPreview.animate()
+        thumbnailPreview
+            .animate()
             .translationY(translationY)
             .scaleX(scale)
             .scaleY(scale)
@@ -86,13 +115,15 @@ internal class ViewerMediaTransform(
             .setDuration(duration)
             .setInterpolator(ViewerVerticalSettle.interpolator)
             .start()
-        loadingPanel.animate()
+        loadingPanel
+            .animate()
             .translationY(translationY)
             .alpha(alpha)
             .setDuration(duration)
             .setInterpolator(ViewerVerticalSettle.interpolator)
             .start()
-        mediaTitle.animate()
+        mediaTitle
+            .animate()
             .translationY(translationY)
             .alpha(alpha)
             .setDuration(duration)
@@ -101,8 +132,13 @@ internal class ViewerMediaTransform(
     }
 
     /** Sends one media view off-screen the way a dismissed photo leaves, without an end action. */
-    fun animateDismissedMedia(view: View, targetY: Float, duration: Long) {
-        view.animate()
+    fun animateDismissedMedia(
+        view: View,
+        targetY: Float,
+        duration: Long,
+    ) {
+        view
+            .animate()
             .translationY(targetY)
             .scaleX(DISMISSED_SCALE)
             .scaleY(DISMISSED_SCALE)

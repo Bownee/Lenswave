@@ -32,12 +32,13 @@ internal class GallerySettingsPresenter(
                 menu.add(Menu.NONE, SETTINGS_DISCONNECT_PROTON, 0, R.string.disconnect_proton)
             }
             menu.add(Menu.NONE, SETTINGS_PRIVACY, 1, R.string.privacy_and_data)
-            menu.add(
-                Menu.NONE,
-                Menu.NONE,
-                2,
-                activity.getString(R.string.app_version, BuildConfig.VERSION_NAME),
-            ).isEnabled = false
+            menu
+                .add(
+                    Menu.NONE,
+                    Menu.NONE,
+                    2,
+                    activity.getString(R.string.app_version, BuildConfig.VERSION_NAME),
+                ).isEnabled = false
             setOnMenuItemClickListener { item ->
                 when (item.itemId) {
                     SETTINGS_CONNECT_PROTON -> onConnectProton()
@@ -53,7 +54,8 @@ internal class GallerySettingsPresenter(
     private fun showPrivacySettings() {
         val userId = currentUserId()
         if (userId == null) {
-            AlertDialog.Builder(activity)
+            AlertDialog
+                .Builder(activity)
                 .setTitle(R.string.privacy_and_data)
                 .setMessage(R.string.privacy_disconnected_message)
                 .setPositiveButton(android.R.string.ok, null)
@@ -61,10 +63,12 @@ internal class GallerySettingsPresenter(
             return
         }
         activity.lifecycleScope.launch {
-            val enabled = runCatching { observeUserSettings(userId, false).first()?.telemetry == true }
-                .getOrDefault(false)
+            val enabled =
+                runCatching { observeUserSettings(userId, false).first()?.telemetry == true }
+                    .getOrDefault(false)
             var desired = enabled
-            AlertDialog.Builder(activity)
+            AlertDialog
+                .Builder(activity)
                 .setTitle(R.string.privacy_and_data)
                 .setMessage(R.string.privacy_connected_message)
                 .setMultiChoiceItems(
@@ -75,19 +79,20 @@ internal class GallerySettingsPresenter(
                 .setPositiveButton(R.string.save) { _, _ ->
                     activity.lifecycleScope.launch {
                         val updated = runCatching { updateTelemetry(userId, desired) }.isSuccess
-                        Toast.makeText(
-                            activity,
-                            if (updated) R.string.privacy_setting_saved else R.string.privacy_setting_failed,
-                            Toast.LENGTH_LONG,
-                        ).show()
+                        Toast
+                            .makeText(
+                                activity,
+                                if (updated) R.string.privacy_setting_saved else R.string.privacy_setting_failed,
+                                Toast.LENGTH_LONG,
+                            ).show()
                     }
-                }
-                .show()
+                }.show()
         }
     }
 
     private fun confirmDisconnectProton() {
-        AlertDialog.Builder(activity)
+        AlertDialog
+            .Builder(activity)
             .setTitle(R.string.disconnect_proton_question)
             .setMessage(R.string.disconnect_proton_message)
             .setNegativeButton(R.string.cancel, null)

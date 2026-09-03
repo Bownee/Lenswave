@@ -7,10 +7,11 @@ internal object PhotoDetailsLayoutPolicy {
         mediaHeight: Int,
         fittedImageBottom: Float?,
         overlap: Int,
-    ): Int = fittedImageBottom
-        ?.takeIf(Float::isFinite)
-        ?.let { ceil(mediaHeight - it).toInt().coerceAtLeast(0) + overlap.coerceAtLeast(0) }
-        ?: 0
+    ): Int =
+        fittedImageBottom
+            ?.takeIf(Float::isFinite)
+            ?.let { ceil(mediaHeight - it).toInt().coerceAtLeast(0) + overlap.coerceAtLeast(0) }
+            ?: 0
 
     fun initialOffset(
         mediaHeight: Int,
@@ -19,11 +20,12 @@ internal object PhotoDetailsLayoutPolicy {
         fallbackOffset: Int,
         maximumOffset: Int,
     ): Int {
-        val sheetOffset = if (fittedImageBottom?.isFinite() == true) {
-            fallbackOffset - attachmentOffset(mediaHeight, fittedImageBottom, overlap)
-        } else {
-            fallbackOffset
-        }
+        val sheetOffset =
+            if (fittedImageBottom?.isFinite() == true) {
+                fallbackOffset - attachmentOffset(mediaHeight, fittedImageBottom, overlap)
+            } else {
+                fallbackOffset
+            }
         return sheetOffset.coerceIn(0, maximumOffset.coerceAtLeast(0))
     }
 

@@ -8,19 +8,36 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 sealed interface GalleryRow {
-    data class DateHeader(val key: String, val label: String) : GalleryRow
-    data class SectionHeading(val key: String, val label: String) : GalleryRow
-    data class Photos(val items: List<GalleryAsset>) : GalleryRow
-    data class Albums(val items: List<ProtonAlbum>) : GalleryRow
-    data class Entries(val items: List<LibraryItem.Entry>) : GalleryRow
+    data class DateHeader(
+        val key: String,
+        val label: String,
+    ) : GalleryRow
+
+    data class SectionHeading(
+        val key: String,
+        val label: String,
+    ) : GalleryRow
+
+    data class Photos(
+        val items: List<GalleryAsset>,
+    ) : GalleryRow
+
+    data class Albums(
+        val items: List<ProtonAlbum>,
+    ) : GalleryRow
+
+    data class Entries(
+        val items: List<LibraryItem.Entry>,
+    ) : GalleryRow
 }
 
 object GalleryGrouping {
-    fun sortPhotos(photos: List<GalleryAsset>): List<GalleryAsset> = photos.sortedWith(
-        compareByDescending<GalleryAsset> { it.capturedAtEpochMillis > 0 }
-            .thenByDescending { it.capturedAtEpochMillis }
-            .thenBy { it.stableId }
-    )
+    fun sortPhotos(photos: List<GalleryAsset>): List<GalleryAsset> =
+        photos.sortedWith(
+            compareByDescending<GalleryAsset> { it.capturedAtEpochMillis > 0 }
+                .thenByDescending { it.capturedAtEpochMillis }
+                .thenBy { it.stableId },
+        )
 
     fun createRows(
         photos: List<GalleryAsset>,
@@ -35,8 +52,9 @@ object GalleryGrouping {
         val formatter = DateTimeFormatter.ofPattern("EEE, d MMM uuuu", locale)
         return buildList {
             groups.forEach { (date, items) ->
-                val label = date?.format(formatter)?.replaceFirstChar { it.titlecase(locale) }
-                    ?: unknownDateLabel
+                val label =
+                    date?.format(formatter)?.replaceFirstChar { it.titlecase(locale) }
+                        ?: unknownDateLabel
                 add(GalleryRow.DateHeader(date?.toString() ?: "unknown", label))
                 items.chunked(columns).forEach { add(GalleryRow.Photos(it)) }
             }
@@ -52,20 +70,24 @@ object GalleryGrouping {
         return buildList {
             sections.forEach { section ->
                 if (section.title.isNotEmpty()) add(GalleryRow.SectionHeading(section.key, section.title))
-                section.items.filterIsInstance<LibraryItem.Album>()
+                section.items
+                    .filterIsInstance<LibraryItem.Album>()
                     .map(LibraryItem.Album::album)
                     .chunked(albumColumns)
                     .forEach { add(GalleryRow.Albums(it)) }
-                section.items.filterIsInstance<LibraryItem.Entry>()
+                section.items
+                    .filterIsInstance<LibraryItem.Entry>()
                     .chunked(entryColumns)
                     .forEach { add(GalleryRow.Entries(it)) }
             }
         }
     }
 
-    private fun dateOf(photo: GalleryAsset, zoneId: ZoneId): LocalDate? =
+    private fun dateOf(
+        photo: GalleryAsset,
+        zoneId: ZoneId,
+    ): LocalDate? =
         photo.capturedAtEpochMillis.takeIf { it > 0 }?.let { timestamp ->
             LocalDate.from(Instant.ofEpochMilli(timestamp).atZone(zoneId))
         }
-
 }

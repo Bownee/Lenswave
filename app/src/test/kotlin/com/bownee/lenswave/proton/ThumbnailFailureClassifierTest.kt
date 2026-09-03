@@ -1,9 +1,9 @@
 package com.bownee.lenswave.proton
 
-import java.io.IOException
-import java.net.SocketTimeoutException
 import org.junit.Assert.assertEquals
 import org.junit.Test
+import java.io.IOException
+import java.net.SocketTimeoutException
 
 class ThumbnailFailureClassifierTest {
     @Test fun timeoutIsRetryableNetworkFailure() {
@@ -32,5 +32,6 @@ class ThumbnailFailureClassifierTest {
     }
 
     private class AuthenticationException : RuntimeException()
+
     private class NotFoundException : RuntimeException()
 }

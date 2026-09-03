@@ -14,11 +14,12 @@ class PhotoMetadataModelTest {
 
     @Test
     fun `map action retains exact coordinates`() {
-        val item = PhotoMetadataItem(
-            label = "Coordinates",
-            value = "46.94809, 7.44744",
-            action = PhotoMetadataAction.OpenMap(46.94809, 7.44744),
-        )
+        val item =
+            PhotoMetadataItem(
+                label = "Coordinates",
+                value = "46.94809, 7.44744",
+                action = PhotoMetadataAction.OpenMap(46.94809, 7.44744),
+            )
 
         assertTrue(item.action is PhotoMetadataAction.OpenMap)
         val action = item.action as PhotoMetadataAction.OpenMap

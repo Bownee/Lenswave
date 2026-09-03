@@ -32,7 +32,8 @@ internal class GalleryDeletionCoordinator(
 
     private fun confirmMoveToTrash(photos: List<PhotoTarget>) {
         val count = photos.size
-        AlertDialog.Builder(activity)
+        AlertDialog
+            .Builder(activity)
             .setTitle(q(R.plurals.move_to_proton_trash_count, count, count))
             .setMessage(q(R.plurals.recover_from_proton_trash_count, count))
             .setNegativeButton(R.string.cancel, null)
@@ -54,7 +55,10 @@ internal class GalleryDeletionCoordinator(
                     Toast.LENGTH_SHORT,
                 )
                 if (result.failedCount > 0) {
-                    showMessage(q(R.plurals.could_not_move_count, result.failedCount, result.failedCount), Toast.LENGTH_LONG)
+                    showMessage(
+                        q(R.plurals.could_not_move_count, result.failedCount, result.failedCount),
+                        Toast.LENGTH_LONG,
+                    )
                 }
             } catch (error: CancellationException) {
                 throw error
@@ -66,10 +70,16 @@ internal class GalleryDeletionCoordinator(
         }
     }
 
-    private fun showMessage(message: String, duration: Int) {
+    private fun showMessage(
+        message: String,
+        duration: Int,
+    ) {
         Toast.makeText(activity, message, duration).show()
     }
 
-    private fun q(resource: Int, count: Int, vararg arguments: Any): String =
-        activity.resources.getQuantityString(resource, count, *arguments)
+    private fun q(
+        resource: Int,
+        count: Int,
+        vararg arguments: Any,
+    ): String = activity.resources.getQuantityString(resource, count, *arguments)
 }

@@ -50,26 +50,38 @@ object UiStyle {
 
     private fun color(resource: Int): Int = ContextCompat.getColor(applicationContext, resource)
 
-    internal fun withAlpha(color: Int, alpha: Int): Int =
-        Color.argb(alpha, Color.red(color), Color.green(color), Color.blue(color))
+    internal fun withAlpha(
+        color: Int,
+        alpha: Int,
+    ): Int = Color.argb(alpha, Color.red(color), Color.green(color), Color.blue(color))
 
-    fun rounded(context: Context, fill: Int, radiusDp: Int, stroke: Int? = null) =
-        GradientDrawable().apply {
-            shape = GradientDrawable.RECTANGLE
-            cornerRadius = context.dp(radiusDp).toFloat()
-            setColor(fill)
-            if (stroke != null) setStroke(context.dp(1), stroke)
-        }
+    fun rounded(
+        context: Context,
+        fill: Int,
+        radiusDp: Int,
+        stroke: Int? = null,
+    ) = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE
+        cornerRadius = context.dp(radiusDp).toFloat()
+        setColor(fill)
+        if (stroke != null) setStroke(context.dp(1), stroke)
+    }
 
-    fun circle(context: Context, fill: Int, stroke: Int? = null) = GradientDrawable().apply {
+    fun circle(
+        context: Context,
+        fill: Int,
+        stroke: Int? = null,
+    ) = GradientDrawable().apply {
         shape = GradientDrawable.OVAL
         setColor(fill)
         if (stroke != null) setStroke(context.dp(1), stroke)
     }
 
     /** Wraps [background] so taps show a soft ripple clipped to the background's shape. */
-    fun rippled(background: Drawable, tint: Int = text): Drawable =
-        RippleDrawable(ColorStateList.valueOf(withAlpha(tint, 46)), background, background)
+    fun rippled(
+        background: Drawable,
+        tint: Int = text,
+    ): Drawable = RippleDrawable(ColorStateList.valueOf(withAlpha(tint, 46)), background, background)
 
     fun label(
         context: Context,
@@ -77,12 +89,13 @@ object UiStyle {
         sizeSp: Float,
         color: Int = this.text,
         medium: Boolean = false,
-    ): TextView = TextView(context).apply {
-        this.text = text
-        textSize = sizeSp
-        setTextColor(color)
-        if (medium) typeface = this@UiStyle.medium
-    }
+    ): TextView =
+        TextView(context).apply {
+            this.text = text
+            textSize = sizeSp
+            setTextColor(color)
+            if (medium) typeface = this@UiStyle.medium
+        }
 
     fun iconButton(
         context: Context,
@@ -91,25 +104,31 @@ object UiStyle {
         fill: Int = surfaceRaised,
         tint: Int = text,
         sizeDp: Int = 44,
-    ): ImageButton = ImageButton(context).apply {
-        setImageResource(icon)
-        imageTintList = ColorStateList.valueOf(tint)
-        contentDescription = description
-        val inset = context.dp((sizeDp - 22) / 2)
-        setPadding(inset, inset, inset, inset)
-        background = rippled(circle(context, fill), tint)
-        scaleType = ImageView.ScaleType.FIT_CENTER
-    }
+    ): ImageButton =
+        ImageButton(context).apply {
+            setImageResource(icon)
+            imageTintList = ColorStateList.valueOf(tint)
+            contentDescription = description
+            val inset = context.dp((sizeDp - 22) / 2)
+            setPadding(inset, inset, inset, inset)
+            background = rippled(circle(context, fill), tint)
+            scaleType = ImageView.ScaleType.FIT_CENTER
+        }
 
     /** A filled accent call-to-action button. */
-    fun accentButton(context: Context, label: String, radiusDp: Int = 25): Button = Button(context).apply {
-        text = label
-        textSize = 15f
-        typeface = medium
-        setTextColor(onAccent)
-        isAllCaps = false
-        background = rippled(rounded(context, accent, radiusDp), onAccent)
-    }
+    fun accentButton(
+        context: Context,
+        label: String,
+        radiusDp: Int = 25,
+    ): Button =
+        Button(context).apply {
+            text = label
+            textSize = 15f
+            typeface = medium
+            setTextColor(onAccent)
+            isAllCaps = false
+            background = rippled(rounded(context, accent, radiusDp), onAccent)
+        }
 
     /** A compact pill with a leading icon; destructive pills use the danger palette. */
     fun pillButton(
@@ -117,34 +136,42 @@ object UiStyle {
         label: String,
         @DrawableRes icon: Int,
         destructive: Boolean = false,
-    ): Button = Button(context).apply {
-        text = label
-        textSize = 14f
-        typeface = medium
-        val tint = if (destructive) danger else this@UiStyle.text
-        setTextColor(tint)
-        isAllCaps = false
-        minWidth = 0
-        minimumWidth = 0
-        minHeight = 0
-        minimumHeight = 0
-        setCompoundDrawablesRelativeWithIntrinsicBounds(icon, 0, 0, 0)
-        TextViewCompat.setCompoundDrawableTintList(this, ColorStateList.valueOf(tint))
-        compoundDrawablePadding = context.dp(6)
-        setPadding(context.dp(14), 0, context.dp(16), 0)
-        background = rippled(rounded(context, if (destructive) dangerSoft else surfaceRaised, 22), tint)
-    }
+    ): Button =
+        Button(context).apply {
+            text = label
+            textSize = 14f
+            typeface = medium
+            val tint = if (destructive) danger else this@UiStyle.text
+            setTextColor(tint)
+            isAllCaps = false
+            minWidth = 0
+            minimumWidth = 0
+            minHeight = 0
+            minimumHeight = 0
+            setCompoundDrawablesRelativeWithIntrinsicBounds(icon, 0, 0, 0)
+            TextViewCompat.setCompoundDrawableTintList(this, ColorStateList.valueOf(tint))
+            compoundDrawablePadding = context.dp(6)
+            setPadding(context.dp(14), 0, context.dp(16), 0)
+            background = rippled(rounded(context, if (destructive) dangerSoft else surfaceRaised, 22), tint)
+        }
 
     /** Shows the filled or outlined heart and the matching accessibility label. */
-    fun applyFavoriteIcon(view: ImageView, favorite: Boolean) {
+    fun applyFavoriteIcon(
+        view: ImageView,
+        favorite: Boolean,
+    ) {
         view.setImageResource(if (favorite) R.drawable.ic_favorite else R.drawable.ic_favorite_border)
-        view.contentDescription = view.context.getString(
-            if (favorite) R.string.remove_from_favorites else R.string.add_to_favorites,
-        )
+        view.contentDescription =
+            view.context.getString(
+                if (favorite) R.string.remove_from_favorites else R.string.add_to_favorites,
+            )
     }
 
     /** Mirrors [selected] into the view's state and its spoken state description. */
-    fun setSelectedState(view: View, selected: Boolean) {
+    fun setSelectedState(
+        view: View,
+        selected: Boolean,
+    ) {
         view.isSelected = selected
         ViewCompat.setStateDescription(
             view,
@@ -152,30 +179,43 @@ object UiStyle {
         )
     }
 
-    fun clipRounded(view: View, radiusDp: Int) {
+    fun clipRounded(
+        view: View,
+        radiusDp: Int,
+    ) {
         val radius = view.context.dp(radiusDp).toFloat()
-        view.outlineProvider = object : ViewOutlineProvider() {
-            override fun getOutline(target: View, outline: Outline) {
-                outline.setRoundRect(0, 0, target.width, target.height, radius)
+        view.outlineProvider =
+            object : ViewOutlineProvider() {
+                override fun getOutline(
+                    target: View,
+                    outline: Outline,
+                ) {
+                    outline.setRoundRect(0, 0, target.width, target.height, radius)
+                }
             }
-        }
         view.clipToOutline = true
     }
 
-    fun matchWrap() = LinearLayout.LayoutParams(
-        ViewGroup.LayoutParams.MATCH_PARENT,
-        ViewGroup.LayoutParams.WRAP_CONTENT,
-    )
+    fun matchWrap() =
+        LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+        )
 
-    fun matchParentFrame(gravity: Int = Gravity.NO_GRAVITY) = FrameLayout.LayoutParams(
-        ViewGroup.LayoutParams.MATCH_PARENT,
-        ViewGroup.LayoutParams.MATCH_PARENT,
-        gravity,
-    )
+    fun matchParentFrame(gravity: Int = Gravity.NO_GRAVITY) =
+        FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            gravity,
+        )
 
     /** Layout for a bar floating above the bottom edge, inset by [marginDp] on three sides. */
-    fun bottomOverlayParams(context: Context, marginDp: Int = 16, bottomMarginDp: Int = 12) =
-        FrameLayout.LayoutParams(
+    fun bottomOverlayParams(
+        context: Context,
+        marginDp: Int = 16,
+        bottomMarginDp: Int = 12,
+    ) = FrameLayout
+        .LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT,
             Gravity.BOTTOM,
@@ -186,8 +226,7 @@ object UiStyle {
         }
 }
 
-fun Context.dp(value: Int): Int =
-    (value * resources.displayMetrics.density + 0.5f).toInt()
+fun Context.dp(value: Int): Int = (value * resources.displayMetrics.density + 0.5f).toInt()
 
 /** Draws behind the system bars with dark bar icons, as every Lenswave screen does. */
 fun Activity.configureEdgeToEdgeWindow() {
@@ -199,7 +238,10 @@ fun Activity.configureEdgeToEdgeWindow() {
 }
 
 /** Keeps a bottom floating bar clear of the navigation bar and display cutouts. */
-fun View.applyBottomOverlayInsets(insets: Insets, marginDp: Int = 8) {
+fun View.applyBottomOverlayInsets(
+    insets: Insets,
+    marginDp: Int = 8,
+) {
     (layoutParams as FrameLayout.LayoutParams).apply {
         leftMargin = context.dp(marginDp) + insets.left
         rightMargin = context.dp(marginDp) + insets.right

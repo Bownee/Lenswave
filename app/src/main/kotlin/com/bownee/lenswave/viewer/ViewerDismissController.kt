@@ -20,6 +20,7 @@ internal class ViewerDismissController(
         val gesturesBlocked: Boolean
         val dismissing: Boolean
         val detailsShown: Boolean
+
         fun activeMediaView(): View
 
         /** Marks the viewer as dismissing and disables the action buttons. */
@@ -37,7 +38,11 @@ internal class ViewerDismissController(
     private val detailsSheet get() = screen.detailsSheet
     private val density get() = activity.resources.displayMetrics.density
 
-    fun handlePhotoDismissDrag(distance: Float, velocity: Float, finished: Boolean) {
+    fun handlePhotoDismissDrag(
+        distance: Float,
+        velocity: Float,
+        finished: Boolean,
+    ) {
         if (host.gesturesBlocked) return
         if (finished) {
             if (VerticalGesturePolicy.shouldDismissViewer(
@@ -72,9 +77,25 @@ internal class ViewerDismissController(
         val duration = verticalSettleDuration(host.activeMediaView().translationY, velocity)
         mediaTransform.cancelMediaAnimations()
         mediaTransform.animateMediaDismissTransform(0f, 1f, 1f, duration)
-        backgroundScrim.animate().alpha(1f).setDuration(duration).setInterpolator(ViewerVerticalSettle.interpolator).start()
-        actions.animate().alpha(1f).setDuration(duration).setInterpolator(ViewerVerticalSettle.interpolator).start()
-        mediaTitle.animate().alpha(1f).setDuration(duration).setInterpolator(ViewerVerticalSettle.interpolator).start()
+        backgroundScrim
+            .animate()
+            .alpha(
+                1f,
+            ).setDuration(duration)
+            .setInterpolator(ViewerVerticalSettle.interpolator)
+            .start()
+        actions
+            .animate()
+            .alpha(1f)
+            .setDuration(duration)
+            .setInterpolator(ViewerVerticalSettle.interpolator)
+            .start()
+        mediaTitle
+            .animate()
+            .alpha(1f)
+            .setDuration(duration)
+            .setInterpolator(ViewerVerticalSettle.interpolator)
+            .start()
     }
 
     fun animateDismissToGallery(velocity: Float = 0f) {
@@ -83,7 +104,8 @@ internal class ViewerDismissController(
         val activeMedia = host.activeMediaView()
         val duration = verticalSettleDuration(targetY - activeMedia.translationY, velocity)
         mediaTransform.cancelMediaAnimations()
-        activeMedia.animate()
+        activeMedia
+            .animate()
             .translationY(targetY)
             .scaleX(ViewerMediaTransform.DISMISSED_SCALE)
             .scaleY(ViewerMediaTransform.DISMISSED_SCALE)
@@ -93,15 +115,15 @@ internal class ViewerDismissController(
             .withEndAction {
                 activity.finish()
                 disableExitTransition()
-            }
-            .start()
+            }.start()
         if (activeMedia !== photoView) {
             mediaTransform.animateDismissedMedia(photoView, targetY, duration)
         }
         if (activeMedia !== playerView) {
             mediaTransform.animateDismissedMedia(playerView, targetY, duration)
         }
-        thumbnailPreview.animate()
+        thumbnailPreview
+            .animate()
             .translationY(targetY)
             .scaleX(ViewerMediaTransform.DISMISSED_SCALE)
             .scaleY(ViewerMediaTransform.DISMISSED_SCALE)
@@ -109,7 +131,8 @@ internal class ViewerDismissController(
             .setDuration(duration)
             .setInterpolator(ViewerVerticalSettle.interpolator)
             .start()
-        loadingPanel.animate()
+        loadingPanel
+            .animate()
             .translationY(targetY)
             .alpha(0f)
             .setDuration(duration)
@@ -117,20 +140,39 @@ internal class ViewerDismissController(
             .start()
         if (host.detailsShown) {
             detailsSheet.animate().cancel()
-            detailsSheet.animate()
+            detailsSheet
+                .animate()
                 .translationY(detailsSheet.height.toFloat())
                 .alpha(0f)
                 .setDuration(duration)
                 .setInterpolator(ViewerVerticalSettle.interpolator)
                 .start()
         }
-        backgroundScrim.animate().alpha(0f).setDuration(duration).setInterpolator(ViewerVerticalSettle.interpolator).start()
-        actions.animate().alpha(0f).setDuration(duration).setInterpolator(ViewerVerticalSettle.interpolator).start()
-        mediaTitle.animate().alpha(0f).setDuration(duration).setInterpolator(ViewerVerticalSettle.interpolator).start()
+        backgroundScrim
+            .animate()
+            .alpha(
+                0f,
+            ).setDuration(duration)
+            .setInterpolator(ViewerVerticalSettle.interpolator)
+            .start()
+        actions
+            .animate()
+            .alpha(0f)
+            .setDuration(duration)
+            .setInterpolator(ViewerVerticalSettle.interpolator)
+            .start()
+        mediaTitle
+            .animate()
+            .alpha(0f)
+            .setDuration(duration)
+            .setInterpolator(ViewerVerticalSettle.interpolator)
+            .start()
     }
 
-    private fun verticalSettleDuration(remainingDistance: Float, velocity: Float): Long =
-        ViewerVerticalSettle.duration(remainingDistance, velocity, density)
+    private fun verticalSettleDuration(
+        remainingDistance: Float,
+        velocity: Float,
+    ): Long = ViewerVerticalSettle.duration(remainingDistance, velocity, density)
 
     @Suppress("DEPRECATION")
     private fun disableExitTransition() {

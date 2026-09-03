@@ -12,7 +12,5 @@ internal abstract class AppUpdateModule {
     abstract fun bindLatestReleaseClient(implementation: GitHubReleasesClient): LatestReleaseClient
 
     @Binds
-    abstract fun bindAppUpdateStateStore(
-        implementation: SharedPreferencesAppUpdateStateStore,
-    ): AppUpdateStateStore
+    abstract fun bindAppUpdateStateStore(implementation: SharedPreferencesAppUpdateStateStore): AppUpdateStateStore
 }

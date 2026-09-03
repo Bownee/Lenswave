@@ -13,7 +13,7 @@ class ThumbnailNotificationPermissionPolicyTest {
                 protonConnected = true,
                 permissionGranted = false,
                 requestedBefore = false,
-            )
+            ),
         )
         assertFalse(
             ThumbnailNotificationPermissionPolicy.shouldRequest(
@@ -21,20 +21,20 @@ class ThumbnailNotificationPermissionPolicyTest {
                 protonConnected = true,
                 permissionGranted = false,
                 requestedBefore = true,
-            )
+            ),
         )
     }
 
     @Test
     fun skipsTheRequestWhenItIsUnsupportedUnneededOrAlreadyGranted() {
         assertFalse(
-            ThumbnailNotificationPermissionPolicy.shouldRequest(32, true, false, false)
+            ThumbnailNotificationPermissionPolicy.shouldRequest(32, true, false, false),
         )
         assertFalse(
-            ThumbnailNotificationPermissionPolicy.shouldRequest(33, false, false, false)
+            ThumbnailNotificationPermissionPolicy.shouldRequest(33, false, false, false),
         )
         assertFalse(
-            ThumbnailNotificationPermissionPolicy.shouldRequest(33, true, true, false)
+            ThumbnailNotificationPermissionPolicy.shouldRequest(33, true, true, false),
         )
     }
 }

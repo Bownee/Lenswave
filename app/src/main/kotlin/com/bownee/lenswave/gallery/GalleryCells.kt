@@ -18,80 +18,98 @@ import com.bownee.lenswave.UiStyle
 import com.bownee.lenswave.dp
 
 /** A photo thumbnail in the grid with its selection, loading and video overlays. */
-internal class PhotoCell(context: Context) : FrameLayout(context) {
-    val image = ImageView(context).apply {
-        scaleType = ImageView.ScaleType.CENTER_CROP
-        setBackgroundColor(UiStyle.surfaceRaised)
-    }
-    val selectionScrim = View(context).apply {
-        background = UiStyle.rounded(context, UiStyle.withAlpha(UiStyle.accent, 70), 10)
-        visibility = View.GONE
-        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-    }
-    val loading = ProgressBar(context).apply {
-        indeterminateTintList = ColorStateList.valueOf(UiStyle.muted)
-        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-        visibility = View.GONE
-    }
-    val check = ImageView(context).apply {
-        setImageResource(R.drawable.ic_check)
-        imageTintList = ColorStateList.valueOf(UiStyle.onAccent)
-        setPadding(context.dp(5))
-        background = UiStyle.circle(context, UiStyle.accent, Color.WHITE)
-        visibility = View.GONE
-        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-    }
-    val videoBadge = ImageView(context).apply {
-        setImageResource(R.drawable.ic_play)
-        imageTintList = ColorStateList.valueOf(Color.WHITE)
-        setPadding(context.dp(8))
-        background = UiStyle.circle(context, Color.argb(150, 10, 12, 18))
-        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-        visibility = View.GONE
-    }
+internal class PhotoCell(
+    context: Context,
+) : FrameLayout(context) {
+    val image =
+        ImageView(context).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            setBackgroundColor(UiStyle.surfaceRaised)
+        }
+    val selectionScrim =
+        View(context).apply {
+            background = UiStyle.rounded(context, UiStyle.withAlpha(UiStyle.accent, 70), 10)
+            visibility = View.GONE
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+    val loading =
+        ProgressBar(context).apply {
+            indeterminateTintList = ColorStateList.valueOf(UiStyle.muted)
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            visibility = View.GONE
+        }
+    val check =
+        ImageView(context).apply {
+            setImageResource(R.drawable.ic_check)
+            imageTintList = ColorStateList.valueOf(UiStyle.onAccent)
+            setPadding(context.dp(5))
+            background = UiStyle.circle(context, UiStyle.accent, Color.WHITE)
+            visibility = View.GONE
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+    val videoBadge =
+        ImageView(context).apply {
+            setImageResource(R.drawable.ic_play)
+            imageTintList = ColorStateList.valueOf(Color.WHITE)
+            setPadding(context.dp(8))
+            background = UiStyle.circle(context, Color.argb(150, 10, 12, 18))
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            visibility = View.GONE
+        }
+
     init {
         UiStyle.clipRounded(this, 10)
         setBackgroundColor(UiStyle.surface)
         addView(image, LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         addView(selectionScrim, LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         addView(loading, LayoutParams(context.dp(26), context.dp(26), Gravity.CENTER))
-        addView(check, LayoutParams(context.dp(26), context.dp(26), Gravity.TOP or Gravity.START).apply {
-            topMargin = context.dp(8)
-            marginStart = context.dp(8)
-        })
+        addView(
+            check,
+            LayoutParams(context.dp(26), context.dp(26), Gravity.TOP or Gravity.START).apply {
+                topMargin = context.dp(8)
+                marginStart = context.dp(8)
+            },
+        )
         addView(videoBadge, LayoutParams(context.dp(36), context.dp(36), Gravity.CENTER))
     }
 }
 
 /** An album tile: rounded cover image above the album name and its details line. */
-internal class AlbumCell(context: Context) : LinearLayout(context) {
-    private val cover = FrameLayout(context).apply {
-        UiStyle.clipRounded(this, 18)
-        setBackgroundColor(UiStyle.surfaceRaised)
-    }
-    val image = ImageView(context).apply {
-        scaleType = ImageView.ScaleType.CENTER_CROP
-    }
-    val loading = ProgressBar(context).apply {
-        indeterminateTintList = ColorStateList.valueOf(UiStyle.muted)
-        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-        visibility = View.GONE
-    }
-    val name = TextView(context).apply {
-        setTextColor(UiStyle.text)
-        textSize = 15f
-        typeface = UiStyle.medium
-        maxLines = 1
-        ellipsize = TextUtils.TruncateAt.END
-        setPadding(context.dp(4), context.dp(10), context.dp(4), 0)
-    }
-    val details = TextView(context).apply {
-        setTextColor(UiStyle.muted)
-        textSize = 12.5f
-        maxLines = 1
-        ellipsize = TextUtils.TruncateAt.END
-        setPadding(context.dp(4), context.dp(2), context.dp(4), 0)
-    }
+internal class AlbumCell(
+    context: Context,
+) : LinearLayout(context) {
+    private val cover =
+        FrameLayout(context).apply {
+            UiStyle.clipRounded(this, 18)
+            setBackgroundColor(UiStyle.surfaceRaised)
+        }
+    val image =
+        ImageView(context).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+        }
+    val loading =
+        ProgressBar(context).apply {
+            indeterminateTintList = ColorStateList.valueOf(UiStyle.muted)
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            visibility = View.GONE
+        }
+    val name =
+        TextView(context).apply {
+            setTextColor(UiStyle.text)
+            textSize = 15f
+            typeface = UiStyle.medium
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+            setPadding(context.dp(4), context.dp(10), context.dp(4), 0)
+        }
+    val details =
+        TextView(context).apply {
+            setTextColor(UiStyle.muted)
+            textSize = 12.5f
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+            setPadding(context.dp(4), context.dp(2), context.dp(4), 0)
+        }
 
     init {
         orientation = VERTICAL
@@ -112,20 +130,24 @@ internal class AlbumCell(context: Context) : LinearLayout(context) {
 }
 
 /** A library entry: a tinted icon in a circle beside its label, in a rippled rounded pill. */
-internal class EntryCell(context: Context) : LinearLayout(context) {
-    val icon = ImageView(context).apply {
-        imageTintList = ColorStateList.valueOf(UiStyle.accent)
-        setPadding(context.dp(8))
-        background = UiStyle.circle(context, UiStyle.accentSoft)
-        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-    }
-    val label = TextView(context).apply {
-        setTextColor(UiStyle.text)
-        textSize = 15f
-        typeface = UiStyle.medium
-        maxLines = 1
-        ellipsize = TextUtils.TruncateAt.END
-    }
+internal class EntryCell(
+    context: Context,
+) : LinearLayout(context) {
+    val icon =
+        ImageView(context).apply {
+            imageTintList = ColorStateList.valueOf(UiStyle.accent)
+            setPadding(context.dp(8))
+            background = UiStyle.circle(context, UiStyle.accentSoft)
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+    val label =
+        TextView(context).apply {
+            setTextColor(UiStyle.text)
+            textSize = 15f
+            typeface = UiStyle.medium
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+        }
 
     init {
         orientation = HORIZONTAL

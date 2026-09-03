@@ -16,7 +16,7 @@ class ProtonSyncPolicyTest {
                 nowMillis = now,
                 forceRemote = false,
                 hasCachedSnapshot = true,
-            )
+            ),
         )
     }
 
@@ -29,7 +29,7 @@ class ProtonSyncPolicyTest {
                 nowMillis = 2_000L,
                 forceRemote = true,
                 hasCachedSnapshot = true,
-            )
+            ),
         )
     }
 
@@ -44,7 +44,7 @@ class ProtonSyncPolicyTest {
                 nowMillis = now,
                 forceRemote = false,
                 hasCachedSnapshot = false,
-            )
+            ),
         )
         assertTrue(
             ProtonSyncPolicy.shouldEnumerate(
@@ -53,7 +53,7 @@ class ProtonSyncPolicyTest {
                 nowMillis = now,
                 forceRemote = false,
                 hasCachedSnapshot = true,
-            )
+            ),
         )
         assertTrue(
             ProtonSyncPolicy.shouldEnumerate(
@@ -62,7 +62,7 @@ class ProtonSyncPolicyTest {
                 nowMillis = now,
                 forceRemote = false,
                 hasCachedSnapshot = true,
-            )
+            ),
         )
     }
 }

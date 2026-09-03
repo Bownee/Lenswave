@@ -1,13 +1,5 @@
 package com.bownee.lenswave.viewer
 
-import com.bownee.lenswave.proton.ProtonProgressiveDataSource
-import com.bownee.lenswave.applyBottomOverlayInsets
-import com.bownee.lenswave.configureEdgeToEdgeWindow
-import com.bownee.lenswave.dp
-import com.bownee.lenswave.UiStyle
-import com.bownee.lenswave.LenswaveDiagnostics
-import com.bownee.lenswave.LenswaveOperation
-import com.bownee.lenswave.R
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.Context
@@ -36,17 +28,25 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
+import com.bownee.lenswave.LenswaveDiagnostics
+import com.bownee.lenswave.LenswaveOperation
+import com.bownee.lenswave.R
+import com.bownee.lenswave.UiStyle
+import com.bownee.lenswave.applyBottomOverlayInsets
+import com.bownee.lenswave.configureEdgeToEdgeWindow
+import com.bownee.lenswave.dp
 import com.bownee.lenswave.gallery.GalleryAsset
 import com.bownee.lenswave.gallery.MediaKind
 import com.bownee.lenswave.gallery.PhotoDeletionDecision
 import com.bownee.lenswave.gallery.PhotoDeletionExecutor
 import com.bownee.lenswave.gallery.PhotoDeletionPolicy
-import com.bownee.lenswave.metadata.PhotoMetadataReader
-import com.bownee.lenswave.proton.ProtonOriginalDownloadProgress
-import com.bownee.lenswave.proton.ProtonOriginalStream
 import com.bownee.lenswave.gallery.ProtonOriginalMediaSource
 import com.bownee.lenswave.gallery.ProtonPhotoMutations
 import com.bownee.lenswave.gallery.ProtonThumbnailImageSource
+import com.bownee.lenswave.metadata.PhotoMetadataReader
+import com.bownee.lenswave.proton.ProtonOriginalDownloadProgress
+import com.bownee.lenswave.proton.ProtonOriginalStream
+import com.bownee.lenswave.proton.ProtonProgressiveDataSource
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -69,9 +69,13 @@ import kotlin.math.roundToInt
 @AndroidEntryPoint
 class PhotoViewerActivity : FragmentActivity() {
     @Inject lateinit var originalMedia: ProtonOriginalMediaSource
+
     @Inject lateinit var thumbnailSource: ProtonThumbnailImageSource
+
     @Inject lateinit var photoMutations: ProtonPhotoMutations
+
     @Inject lateinit var metadataReader: PhotoMetadataReader
+
     @Inject lateinit var photoDeletionExecutor: PhotoDeletionExecutor
 
     private lateinit var screen: PhotoViewerScreen
@@ -109,6 +113,7 @@ class PhotoViewerActivity : FragmentActivity() {
     private var videoProgressJob: Job? = null
     private var loadingPanelRunnable: Runnable? = null
     private var pendingPreviewClear: Runnable? = null
+
     /** Accumulates what the gallery must refresh; a later result must not drop an earlier flag. */
     private val resultIntent = Intent()
     private var player: ExoPlayer? = null
@@ -119,9 +124,12 @@ class PhotoViewerActivity : FragmentActivity() {
         navigationRequests = PhotoRequest.navigationFrom(intent).ifEmpty { listOf(request) }
         configureEdgeToEdgeWindow()
         buildInterface()
-        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
-            override fun handleOnBackPressed() = handleBack()
-        })
+        onBackPressedDispatcher.addCallback(
+            this,
+            object : OnBackPressedCallback(true) {
+                override fun handleOnBackPressed() = handleBack()
+            },
+        )
         loadPhoto()
     }
 
@@ -142,33 +150,35 @@ class PhotoViewerActivity : FragmentActivity() {
     }
 
     private fun buildInterface() {
-        screen = PhotoViewerScreen(
-            context = this,
-            callbacks = PhotoViewerScreen.Actions(
-                gesturesEnabled = {
-                    this::screen.isInitialized &&
-                        !photoTransitioning &&
-                        !dismissing &&
-                        (request.mediaKind == MediaKind.VIDEO || photoView.isAtFitScale())
-                },
-                gestureStartAllowed = { _, y ->
-                    request.mediaKind != MediaKind.VIDEO ||
-                        playerView.height <= 0 ||
-                        y < mediaFrame.top - photoDetailsScroll.scrollY + playerView.bottom -
-                            dp(VIDEO_CONTROLS_HEIGHT_DP)
-                },
-                onVerticalDrag = { distance, velocity, finished ->
-                    details.handleDetailsDrag(distance, velocity, finished)
-                },
-                onHorizontalDrag = { distance, finished ->
-                    swipe.handleHorizontalPhotoDrag(distance, finished)
-                },
-                onFavorite = ::toggleFavorite,
-                onDelete = ::deletePhoto,
-                onRetry = ::loadPhoto,
-                onLayoutChanged = ::updatePhotoDetailsLayout,
-            ),
-        )
+        screen =
+            PhotoViewerScreen(
+                context = this,
+                callbacks =
+                    PhotoViewerScreen.Actions(
+                        gesturesEnabled = {
+                            this::screen.isInitialized &&
+                                !photoTransitioning &&
+                                !dismissing &&
+                                (request.mediaKind == MediaKind.VIDEO || photoView.isAtFitScale())
+                        },
+                        gestureStartAllowed = { _, y ->
+                            request.mediaKind != MediaKind.VIDEO ||
+                                playerView.height <= 0 ||
+                                y < mediaFrame.top - photoDetailsScroll.scrollY + playerView.bottom -
+                                dp(VIDEO_CONTROLS_HEIGHT_DP)
+                        },
+                        onVerticalDrag = { distance, velocity, finished ->
+                            details.handleDetailsDrag(distance, velocity, finished)
+                        },
+                        onHorizontalDrag = { distance, finished ->
+                            swipe.handleHorizontalPhotoDrag(distance, finished)
+                        },
+                        onFavorite = ::toggleFavorite,
+                        onDelete = ::deletePhoto,
+                        onRetry = ::loadPhoto,
+                        onLayoutChanged = ::updatePhotoDetailsLayout,
+                    ),
+            )
         buildCollaborators()
         setContentView(screen.root)
         actions.addOnLayoutChangeListener { _, _, top, _, bottom, _, oldTop, _, oldBottom ->
@@ -178,64 +188,80 @@ class PhotoViewerActivity : FragmentActivity() {
     }
 
     private fun buildCollaborators() {
-        mediaTransform = ViewerMediaTransform(
-            photoView = photoView,
-            playerView = playerView,
-            thumbnailPreview = thumbnailPreview,
-            loadingPanel = loadingPanel,
-            mediaTitle = mediaTitle,
-        )
-        dismiss = ViewerDismissController(
-            activity = this,
-            screen = screen,
-            mediaTransform = mediaTransform,
-            host = object : ViewerDismissController.Host {
-                override val gesturesBlocked: Boolean get() = photoTransitioning || dismissing
-                override val dismissing: Boolean get() = this@PhotoViewerActivity.dismissing
-                override val detailsShown: Boolean get() = details.shown
-                override fun activeMediaView(): View = this@PhotoViewerActivity.activeMediaView()
+        mediaTransform =
+            ViewerMediaTransform(
+                photoView = photoView,
+                playerView = playerView,
+                thumbnailPreview = thumbnailPreview,
+                loadingPanel = loadingPanel,
+                mediaTitle = mediaTitle,
+            )
+        dismiss =
+            ViewerDismissController(
+                activity = this,
+                screen = screen,
+                mediaTransform = mediaTransform,
+                host =
+                    object : ViewerDismissController.Host {
+                        override val gesturesBlocked: Boolean get() = photoTransitioning || dismissing
+                        override val dismissing: Boolean get() = this@PhotoViewerActivity.dismissing
+                        override val detailsShown: Boolean get() = details.shown
 
-                override fun beginDismiss() {
-                    this@PhotoViewerActivity.dismissing = true
-                    setActionsEnabled(false)
-                }
-            },
-        )
-        details = ViewerDetailsSheetController(
-            context = this,
-            screen = screen,
-            metadataReader = metadataReader,
-            scope = lifecycleScope,
-            host = object : ViewerDetailsSheetController.Host {
-                override val request: PhotoRequest get() = this@PhotoViewerActivity.request
-                override val resolvedUri: Uri? get() = this@PhotoViewerActivity.resolvedUri
-                override val gesturesBlocked: Boolean get() = photoTransitioning || dismissing
-                override fun fittedMediaBottom(): Float? = this@PhotoViewerActivity.fittedMediaBottom()
+                        override fun activeMediaView(): View = this@PhotoViewerActivity.activeMediaView()
 
-                override fun handlePhotoDismissDrag(distance: Float, velocity: Float, finished: Boolean) =
-                    dismiss.handlePhotoDismissDrag(distance, velocity, finished)
+                        override fun beginDismiss() {
+                            this@PhotoViewerActivity.dismissing = true
+                            setActionsEnabled(false)
+                        }
+                    },
+            )
+        details =
+            ViewerDetailsSheetController(
+                context = this,
+                screen = screen,
+                metadataReader = metadataReader,
+                scope = lifecycleScope,
+                host =
+                    object : ViewerDetailsSheetController.Host {
+                        override val request: PhotoRequest get() = this@PhotoViewerActivity.request
+                        override val resolvedUri: Uri? get() = this@PhotoViewerActivity.resolvedUri
+                        override val gesturesBlocked: Boolean get() = photoTransitioning || dismissing
 
-                override fun resetPhotoDismiss() = dismiss.resetPhotoDismiss()
-            },
-        )
-        swipe = ViewerSwipeController(
-            screen = screen,
-            mediaTransform = mediaTransform,
-            scope = lifecycleScope,
-            loadThumbnail = { photo -> thumbnailSource.loadThumbnail(UserId(photo.userId), photo.nodeUid) },
-            host = object : ViewerSwipeController.Host {
-                override val request: PhotoRequest get() = this@PhotoViewerActivity.request
-                override val navigationRequests: List<PhotoRequest>
-                    get() = this@PhotoViewerActivity.navigationRequests
-                override val gesturesBlocked: Boolean
-                    get() = details.shown || photoTransitioning || dismissing
-                override fun activeMediaView(): View = this@PhotoViewerActivity.activeMediaView()
-                override fun beginNavigation() = this@PhotoViewerActivity.beginNavigation()
-                override fun commitNavigation(adjacent: PhotoRequest) =
-                    this@PhotoViewerActivity.commitNavigation(adjacent)
-                override fun adoptPreview(bitmap: Bitmap) = this@PhotoViewerActivity.adoptPreview(bitmap)
-            },
-        )
+                        override fun fittedMediaBottom(): Float? = this@PhotoViewerActivity.fittedMediaBottom()
+
+                        override fun handlePhotoDismissDrag(
+                            distance: Float,
+                            velocity: Float,
+                            finished: Boolean,
+                        ) = dismiss.handlePhotoDismissDrag(distance, velocity, finished)
+
+                        override fun resetPhotoDismiss() = dismiss.resetPhotoDismiss()
+                    },
+            )
+        swipe =
+            ViewerSwipeController(
+                screen = screen,
+                mediaTransform = mediaTransform,
+                scope = lifecycleScope,
+                loadThumbnail = { photo -> thumbnailSource.loadThumbnail(UserId(photo.userId), photo.nodeUid) },
+                host =
+                    object : ViewerSwipeController.Host {
+                        override val request: PhotoRequest get() = this@PhotoViewerActivity.request
+                        override val navigationRequests: List<PhotoRequest>
+                            get() = this@PhotoViewerActivity.navigationRequests
+                        override val gesturesBlocked: Boolean
+                            get() = details.shown || photoTransitioning || dismissing
+
+                        override fun activeMediaView(): View = this@PhotoViewerActivity.activeMediaView()
+
+                        override fun beginNavigation() = this@PhotoViewerActivity.beginNavigation()
+
+                        override fun commitNavigation(adjacent: PhotoRequest) =
+                            this@PhotoViewerActivity.commitNavigation(adjacent)
+
+                        override fun adoptPreview(bitmap: Bitmap) = this@PhotoViewerActivity.adoptPreview(bitmap)
+                    },
+            )
     }
 
     /** The single place the current request changes, so the intent never lags it. */
@@ -247,10 +273,11 @@ class PhotoViewerActivity : FragmentActivity() {
     private fun updatePhotoDetailsLayout(availableHeight: Int) {
         if (availableHeight <= 0) return
         val mediaParams = mediaFrame.layoutParams as LinearLayout.LayoutParams
-        val mediaHeight = PhotoViewerMediaLayoutPolicy.mediaHeight(
-            viewportHeight = availableHeight,
-            mediaTop = mediaFrame.top,
-        )
+        val mediaHeight =
+            PhotoViewerMediaLayoutPolicy.mediaHeight(
+                viewportHeight = availableHeight,
+                mediaTop = mediaFrame.top,
+            )
         if (mediaHeight <= 0) return
         if (mediaParams.height != mediaHeight) {
             mediaParams.height = mediaHeight
@@ -266,46 +293,52 @@ class PhotoViewerActivity : FragmentActivity() {
         photoReady = false
         updateMediaTitle()
         retryButton.visibility = View.GONE
-        photoView.contentDescription = getString(
-            if (request.mediaKind == MediaKind.VIDEO) R.string.video_description
-            else R.string.photo_image_description,
-            request.displayName.ifBlank { getString(R.string.photo) },
-        )
+        photoView.contentDescription =
+            getString(
+                if (request.mediaKind == MediaKind.VIDEO) {
+                    R.string.video_description
+                } else {
+                    R.string.photo_image_description
+                },
+                request.displayName.ifBlank { getString(R.string.photo) },
+            )
         playerView.contentDescription = photoView.contentDescription
         updateFavoriteButton()
         scheduleLoadingPanel()
         val requestedPhoto = request
         if (requestedPhoto.displayName.isBlank()) resolveDisplayName(requestedPhoto)
-        photoLoadJob = lifecycleScope.launch {
-            showCachedProtonThumbnail(requestedPhoto)
-            try {
-                val file = withContext(Dispatchers.IO) {
-                    val userId = UserId(requestedPhoto.userId)
-                    val nodeUid = requestedPhoto.nodeUid
-                    if (requestedPhoto.mediaKind == MediaKind.VIDEO) {
-                        originalMedia.downloadOriginalProgressively(userId, nodeUid) { stream ->
-                            withContext(Dispatchers.Main.immediate) {
-                                if (request.stableId != requestedPhoto.stableId) {
-                                    throw CancellationException("Viewer moved to different media")
+        photoLoadJob =
+            lifecycleScope.launch {
+                showCachedProtonThumbnail(requestedPhoto)
+                try {
+                    val file =
+                        withContext(Dispatchers.IO) {
+                            val userId = UserId(requestedPhoto.userId)
+                            val nodeUid = requestedPhoto.nodeUid
+                            if (requestedPhoto.mediaKind == MediaKind.VIDEO) {
+                                originalMedia.downloadOriginalProgressively(userId, nodeUid) { stream ->
+                                    withContext(Dispatchers.Main.immediate) {
+                                        if (request.stableId != requestedPhoto.stableId) {
+                                            throw CancellationException("Viewer moved to different media")
+                                        }
+                                        showProgressiveVideo(stream, requestedPhoto.stableId)
+                                    }
                                 }
-                                showProgressiveVideo(stream, requestedPhoto.stableId)
+                            } else {
+                                originalMedia.downloadOriginal(userId, nodeUid)
                             }
                         }
-                    } else {
-                        originalMedia.downloadOriginal(userId, nodeUid)
+                    if (request.stableId != requestedPhoto.stableId) return@launch
+                    if (requestedPhoto.mediaKind != MediaKind.VIDEO) showMedia(Uri.fromFile(file))
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Throwable) {
+                    if (request.stableId != requestedPhoto.stableId) return@launch
+                    if (!retryButton.isVisible) {
+                        handlePhotoLoadFailure(error, getString(R.string.could_not_download_proton_photo))
                     }
                 }
-                if (request.stableId != requestedPhoto.stableId) return@launch
-                if (requestedPhoto.mediaKind != MediaKind.VIDEO) showMedia(Uri.fromFile(file))
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Throwable) {
-                if (request.stableId != requestedPhoto.stableId) return@launch
-                if (!retryButton.isVisible) {
-                    handlePhotoLoadFailure(error, getString(R.string.could_not_download_proton_photo))
-                }
             }
-        }
     }
 
     private fun showMedia(uri: Uri) {
@@ -319,20 +352,26 @@ class PhotoViewerActivity : FragmentActivity() {
      */
     private fun resolveDisplayName(requestedPhoto: PhotoRequest) {
         lifecycleScope.launch {
-            val name = withContext(Dispatchers.IO) {
-                originalMedia.getOriginalFileName(UserId(requestedPhoto.userId), requestedPhoto.nodeUid)
-            }.orEmpty()
+            val name =
+                withContext(Dispatchers.IO) {
+                    originalMedia.getOriginalFileName(UserId(requestedPhoto.userId), requestedPhoto.nodeUid)
+                }.orEmpty()
             if (name.isBlank()) return@launch
-            navigationRequests = navigationRequests.map { item ->
-                if (item.stableId == requestedPhoto.stableId) item.copy(displayName = name) else item
-            }
+            navigationRequests =
+                navigationRequests.map { item ->
+                    if (item.stableId == requestedPhoto.stableId) item.copy(displayName = name) else item
+                }
             if (request.stableId != requestedPhoto.stableId) return@launch
             setCurrentRequest(request.copy(displayName = name))
-            photoView.contentDescription = getString(
-                if (request.mediaKind == MediaKind.VIDEO) R.string.video_description
-                else R.string.photo_image_description,
-                name,
-            )
+            photoView.contentDescription =
+                getString(
+                    if (request.mediaKind == MediaKind.VIDEO) {
+                        R.string.video_description
+                    } else {
+                        R.string.photo_image_description
+                    },
+                    name,
+                )
             playerView.contentDescription = photoView.contentDescription
         }
     }
@@ -343,10 +382,11 @@ class PhotoViewerActivity : FragmentActivity() {
             photoView.alpha = 0f
             return
         }
-        val bitmap = thumbnailSource.loadThumbnail(
-            UserId(requestedPhoto.userId),
-            requestedPhoto.nodeUid,
-        )
+        val bitmap =
+            thumbnailSource.loadThumbnail(
+                UserId(requestedPhoto.userId),
+                requestedPhoto.nodeUid,
+            )
         if (!PhotoPreviewPolicy.canShow(
                 requestedPhoto.stableId,
                 request.stableId,
@@ -380,53 +420,58 @@ class PhotoViewerActivity : FragmentActivity() {
         if (details.shown) details.ensureMetadataLoaded()
         photoView.load(uri) { result ->
             if (request.stableId != requestedStableId) return@load
-            result.onSuccess {
-                navigationFallback = null
-                photoReady = true
-                hideLoadingPanel()
-                setActionsEnabled(true)
-                if (details.shown) details.ensureMetadataLoaded()
-                photoDetailsScroll.post {
-                    if (request.stableId == requestedStableId) details.synchronizeWithImage()
+            result
+                .onSuccess {
+                    navigationFallback = null
+                    photoReady = true
+                    hideLoadingPanel()
+                    setActionsEnabled(true)
+                    if (details.shown) details.ensureMetadataLoaded()
+                    photoDetailsScroll.post {
+                        if (request.stableId == requestedStableId) details.synchronizeWithImage()
+                    }
+                    if (thumbnailPreview.isVisible) {
+                        // The full image fades in over the opaque thumbnail, which is only removed
+                        // once the fade completes, so brightness never dips through the black scrim.
+                        photoView.animate().cancel()
+                        photoView.translationX = thumbnailPreview.translationX
+                        photoView.alpha = 0f
+                        photoView
+                            .animate()
+                            .alpha(1f)
+                            .setDuration(FULL_QUALITY_CROSSFADE_MILLIS)
+                            .withEndAction {
+                                // Only clear the preview this fade covered; a swipe may already have
+                                // installed the next photo's thumbnail while the fade was running.
+                                if (request.stableId == requestedStableId) clearThumbnailPreview()
+                            }.start()
+                    } else {
+                        photoView.alpha = 1f
+                    }
+                    prefetchAdjacentOriginals(requestedStableId)
+                }.onFailure { error ->
+                    handlePhotoLoadFailure(error, getString(R.string.could_not_display_photo))
                 }
-                if (thumbnailPreview.isVisible) {
-                    // The full image fades in over the opaque thumbnail, which is only removed
-                    // once the fade completes, so brightness never dips through the black scrim.
-                    photoView.animate().cancel()
-                    photoView.translationX = thumbnailPreview.translationX
-                    photoView.alpha = 0f
-                    photoView.animate()
-                        .alpha(1f)
-                        .setDuration(FULL_QUALITY_CROSSFADE_MILLIS)
-                        .withEndAction {
-                            // Only clear the preview this fade covered; a swipe may already have
-                            // installed the next photo's thumbnail while the fade was running.
-                            if (request.stableId == requestedStableId) clearThumbnailPreview()
-                        }
-                        .start()
-                } else {
-                    photoView.alpha = 1f
-                }
-                prefetchAdjacentOriginals(requestedStableId)
-            }.onFailure { error ->
-                handlePhotoLoadFailure(error, getString(R.string.could_not_display_photo))
-            }
         }
     }
 
     private fun showVideo(uri: Uri) = showVideo(uri, dataSourceFactory = null)
 
-    private fun showProgressiveVideo(stream: ProtonOriginalStream, requestedStableId: String) {
+    private fun showProgressiveVideo(
+        stream: ProtonOriginalStream,
+        requestedStableId: String,
+    ) {
         showVideo(Uri.fromFile(stream.file), ProtonProgressiveDataSource.Factory(stream))
         cancelLoadingPanelDelay()
         loadingPanel.visibility = View.VISIBLE
-        videoProgressJob = lifecycleScope.launch {
-            stream.progress.collect { downloadProgress ->
-                if (request.stableId == requestedStableId && !photoReady) {
-                    updateVideoDownloadProgress(downloadProgress)
+        videoProgressJob =
+            lifecycleScope.launch {
+                stream.progress.collect { downloadProgress ->
+                    if (request.stableId == requestedStableId && !photoReady) {
+                        updateVideoDownloadProgress(downloadProgress)
+                    }
                 }
             }
-        }
     }
 
     @androidx.annotation.OptIn(markerClass = [UnstableApi::class])
@@ -445,49 +490,53 @@ class PhotoViewerActivity : FragmentActivity() {
         val createdPlayer = ExoPlayer.Builder(this).build()
         player = createdPlayer
         playerView.player = createdPlayer
-        createdPlayer.addListener(object : Player.Listener {
-            override fun onPlaybackStateChanged(playbackState: Int) {
-                if (playbackState != Player.STATE_READY || request.stableId != requestedStableId) return
-                if (photoReady) return
-                navigationFallback = null
-                photoReady = true
-                videoProgressJob?.cancel()
-                videoProgressJob = null
-                hideLoadingPanel()
-                setActionsEnabled(true)
-                if (details.shown) details.ensureMetadataLoaded()
-                playerView.animate().cancel()
-                playerView.alpha = 0f
-                playerView.animate()
-                    .alpha(1f)
-                    .setDuration(FULL_QUALITY_CROSSFADE_MILLIS)
-                    .start()
-                if (thumbnailPreview.isVisible) {
-                    thumbnailPreview.animate().cancel()
-                    cancelPendingPreviewClear()
-                    val clear = Runnable {
-                        pendingPreviewClear = null
-                        if (request.stableId == requestedStableId) clearThumbnailPreview()
+        createdPlayer.addListener(
+            object : Player.Listener {
+                override fun onPlaybackStateChanged(playbackState: Int) {
+                    if (playbackState != Player.STATE_READY || request.stableId != requestedStableId) return
+                    if (photoReady) return
+                    navigationFallback = null
+                    photoReady = true
+                    videoProgressJob?.cancel()
+                    videoProgressJob = null
+                    hideLoadingPanel()
+                    setActionsEnabled(true)
+                    if (details.shown) details.ensureMetadataLoaded()
+                    playerView.animate().cancel()
+                    playerView.alpha = 0f
+                    playerView
+                        .animate()
+                        .alpha(1f)
+                        .setDuration(FULL_QUALITY_CROSSFADE_MILLIS)
+                        .start()
+                    if (thumbnailPreview.isVisible) {
+                        thumbnailPreview.animate().cancel()
+                        cancelPendingPreviewClear()
+                        val clear =
+                            Runnable {
+                                pendingPreviewClear = null
+                                if (request.stableId == requestedStableId) clearThumbnailPreview()
+                            }
+                        pendingPreviewClear = clear
+                        thumbnailPreview.postDelayed(clear, FULL_QUALITY_CROSSFADE_MILLIS)
                     }
-                    pendingPreviewClear = clear
-                    thumbnailPreview.postDelayed(clear, FULL_QUALITY_CROSSFADE_MILLIS)
+                    prefetchAdjacentOriginals(requestedStableId)
                 }
-                prefetchAdjacentOriginals(requestedStableId)
-            }
 
-            override fun onPlayerError(error: PlaybackException) {
-                LenswaveDiagnostics.reportFailure(LenswaveOperation.VIDEO_PLAYBACK, error)
-                if (request.stableId == requestedStableId) {
-                    handlePhotoLoadFailure(error, getString(R.string.could_not_play_video))
+                override fun onPlayerError(error: PlaybackException) {
+                    LenswaveDiagnostics.reportFailure(LenswaveOperation.VIDEO_PLAYBACK, error)
+                    if (request.stableId == requestedStableId) {
+                        handlePhotoLoadFailure(error, getString(R.string.could_not_play_video))
+                    }
                 }
-            }
-        })
+            },
+        )
         val mediaItem = MediaItem.fromUri(uri)
         if (dataSourceFactory == null) {
             createdPlayer.setMediaItem(mediaItem)
         } else {
             createdPlayer.setMediaSource(
-                ProgressiveMediaSource.Factory(dataSourceFactory).createMediaSource(mediaItem)
+                ProgressiveMediaSource.Factory(dataSourceFactory).createMediaSource(mediaItem),
             )
         }
         createdPlayer.prepare()
@@ -503,12 +552,13 @@ class PhotoViewerActivity : FragmentActivity() {
     }
 
     private fun updateMediaTitle() {
-        val title = PhotoViewerTitleFormatter.format(
-            capturedAtEpochMillis = request.capturedAt,
-            zoneId = ZoneId.systemDefault(),
-            locale = Locale.getDefault(),
-            use24HourTime = DateFormat.is24HourFormat(this),
-        )
+        val title =
+            PhotoViewerTitleFormatter.format(
+                capturedAtEpochMillis = request.capturedAt,
+                zoneId = ZoneId.systemDefault(),
+                locale = Locale.getDefault(),
+                use24HourTime = DateFormat.is24HourFormat(this),
+            )
         mediaTitle.text = title.orEmpty()
         mediaTitle.visibility = if (title == null) View.GONE else View.VISIBLE
     }
@@ -529,20 +579,22 @@ class PhotoViewerActivity : FragmentActivity() {
         val percent = downloadProgress.percent
         progress.isIndeterminate = percent == null
         if (percent == null || totalBytes == null) {
-            status.text = getString(
-                R.string.downloading_video_size,
-                Formatter.formatShortFileSize(this, downloadProgress.downloadedBytes),
-            )
+            status.text =
+                getString(
+                    R.string.downloading_video_size,
+                    Formatter.formatShortFileSize(this, downloadProgress.downloadedBytes),
+                )
             return
         }
         progress.max = VIDEO_PROGRESS_MAX
         progress.progress = percent * VIDEO_PROGRESS_MAX / 100
-        status.text = getString(
-            R.string.downloading_video_progress,
-            Formatter.formatShortFileSize(this, downloadProgress.downloadedBytes),
-            Formatter.formatShortFileSize(this, totalBytes),
-            percent,
-        )
+        status.text =
+            getString(
+                R.string.downloading_video_progress,
+                Formatter.formatShortFileSize(this, downloadProgress.downloadedBytes),
+                Formatter.formatShortFileSize(this, totalBytes),
+                percent,
+            )
     }
 
     private fun scheduleLoadingPanel() {
@@ -552,12 +604,13 @@ class PhotoViewerActivity : FragmentActivity() {
         progress.isIndeterminate = true
         loadingPanel.visibility = View.GONE
         val requestedStableId = request.stableId
-        val runnable = Runnable {
-            loadingPanelRunnable = null
-            if (!photoReady && request.stableId == requestedStableId && !dismissing) {
-                loadingPanel.visibility = View.VISIBLE
+        val runnable =
+            Runnable {
+                loadingPanelRunnable = null
+                if (!photoReady && request.stableId == requestedStableId && !dismissing) {
+                    loadingPanel.visibility = View.VISIBLE
+                }
             }
-        }
         loadingPanelRunnable = runnable
         loadingPanel.postDelayed(runnable, LOADING_PANEL_DELAY_MILLIS)
     }
@@ -633,7 +686,10 @@ class PhotoViewerActivity : FragmentActivity() {
         updateFavoriteButton(enabled = false)
     }
 
-    private fun handlePhotoLoadFailure(error: Throwable, fallbackMessage: String) {
+    private fun handlePhotoLoadFailure(
+        error: Throwable,
+        fallbackMessage: String,
+    ) {
         val fallback = navigationFallback
         navigationFallback = null
         if (fallback != null) {
@@ -695,26 +751,29 @@ class PhotoViewerActivity : FragmentActivity() {
             try {
                 val result = photoMutations.setFavorite(userId, nodeUids, favorite)
                 if (result.updatedCount != 1) {
-                    Toast.makeText(
-                        this@PhotoViewerActivity,
-                        R.string.could_not_update_favorite,
-                        Toast.LENGTH_LONG,
-                    ).show()
+                    Toast
+                        .makeText(
+                            this@PhotoViewerActivity,
+                            R.string.could_not_update_favorite,
+                            Toast.LENGTH_LONG,
+                        ).show()
                     return@launch
                 }
                 setCurrentRequest(request.withFavorite(favorite))
-                navigationRequests = navigationRequests.map { item ->
-                    if (item.stableId == request.stableId) item.withFavorite(favorite) else item
-                }
+                navigationRequests =
+                    navigationRequests.map { item ->
+                        if (item.stableId == request.stableId) item.withFavorite(favorite) else item
+                    }
                 setResult(Activity.RESULT_OK, resultIntent.putExtra(EXTRA_FAVORITE_CHANGED, true))
             } catch (error: CancellationException) {
                 throw error
             } catch (_: Throwable) {
-                Toast.makeText(
-                    this@PhotoViewerActivity,
-                    R.string.could_not_update_favorite,
-                    Toast.LENGTH_LONG,
-                ).show()
+                Toast
+                    .makeText(
+                        this@PhotoViewerActivity,
+                        R.string.could_not_update_favorite,
+                        Toast.LENGTH_LONG,
+                    ).show()
             } finally {
                 favoriteInProgress = false
                 updateFavoriteButton()
@@ -727,8 +786,9 @@ class PhotoViewerActivity : FragmentActivity() {
      * ready file. Nothing is downloaded: only originals already in the encrypted cache qualify.
      */
     private fun prefetchAdjacentOriginals(stableId: String) {
-        val neighbours = listOfNotNull(swipe.adjacentTo(stableId, -1), swipe.adjacentTo(stableId, 1))
-            .filter { it.mediaKind != MediaKind.VIDEO }
+        val neighbours =
+            listOfNotNull(swipe.adjacentTo(stableId, -1), swipe.adjacentTo(stableId, 1))
+                .filter { it.mediaKind != MediaKind.VIDEO }
         if (neighbours.isEmpty()) return
         lifecycleScope.launch(Dispatchers.IO) {
             neighbours.forEach { neighbour ->
@@ -739,28 +799,53 @@ class PhotoViewerActivity : FragmentActivity() {
         }
     }
 
-    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean = when (keyCode) {
-        KeyEvent.KEYCODE_DPAD_LEFT -> { swipe.navigatePhoto(-1); true }
-        KeyEvent.KEYCODE_DPAD_RIGHT -> { swipe.navigatePhoto(1); true }
-        KeyEvent.KEYCODE_PLUS, KeyEvent.KEYCODE_EQUALS, KeyEvent.KEYCODE_NUMPAD_ADD -> {
-            photoView.zoomIn(); true
+    override fun onKeyDown(
+        keyCode: Int,
+        event: KeyEvent,
+    ): Boolean =
+        when (keyCode) {
+            KeyEvent.KEYCODE_DPAD_LEFT -> {
+                swipe.navigatePhoto(-1)
+                true
+            }
+
+            KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                swipe.navigatePhoto(1)
+                true
+            }
+
+            KeyEvent.KEYCODE_PLUS, KeyEvent.KEYCODE_EQUALS, KeyEvent.KEYCODE_NUMPAD_ADD -> {
+                photoView.zoomIn()
+                true
+            }
+
+            KeyEvent.KEYCODE_MINUS, KeyEvent.KEYCODE_NUMPAD_SUBTRACT -> {
+                photoView.zoomOut()
+                true
+            }
+
+            KeyEvent.KEYCODE_0, KeyEvent.KEYCODE_NUMPAD_0 -> {
+                photoView.resetZoom()
+                true
+            }
+
+            else -> {
+                super.onKeyDown(keyCode, event)
+            }
         }
-        KeyEvent.KEYCODE_MINUS, KeyEvent.KEYCODE_NUMPAD_SUBTRACT -> { photoView.zoomOut(); true }
-        KeyEvent.KEYCODE_0, KeyEvent.KEYCODE_NUMPAD_0 -> { photoView.resetZoom(); true }
-        else -> super.onKeyDown(keyCode, event)
-    }
 
     private fun activeMediaView(): View =
         if (request.mediaKind == MediaKind.VIDEO && playerView.isVisible) playerView else photoView
 
-    private fun fittedMediaBottom(): Float? = if (request.mediaKind == MediaKind.VIDEO) {
-        playerView.bottom.takeIf { it > playerView.top }?.toFloat()
-    } else {
-        // Before the full image arrives the thumbnail stands in, so the sheet attaches to it
-        // instead of the bottom of the media frame and does not jump once the photo loads.
-        photoView.fittedImageBottom()?.plus(photoView.top)
-            ?: thumbnailPreview.takeIf { it.isVisible }?.fittedDrawableBottom()
-    }
+    private fun fittedMediaBottom(): Float? =
+        if (request.mediaKind == MediaKind.VIDEO) {
+            playerView.bottom.takeIf { it > playerView.top }?.toFloat()
+        } else {
+            // Before the full image arrives the thumbnail stands in, so the sheet attaches to it
+            // instead of the bottom of the media frame and does not jump once the photo loads.
+            photoView.fittedImageBottom()?.plus(photoView.top)
+                ?: thumbnailPreview.takeIf { it.isVisible }?.fittedDrawableBottom()
+        }
 
     private fun ImageView.fittedDrawableBottom(): Float? {
         val drawable = drawable ?: return null
@@ -781,7 +866,8 @@ class PhotoViewerActivity : FragmentActivity() {
     }
 
     private fun confirmTrashProtonPhoto() {
-        AlertDialog.Builder(this)
+        AlertDialog
+            .Builder(this)
             .setTitle(R.string.move_to_proton_trash_question)
             .setMessage(R.string.recover_from_proton_trash)
             .setNegativeButton(R.string.cancel, null)
@@ -803,14 +889,24 @@ class PhotoViewerActivity : FragmentActivity() {
                 } else {
                     deletionInProgress = false
                     setActionsEnabled(true)
-                    Toast.makeText(this@PhotoViewerActivity, R.string.could_not_move_to_proton_trash, Toast.LENGTH_LONG).show()
+                    Toast
+                        .makeText(
+                            this@PhotoViewerActivity,
+                            R.string.could_not_move_to_proton_trash,
+                            Toast.LENGTH_LONG,
+                        ).show()
                 }
             } catch (error: CancellationException) {
                 throw error
             } catch (_: Throwable) {
                 deletionInProgress = false
                 setActionsEnabled(true)
-                Toast.makeText(this@PhotoViewerActivity, R.string.could_not_move_to_proton_trash, Toast.LENGTH_LONG).show()
+                Toast
+                    .makeText(
+                        this@PhotoViewerActivity,
+                        R.string.could_not_move_to_proton_trash,
+                        Toast.LENGTH_LONG,
+                    ).show()
             }
         }
     }
@@ -822,9 +918,10 @@ class PhotoViewerActivity : FragmentActivity() {
 
     private fun applySystemInsets() {
         ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
-            val safeArea: Insets = insets.getInsets(
-                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
-            )
+            val safeArea: Insets =
+                insets.getInsets(
+                    WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),
+                )
             actions.applyBottomOverlayInsets(safeArea)
             mediaTitle.setPadding(
                 dp(16) + safeArea.left,
@@ -845,12 +942,13 @@ class PhotoViewerActivity : FragmentActivity() {
     }
 
     private fun updateMediaBounds() {
-        val inset = PhotoViewerMediaLayoutPolicy.verticalInset(
-            viewportHeight = mediaFrame.height,
-            titleBottom = if (mediaTitle.isVisible) mediaTitle.bottom else 0,
-            actionsTop = actions.top + photoDetailsScroll.scrollY - mediaFrame.top,
-            gap = dp(MEDIA_ACTION_GAP_DP),
-        )
+        val inset =
+            PhotoViewerMediaLayoutPolicy.verticalInset(
+                viewportHeight = mediaFrame.height,
+                titleBottom = if (mediaTitle.isVisible) mediaTitle.bottom else 0,
+                actionsTop = actions.top + photoDetailsScroll.scrollY - mediaFrame.top,
+                gap = dp(MEDIA_ACTION_GAP_DP),
+            )
         if (inset <= 0) return
         listOf(photoView, thumbnailPreview, peekPreview, playerView, loadingPanel).forEach { media ->
             (media.layoutParams as FrameLayout.LayoutParams).apply {
@@ -916,9 +1014,11 @@ class PhotoViewerActivity : FragmentActivity() {
             return request.writeTo(Intent(context, PhotoViewerActivity::class.java)).apply {
                 putParcelableArrayListExtra(
                     EXTRA_NAVIGATION,
-                    ArrayList(navigation.subList(from, to).map {
-                        PhotoRequest.from(it, userId.id).toBundle()
-                    }),
+                    ArrayList(
+                        navigation.subList(from, to).map {
+                            PhotoRequest.from(it, userId.id).toBundle()
+                        },
+                    ),
                 )
             }
         }

@@ -5,8 +5,13 @@ import com.bownee.lenswave.proton.ProtonAlbum
 import me.proton.core.domain.entity.UserId
 
 sealed interface GalleryContent {
-    data class Photos(val assets: List<GalleryAsset>) : GalleryContent
-    data class Library(val sections: List<LibrarySection>) : GalleryContent
+    data class Photos(
+        val assets: List<GalleryAsset>,
+    ) : GalleryContent
+
+    data class Library(
+        val sections: List<LibrarySection>,
+    ) : GalleryContent
 }
 
 data class LibrarySection(
@@ -16,7 +21,9 @@ data class LibrarySection(
 )
 
 sealed interface LibraryItem {
-    data class Album(val album: ProtonAlbum) : LibraryItem
+    data class Album(
+        val album: ProtonAlbum,
+    ) : LibraryItem
 
     data class Entry(
         val key: String,
@@ -27,8 +34,13 @@ sealed interface LibraryItem {
 }
 
 sealed interface LibraryAction {
-    data class Open(val destination: GalleryDestination) : LibraryAction
-    data class Request(val action: GalleryEmptyAction) : LibraryAction
+    data class Open(
+        val destination: GalleryDestination,
+    ) : LibraryAction
+
+    data class Request(
+        val action: GalleryEmptyAction,
+    ) : LibraryAction
 }
 
 enum class GalleryEmptyAction {

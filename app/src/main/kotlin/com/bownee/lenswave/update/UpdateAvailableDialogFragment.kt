@@ -10,13 +10,15 @@ import com.bownee.lenswave.R
 class UpdateAvailableDialogFragment : DialogFragment() {
     interface Listener {
         fun onUpdateRequested()
+
         fun onUpdateSnoozed(versionName: String)
     }
 
     override fun onCreateDialog(savedInstanceState: Bundle?): Dialog {
         val versionName = requireArguments().getString(ARG_VERSION_NAME).orEmpty()
         val currentVersionName = requireArguments().getString(ARG_CURRENT_VERSION_NAME).orEmpty()
-        return AlertDialog.Builder(requireContext())
+        return AlertDialog
+            .Builder(requireContext())
             .setTitle(R.string.update_available)
             .setMessage(getString(R.string.update_available_message, versionName, currentVersionName))
             .setNegativeButton(R.string.not_now) { _, _ -> listener()?.onUpdateSnoozed(versionName) }
@@ -36,12 +38,16 @@ class UpdateAvailableDialogFragment : DialogFragment() {
         private const val ARG_VERSION_NAME = "version-name"
         private const val ARG_CURRENT_VERSION_NAME = "current-version-name"
 
-        fun create(versionName: String, currentVersionName: String): UpdateAvailableDialogFragment =
+        fun create(
+            versionName: String,
+            currentVersionName: String,
+        ): UpdateAvailableDialogFragment =
             UpdateAvailableDialogFragment().apply {
-                arguments = Bundle().apply {
-                    putString(ARG_VERSION_NAME, versionName)
-                    putString(ARG_CURRENT_VERSION_NAME, currentVersionName)
-                }
+                arguments =
+                    Bundle().apply {
+                        putString(ARG_VERSION_NAME, versionName)
+                        putString(ARG_CURRENT_VERSION_NAME, currentVersionName)
+                    }
             }
     }
 }

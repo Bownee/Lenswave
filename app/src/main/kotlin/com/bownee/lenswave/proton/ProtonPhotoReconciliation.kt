@@ -6,7 +6,10 @@ internal data class ProtonPhotoChanges(
 )
 
 internal object ProtonPhotoReconciliation {
-    fun compare(cachedNodeUids: Collection<String>, remoteNodeUids: Collection<String>): ProtonPhotoChanges {
+    fun compare(
+        cachedNodeUids: Collection<String>,
+        remoteNodeUids: Collection<String>,
+    ): ProtonPhotoChanges {
         val cached = cachedNodeUids.toSet()
         val remote = remoteNodeUids.toSet()
         return ProtonPhotoChanges(

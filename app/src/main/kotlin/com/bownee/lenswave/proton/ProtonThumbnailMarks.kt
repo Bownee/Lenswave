@@ -15,10 +15,11 @@ internal fun <T> List<T>.withThumbnailAvailability(
 ): List<T>? {
     if (nodeUids.isEmpty()) return null
     var changed = false
-    val updated = map { item ->
-        if (nodeUid(item) !in nodeUids || hasThumbnail(item) == available) return@map item
-        changed = true
-        copy(item, available)
-    }
+    val updated =
+        map { item ->
+            if (nodeUid(item) !in nodeUids || hasThumbnail(item) == available) return@map item
+            changed = true
+            copy(item, available)
+        }
     return if (changed) updated else null
 }

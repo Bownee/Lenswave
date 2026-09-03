@@ -2,6 +2,8 @@ package com.bownee.lenswave.proton
 
 import me.proton.drive.sdk.entity.Node
 
-internal fun Node.originalFileName(): String? = name.getOrNull()
-    ?.trim()
-    ?.takeIf(String::isNotBlank)
+internal fun Node.originalFileName(): String? =
+    name
+        .getOrNull()
+        ?.trim()
+        ?.takeIf(String::isNotBlank)

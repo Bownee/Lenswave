@@ -9,7 +9,9 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
 
-internal class ProtonThumbnailNetworkMonitor(context: Context) {
+internal class ProtonThumbnailNetworkMonitor(
+    context: Context,
+) {
     private val connectivityManager = context.getSystemService(ConnectivityManager::class.java)
 
     private fun hasValidatedUnmeteredNetwork(): Boolean {
@@ -23,22 +25,23 @@ internal class ProtonThumbnailNetworkMonitor(context: Context) {
 
         return withTimeoutOrNull(timeoutMillis) {
             callbackFlow {
-                val callback = object : ConnectivityManager.NetworkCallback() {
-                    override fun onAvailable(network: Network) {
-                        trySend(hasValidatedUnmeteredNetwork())
-                    }
+                val callback =
+                    object : ConnectivityManager.NetworkCallback() {
+                        override fun onAvailable(network: Network) {
+                            trySend(hasValidatedUnmeteredNetwork())
+                        }
 
-                    override fun onCapabilitiesChanged(
-                        network: Network,
-                        networkCapabilities: NetworkCapabilities,
-                    ) {
-                        trySend(networkCapabilities.isValidatedUnmetered())
-                    }
+                        override fun onCapabilitiesChanged(
+                            network: Network,
+                            networkCapabilities: NetworkCapabilities,
+                        ) {
+                            trySend(networkCapabilities.isValidatedUnmetered())
+                        }
 
-                    override fun onLost(network: Network) {
-                        trySend(hasValidatedUnmeteredNetwork())
+                        override fun onLost(network: Network) {
+                            trySend(hasValidatedUnmeteredNetwork())
+                        }
                     }
-                }
                 connectivityManager.registerDefaultNetworkCallback(callback)
                 trySend(hasValidatedUnmeteredNetwork())
                 awaitClose { connectivityManager.unregisterNetworkCallback(callback) }

@@ -9,26 +9,28 @@ import org.junit.Test
 
 class ProtonAccountTransitionCoordinatorTest {
     @Test
-    fun accountSwitchUsesOneOrderedBarrierAndResumesThumbnailQueue() = runBlocking {
-        val events = mutableListOf<String>()
-        val coordinator = coordinator(events)
+    fun accountSwitchUsesOneOrderedBarrierAndResumesThumbnailQueue() =
+        runBlocking {
+            val events = mutableListOf<String>()
+            val coordinator = coordinator(events)
 
-        coordinator.transition(UserId("a"), UserId("b"))
+            coordinator.transition(UserId("a"), UserId("b"))
 
-        assertEquals(
-            listOf("cancel:a", "disconnect:a", "activate:b", "retain:b", "enqueue:b"),
-            events,
-        )
-    }
+            assertEquals(
+                listOf("cancel:a", "disconnect:a", "activate:b", "retain:b", "enqueue:b"),
+                events,
+            )
+        }
 
     @Test
-    fun logoutCompletesEveryErasureStepWithoutEnqueueing() = runBlocking {
-        val events = mutableListOf<String>()
+    fun logoutCompletesEveryErasureStepWithoutEnqueueing() =
+        runBlocking {
+            val events = mutableListOf<String>()
 
-        coordinator(events).transition(UserId("a"), null)
+            coordinator(events).transition(UserId("a"), null)
 
-        assertEquals(listOf("cancel:a", "disconnect:a", "retain:null"), events)
-    }
+            assertEquals(listOf("cancel:a", "disconnect:a", "retain:null"), events)
+        }
 
     @Test
     fun failedActivationDoesNotEraseCachesOrEnqueueNewWork() {
@@ -51,7 +53,9 @@ class ProtonAccountTransitionCoordinatorTest {
         thumbnailScheduler = FakeThumbnailScheduler(events),
     )
 
-    private class FakeThumbnailScheduler(private val events: MutableList<String>) : ProtonThumbnailScheduler {
+    private class FakeThumbnailScheduler(
+        private val events: MutableList<String>,
+    ) : ProtonThumbnailScheduler {
         override fun enqueue(userId: UserId) {
             events += "enqueue:${userId.id}"
         }

@@ -7,8 +7,10 @@ video, `me.proton.drive:sdk` for Drive access.
 ## Commands
 
 ```shell
-./gradlew.bat --offline testDebugUnitTest jacocoDebugCoverageVerification lintDebug compileDebugAndroidTestKotlin assembleDebug
+./gradlew.bat --offline ktlintCheck testDebugUnitTest jacocoDebugCoverageVerification lintDebug compileDebugAndroidTestKotlin assembleDebug
 ```
+
+Run `./gradlew.bat --offline ktlintFormat` after editing Kotlin; CI rejects formatting drift.
 
 Debug APK: `app/build/outputs/apk/debug/app-arm64-v8a-debug.apk`. Drop `--offline` (and add
 `--write-locks --write-verification-metadata sha256 --no-configuration-cache`) only when a

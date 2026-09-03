@@ -49,9 +49,10 @@ jobs:
         shell: bash
         run: scripts/app-version.sh >> "$GITHUB_OUTPUT"
 
-      - name: Unit tests, coverage, lint, and license inventory
+      - name: Style, unit tests, coverage, and lint
         run: |
           ./gradlew \
+            ktlintCheck \
             testDebugUnitTest \
             jacocoDebugCoverageVerification \
             lintDebug lintRelease \

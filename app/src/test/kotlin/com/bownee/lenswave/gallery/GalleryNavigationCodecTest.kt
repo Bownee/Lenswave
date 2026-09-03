@@ -9,12 +9,13 @@ import org.junit.Test
 class GalleryNavigationCodecTest {
     @Test
     fun `all gallery screens survive a persistence round trip`() {
-        val destinations = listOf(
-            GalleryDestination.Timeline,
-            GalleryDestination.Library,
-            GalleryDestination.Tag(ProtonMediaTag.FAVORITES),
-            GalleryDestination.AlbumPhotos(ProtonAlbumReference("album-id", "Favorites")),
-        )
+        val destinations =
+            listOf(
+                GalleryDestination.Timeline,
+                GalleryDestination.Library,
+                GalleryDestination.Tag(ProtonMediaTag.FAVORITES),
+                GalleryDestination.AlbumPhotos(ProtonAlbumReference("album-id", "Favorites")),
+            )
 
         destinations.forEach { destination ->
             assertEquals(destination, GalleryNavigationCodec.decode(GalleryNavigationCodec.encode(destination)))

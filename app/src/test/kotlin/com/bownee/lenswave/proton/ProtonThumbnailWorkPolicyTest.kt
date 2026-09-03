@@ -22,10 +22,11 @@ class ProtonThumbnailWorkPolicyTest {
 
     @Test
     fun `incomplete download retries before the attempt limit`() {
-        val resolution = ProtonThumbnailWorkPolicy.resolve(
-            runAttemptCount = ProtonThumbnailWorkPolicy.MAX_ATTEMPTS - 2,
-            issue = ProtonThumbnailWorkIssue.INCOMPLETE,
-        )
+        val resolution =
+            ProtonThumbnailWorkPolicy.resolve(
+                runAttemptCount = ProtonThumbnailWorkPolicy.MAX_ATTEMPTS - 2,
+                issue = ProtonThumbnailWorkIssue.INCOMPLETE,
+            )
 
         assertEquals(ProtonThumbnailWorkDecision.RETRY, resolution.decision)
         assertEquals(
@@ -41,10 +42,11 @@ class ProtonThumbnailWorkPolicyTest {
 
     @Test
     fun `incomplete download fails at the attempt limit`() {
-        val resolution = ProtonThumbnailWorkPolicy.resolve(
-            runAttemptCount = ProtonThumbnailWorkPolicy.MAX_ATTEMPTS - 1,
-            issue = ProtonThumbnailWorkIssue.TIMEOUT,
-        )
+        val resolution =
+            ProtonThumbnailWorkPolicy.resolve(
+                runAttemptCount = ProtonThumbnailWorkPolicy.MAX_ATTEMPTS - 1,
+                issue = ProtonThumbnailWorkIssue.TIMEOUT,
+            )
 
         assertEquals(ProtonThumbnailWorkDecision.FAILURE, resolution.decision)
         assertEquals(
@@ -60,10 +62,11 @@ class ProtonThumbnailWorkPolicyTest {
 
     @Test
     fun `attempt count remains valid when restored work exceeds the limit`() {
-        val resolution = ProtonThumbnailWorkPolicy.resolve(
-            runAttemptCount = ProtonThumbnailWorkPolicy.MAX_ATTEMPTS + 3,
-            issue = ProtonThumbnailWorkIssue.ERROR,
-        )
+        val resolution =
+            ProtonThumbnailWorkPolicy.resolve(
+                runAttemptCount = ProtonThumbnailWorkPolicy.MAX_ATTEMPTS + 3,
+                issue = ProtonThumbnailWorkIssue.ERROR,
+            )
 
         assertEquals(ProtonThumbnailWorkDecision.FAILURE, resolution.decision)
         assertEquals(
