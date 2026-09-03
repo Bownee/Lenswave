@@ -1,4 +1,4 @@
-package com.bownee.lenswave
+package com.bownee.lenswave.viewer
 
 internal object PhotoViewerMediaLayoutPolicy {
     fun mediaHeight(viewportHeight: Int, mediaTop: Int): Int =

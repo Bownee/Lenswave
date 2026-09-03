@@ -1,4 +1,4 @@
-package com.bownee.lenswave
+package com.bownee.lenswave.viewer
 
 import java.time.ZoneOffset
 import java.util.Locale

@@ -65,7 +65,7 @@
         android:theme="@style/Theme.Lenswave"
         tools:replace="android:theme">
         <activity
-            android:name=".GalleryActivity"
+            android:name=".gallery.GalleryActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -74,7 +74,7 @@
         </activity>
 
         <activity
-            android:name=".PhotoViewerActivity"
+            android:name=".viewer.PhotoViewerActivity"
             android:exported="false"
             android:theme="@style/Theme.Lenswave.PhotoViewer" />
 

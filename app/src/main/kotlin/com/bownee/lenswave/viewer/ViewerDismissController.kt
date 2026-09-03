@@ -1,4 +1,4 @@
-package com.bownee.lenswave
+package com.bownee.lenswave.viewer
 
 import android.app.Activity
 import android.os.Build

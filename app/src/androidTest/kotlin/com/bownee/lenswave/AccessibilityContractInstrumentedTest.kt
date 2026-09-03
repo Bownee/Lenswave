@@ -1,5 +1,7 @@
 package com.bownee.lenswave
 
+import com.bownee.lenswave.viewer.PhotoViewerScreen
+import com.bownee.lenswave.gallery.GalleryActivity
 import android.view.View
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4

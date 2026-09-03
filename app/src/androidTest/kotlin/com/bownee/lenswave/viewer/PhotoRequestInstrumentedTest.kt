@@ -1,4 +1,4 @@
-package com.bownee.lenswave
+package com.bownee.lenswave.viewer
 
 import android.content.Intent
 import androidx.test.ext.junit.runners.AndroidJUnit4

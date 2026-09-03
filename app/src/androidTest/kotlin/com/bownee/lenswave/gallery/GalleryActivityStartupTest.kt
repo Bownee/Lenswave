@@ -1,5 +1,6 @@
-package com.bownee.lenswave
+package com.bownee.lenswave.gallery
 
+import com.bownee.lenswave.R
 import android.app.AlertDialog
 import android.content.ComponentName
 import android.content.pm.PackageManager

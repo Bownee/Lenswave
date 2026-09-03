@@ -1,4 +1,4 @@
-package com.bownee.lenswave
+package com.bownee.lenswave.proton
 
 import android.net.Uri
 import androidx.annotation.OptIn

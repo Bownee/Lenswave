@@ -1,5 +1,8 @@
-package com.bownee.lenswave
+package com.bownee.lenswave.viewer
 
+import com.bownee.lenswave.dp
+import com.bownee.lenswave.UiStyle
+import com.bownee.lenswave.R
 import android.content.Context
 import android.graphics.Color
 import android.text.TextUtils

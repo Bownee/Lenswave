@@ -1,5 +1,6 @@
-package com.bownee.lenswave
+package com.bownee.lenswave.viewer
 
+import com.bownee.lenswave.R
 import android.animation.ValueAnimator
 import android.content.Context
 import android.content.Intent

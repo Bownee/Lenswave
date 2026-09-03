@@ -9,7 +9,7 @@ import android.content.pm.ServiceInfo
 import androidx.core.app.NotificationCompat
 import androidx.work.ForegroundInfo
 import androidx.work.WorkManager
-import com.bownee.lenswave.GalleryActivity
+import com.bownee.lenswave.gallery.GalleryActivity
 import com.bownee.lenswave.R
 import java.util.UUID
 

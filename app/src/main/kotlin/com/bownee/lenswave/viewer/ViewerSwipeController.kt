@@ -1,5 +1,6 @@
-package com.bownee.lenswave
+package com.bownee.lenswave.viewer
 
+import com.bownee.lenswave.dp
 import android.graphics.Bitmap
 import android.graphics.drawable.BitmapDrawable
 import android.view.View

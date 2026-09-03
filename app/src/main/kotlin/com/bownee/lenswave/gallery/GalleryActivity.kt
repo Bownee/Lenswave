@@ -1,5 +1,11 @@
-package com.bownee.lenswave
+package com.bownee.lenswave.gallery
 
+import com.bownee.lenswave.viewer.PhotoViewerActivity
+import com.bownee.lenswave.applyBottomOverlayInsets
+import com.bownee.lenswave.configureEdgeToEdgeWindow
+import com.bownee.lenswave.LenswaveApplication
+import com.bownee.lenswave.dp
+import com.bownee.lenswave.R
 import android.app.Activity
 import android.os.Bundle
 import android.view.View

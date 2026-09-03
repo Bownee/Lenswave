@@ -1,5 +1,7 @@
-package com.bownee.lenswave
+package com.bownee.lenswave.viewer
 
+import com.bownee.lenswave.ExifOrientation
+import com.bownee.lenswave.R
 import android.animation.Animator
 import android.animation.AnimatorListenerAdapter
 import android.animation.ValueAnimator

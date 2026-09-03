@@ -1,4 +1,4 @@
-package com.bownee.lenswave
+package com.bownee.lenswave.viewer
 
 internal object PhotoPreviewPolicy {
     fun canShow(

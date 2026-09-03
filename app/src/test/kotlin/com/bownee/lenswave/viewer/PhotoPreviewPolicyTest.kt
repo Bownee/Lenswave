@@ -1,4 +1,4 @@
-package com.bownee.lenswave
+package com.bownee.lenswave.viewer
 
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
