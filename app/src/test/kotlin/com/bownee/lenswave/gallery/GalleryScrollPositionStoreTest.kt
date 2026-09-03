@@ -20,7 +20,7 @@ class GalleryScrollPositionStoreTest {
         assertEquals(GalleryScrollPosition(42, -17), store.positionFor(timeline))
         assertEquals(GalleryScrollPosition(8, -3), store.positionFor(albums))
         assertEquals(GalleryScrollPosition(19, 4), store.positionFor(trash))
-        assertNull(store.positionFor(GalleryDestination.Combined))
+        assertNull(store.positionFor(GalleryDestination.Device(DeviceCollection.CAMERA)))
     }
 
     @Test

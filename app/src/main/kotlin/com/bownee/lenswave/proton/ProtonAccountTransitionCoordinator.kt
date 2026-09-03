@@ -1,6 +1,5 @@
 package com.bownee.lenswave.proton
 
-import com.bownee.lenswave.gallery.CombinedPhotoMatcher
 import com.bownee.lenswave.gallery.ProtonSessionLifecycle
 import dagger.Binds
 import dagger.Module
@@ -17,7 +16,6 @@ fun interface ProtonAccountCacheCleaner {
 @Singleton
 class ProtonAccountTransitionCoordinator @Inject constructor(
     private val sessionLifecycle: ProtonSessionLifecycle,
-    private val combinedPhotoMatcher: CombinedPhotoMatcher,
     private val cacheCleaner: ProtonAccountCacheCleaner,
     private val thumbnailScheduler: ProtonThumbnailScheduler,
 ) {
@@ -27,7 +25,6 @@ class ProtonAccountTransitionCoordinator @Inject constructor(
         previousUserId?.let { thumbnailScheduler.cancelAndAwait(it) }
         previousUserId?.let { sessionLifecycle.disconnect(it) }
         nextUserId?.let { sessionLifecycle.activate(it) }
-        previousUserId?.let { combinedPhotoMatcher.clear(it) }
         cacheCleaner.retainOnlyUser(nextUserId?.id)
         nextUserId?.let(thumbnailScheduler::enqueue)
     }

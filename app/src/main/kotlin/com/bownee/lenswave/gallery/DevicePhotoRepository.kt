@@ -6,13 +6,9 @@ import android.content.Context
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
-import androidx.core.net.toUri
 import dagger.hilt.android.qualifiers.ApplicationContext
 import com.bownee.lenswave.LenswaveDispatchers
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
-import java.security.MessageDigest
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -115,27 +111,6 @@ class DevicePhotoRepository @Inject constructor(
         context.contentResolver.query(collection, projection, selection, null, sortOrder)
     }
 
-    override suspend fun calculateSha1(photo: GalleryAsset): ByteArray = withContext(dispatchers.io) {
-        require(photo.source == PhotoSource.DEVICE) { "Only device photos can be hashed" }
-        val uri = requireNotNull(photo.uri).toUri()
-        val digest = MessageDigest.getInstance("SHA-1")
-        val buffer = ByteArray(HASH_BUFFER_SIZE)
-        context.contentResolver.openInputStream(uri).use { input ->
-            requireNotNull(input) { "Could not open ${photo.displayName.ifBlank { "device photo" }}" }
-            while (true) {
-                currentCoroutineContext().ensureActive()
-                val count = input.read(buffer)
-                if (count < 0) break
-                digest.update(buffer, 0, count)
-            }
-        }
-        digest.digest()
-    }
-
     private fun android.database.Cursor.stringOrNull(column: Int): String? =
         column.takeIf { it >= 0 && !isNull(it) }?.let(::getString)
-
-    private companion object {
-        const val HASH_BUFFER_SIZE = 128 * 1024
-    }
 }

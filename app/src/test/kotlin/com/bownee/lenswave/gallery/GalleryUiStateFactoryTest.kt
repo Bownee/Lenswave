@@ -66,39 +66,6 @@ class GalleryUiStateFactoryTest {
     }
 
     @Test
-    fun `combined photos remain usable without device permission`() {
-        val protonPhoto = ProtonGalleryPhoto("proton-photo", 42, hasThumbnail = true)
-        val state = factory.create(
-            GalleryUiInputs(
-                destination = GalleryDestination.Combined,
-                hasDeviceAccess = false,
-                protonAccountStatus = ProtonAccountStatus.CONNECTED,
-                protonGallery = ProtonGalleryState(
-                    photos = listOf(protonPhoto),
-                    hasLoaded = true,
-                ),
-            ),
-        )
-
-        assertEquals("proton:proton-photo", state.visibleAssets.single().stableId)
-        assertNull(state.emptyState)
-    }
-
-    @Test
-    fun `empty combined photos offers device access when Proton is connected`() {
-        val state = factory.create(
-            GalleryUiInputs(
-                destination = GalleryDestination.Combined,
-                hasDeviceAccess = false,
-                protonAccountStatus = ProtonAccountStatus.CONNECTED,
-                protonGallery = ProtonGalleryState(hasLoaded = true),
-            ),
-        )
-
-        assertEquals(GalleryEmptyAction.REQUEST_DEVICE_ACCESS, state.emptyState?.action)
-    }
-
-    @Test
     fun `Proton trash does not claim to be empty before metadata loads`() {
         val state = factory.create(
             GalleryUiInputs(
@@ -173,11 +140,11 @@ class GalleryUiStateFactoryTest {
             sections.getValue("media-types").openedDestinations(),
         )
         assertEquals(
-            DeviceCollection.entries.filter { it != DeviceCollection.ALL }.map { GalleryDestination.Device(it) },
+            DeviceCollection.entries.map { GalleryDestination.Device(it) },
             sections.getValue("device").openedDestinations(),
         )
         assertEquals(
-            listOf(GalleryDestination.Trash(PhotoSource.PROTON)),
+            listOf(GalleryDestination.Trash(PhotoSource.PROTON), GalleryDestination.Trash(PhotoSource.DEVICE)),
             sections.getValue("trash").openedDestinations(),
         )
     }
@@ -242,13 +209,13 @@ class GalleryUiStateFactoryTest {
     fun `every destination carries a title`() {
         val album = ProtonAlbumReference("album", "Trip")
         val titles = listOf(
-            GalleryDestination.Combined to R.string.photos.toString(),
-            GalleryDestination.Device() to R.string.photos.toString(),
+            GalleryDestination.ProtonTimeline to R.string.photos.toString(),
             GalleryDestination.Device(DeviceCollection.SCREENSHOTS) to R.string.collection_screenshots.toString(),
             GalleryDestination.ProtonTag(ProtonMediaTag.VIDEOS) to R.string.proton_tag_videos.toString(),
             GalleryDestination.Library to R.string.library.toString(),
             GalleryDestination.ProtonAlbumPhotos(album) to "Trip",
-            GalleryDestination.Trash(PhotoSource.DEVICE) to R.string.trash.toString(),
+            GalleryDestination.Trash(PhotoSource.DEVICE) to R.string.device_trash.toString(),
+            GalleryDestination.Trash(PhotoSource.PROTON) to R.string.proton_trash.toString(),
         )
 
         titles.forEach { (destination, expected) ->

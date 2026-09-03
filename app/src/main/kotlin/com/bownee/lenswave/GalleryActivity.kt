@@ -42,7 +42,6 @@ import com.bownee.lenswave.gallery.GalleryEmptyAction
 import com.bownee.lenswave.gallery.GalleryGrouping
 import com.bownee.lenswave.gallery.GalleryFastScrollLayoutPolicy
 import com.bownee.lenswave.gallery.GalleryScrollPosition
-import com.bownee.lenswave.gallery.GallerySource
 import com.bownee.lenswave.gallery.GalleryScrollPositionStore
 import com.bownee.lenswave.gallery.GalleryNavigationPolicy
 import com.bownee.lenswave.gallery.GalleryThumbnailCacheIdentity
@@ -201,7 +200,6 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
             scope = lifecycleScope,
             repository = protonRepository,
             currentUserId = { currentUiState.currentUserId },
-            currentDestination = { currentUiState.destination },
             actions = GalleryScreen.Actions(
                 onPhotoClicked = ::openPhoto,
                 onFavoriteClicked = ::toggleOverviewFavorite,
@@ -216,7 +214,6 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
                 onDeleteAllTrash = ::confirmDeleteAllTrashPhotos,
                 onPhotosTab = ::openPhotosTab,
                 onLibraryTab = ::openLibrary,
-                onSourceSelected = ::selectSource,
                 onDeleteSelection = ::deleteSelectedPhotos,
             ),
         )
@@ -450,11 +447,6 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
         viewModel.openLibrary()
     }
 
-    private fun selectSource(source: GallerySource) {
-        beforeNavigation()
-        viewModel.selectSource(source)
-    }
-
     private fun navigateUp() {
         beforeNavigation()
         viewModel.navigateUp()
@@ -603,15 +595,6 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
             title = currentUiState.title,
             tab = GalleryNavigationPolicy.tab(destination),
             showBack = GalleryNavigationPolicy.parent(destination) != null,
-            sources = if (selecting) {
-                emptyList()
-            } else {
-                GalleryNavigationPolicy.sources(
-                    destination,
-                    supportsDeviceTrash = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R,
-                )
-            },
-            selectedSource = GalleryNavigationPolicy.selectedSource(destination),
         )
         updateNavigationVisibility(selecting)
     }

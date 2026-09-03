@@ -14,7 +14,6 @@ enum class MediaKind {
 }
 
 enum class DeviceCollection(@param:StringRes val labelRes: Int) {
-    ALL(R.string.collection_all),
     CAMERA(R.string.collection_camera),
     SCREENSHOTS(R.string.collection_screenshots),
     DOWNLOADS(R.string.collection_downloads),

@@ -44,7 +44,7 @@ data class GalleryEmptyState(
 )
 
 data class GalleryUiState(
-    val destination: GalleryDestination = GalleryDestination.Device(),
+    val destination: GalleryDestination = GalleryDestination.ProtonTimeline,
     val title: String = "",
     val content: GalleryContent = GalleryContent.Photos(emptyList()),
     val statusText: String = "",

@@ -1,8 +1,5 @@
 package com.bownee.lenswave.proton
 
-import com.bownee.lenswave.gallery.CombinedMatchProgress
-import com.bownee.lenswave.gallery.CombinedPhotoMatcher
-import com.bownee.lenswave.gallery.GalleryAsset
 import com.bownee.lenswave.gallery.ProtonSessionLifecycle
 import kotlinx.coroutines.runBlocking
 import me.proton.core.domain.entity.UserId
@@ -19,7 +16,7 @@ class ProtonAccountTransitionCoordinatorTest {
         coordinator.transition(UserId("a"), UserId("b"))
 
         assertEquals(
-            listOf("cancel:a", "disconnect:a", "activate:b", "combined-clear:a", "retain:b", "enqueue:b"),
+            listOf("cancel:a", "disconnect:a", "activate:b", "retain:b", "enqueue:b"),
             events,
         )
     }
@@ -30,11 +27,11 @@ class ProtonAccountTransitionCoordinatorTest {
 
         coordinator(events).transition(UserId("a"), null)
 
-        assertEquals(listOf("cancel:a", "disconnect:a", "combined-clear:a", "retain:null"), events)
+        assertEquals(listOf("cancel:a", "disconnect:a", "retain:null"), events)
     }
 
     @Test
-    fun failedActivationDoesNotClearCombinedDataOrEnqueueNewWork() {
+    fun failedActivationDoesNotEraseCachesOrEnqueueNewWork() {
         val events = mutableListOf<String>()
         val sessionLifecycle = FakeSessionLifecycle(events, failActivation = true)
         val coordinator = coordinator(events, sessionLifecycle)
@@ -50,24 +47,9 @@ class ProtonAccountTransitionCoordinatorTest {
         sessionLifecycle: ProtonSessionLifecycle = FakeSessionLifecycle(events),
     ) = ProtonAccountTransitionCoordinator(
         sessionLifecycle = sessionLifecycle,
-        combinedPhotoMatcher = FakeCombinedMatcher(events),
         cacheCleaner = ProtonAccountCacheCleaner { userId -> events += "retain:$userId" },
         thumbnailScheduler = FakeThumbnailScheduler(events),
     )
-
-    private class FakeCombinedMatcher(private val events: MutableList<String>) : CombinedPhotoMatcher {
-        override suspend fun resolveMatches(
-            userId: UserId,
-            devicePhotos: List<GalleryAsset>,
-            protonPhotos: List<ProtonGalleryPhoto>,
-            forceRecheck: Boolean,
-            onProgress: suspend (CombinedMatchProgress) -> Unit,
-        ) = Unit
-
-        override suspend fun clear(userId: UserId) {
-            events += "combined-clear:${userId.id}"
-        }
-    }
 
     private class FakeThumbnailScheduler(private val events: MutableList<String>) : ProtonThumbnailScheduler {
         override fun enqueue(userId: UserId) {

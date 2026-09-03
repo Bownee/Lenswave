@@ -151,15 +151,6 @@ internal class ProtonDownloadRepository @Inject constructor(
 
     internal fun storedThumbnailCount(userId: UserId): Int = cache.thumbnailCount(userId.id)
 
-    suspend fun findPhotoDuplicates(
-        userId: UserId,
-        name: String,
-        generateSha1: suspend () -> ByteArray,
-    ): List<String> {
-        if (name.isBlank()) return emptyList()
-        return clientProvider.get(userId).findPhotoDuplicates(name, generateSha1).map { it.value }
-    }
-
     private suspend fun downloadChunks(
         photosClient: ProtonPhotosClient,
         userId: UserId,

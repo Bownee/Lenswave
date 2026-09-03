@@ -31,7 +31,6 @@ class GalleryListAdapter(
     private val onAlbumClicked: (ProtonAlbum) -> Unit,
     private val onLibraryAction: (LibraryAction) -> Unit,
     private val onSelectionChanged: (List<GalleryAsset>) -> Unit,
-    private val currentDestination: () -> GalleryDestination,
 ) : BaseAdapter() {
     private val selected = linkedMapOf<String, GalleryAsset>()
     private val favoriteState = OptimisticFavoriteState()
@@ -195,7 +194,6 @@ class GalleryListAdapter(
                 cell.visibility = View.INVISIBLE
                 image.setImageDrawable(null)
                 cell.loading.visibility = View.GONE
-                cell.protonBadge.visibility = View.GONE
                 cell.videoBadge.visibility = View.GONE
                 cell.favorite.visibility = View.GONE
                 cell.favorite.setOnClickListener(null)
@@ -205,18 +203,11 @@ class GalleryListAdapter(
             }
             cell.visibility = View.VISIBLE
             image.tag = photo.stableId
-            val showProtonBadge = PhotoSourceBadgePolicy.shouldShow(currentDestination(), photo)
             val description = photo.displayName.ifBlank { context.getString(R.string.photo) }
-            val sourceDescription = if (showProtonBadge) {
-                context.getString(R.string.photo_in_proton, description)
-            } else {
-                description
-            }
-            cell.contentDescription = if (photo.hasThumbnail) sourceDescription else {
-                context.getString(R.string.photo_thumbnail_unavailable, sourceDescription)
+            cell.contentDescription = if (photo.hasThumbnail) description else {
+                context.getString(R.string.photo_thumbnail_unavailable, description)
             }
             image.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            cell.protonBadge.visibility = if (showProtonBadge) View.VISIBLE else View.GONE
             cell.videoBadge.visibility = if (photo.mediaKind == MediaKind.VIDEO) View.VISIBLE else View.GONE
             cell.setOnClickListener {
                 if (selected.isEmpty()) onPhotoClicked(photo) else toggleSelection(photo)
@@ -393,20 +384,6 @@ class GalleryListAdapter(
             visibility = View.GONE
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
-        val protonBadge = ImageView(context).apply {
-            setImageResource(R.drawable.ic_cloud)
-            setPadding(context.dp(4), context.dp(4), context.dp(4), context.dp(4))
-            imageAlpha = 190
-            alpha = 0.68f
-            background = UiStyle.rounded(
-                context,
-                Color.argb(165, 12, 14, 19),
-                11,
-                Color.argb(120, 244, 246, 252),
-            )
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            visibility = View.GONE
-        }
         val videoBadge = ImageView(context).apply {
             setImageResource(R.drawable.ic_play)
             setPadding(context.dp(5))
@@ -432,10 +409,6 @@ class GalleryListAdapter(
             addView(check, LayoutParams(context.dp(34), context.dp(34), Gravity.TOP or Gravity.END).apply {
                 topMargin = context.dp(8)
                 marginEnd = context.dp(8)
-            })
-            addView(protonBadge, LayoutParams(context.dp(22), context.dp(22), Gravity.BOTTOM or Gravity.END).apply {
-                bottomMargin = context.dp(7)
-                marginEnd = context.dp(7)
             })
             addView(videoBadge, LayoutParams(context.dp(28), context.dp(28), Gravity.CENTER))
             addView(favorite, LayoutParams(context.dp(48), context.dp(48), Gravity.TOP or Gravity.END).apply {

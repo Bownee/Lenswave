@@ -18,11 +18,9 @@ import androidx.core.graphics.drawable.toDrawable
 import androidx.core.view.ViewCompat
 import androidx.core.widget.TextViewCompat
 import com.bownee.lenswave.gallery.GalleryAsset
-import com.bownee.lenswave.gallery.GalleryDestination
 import com.bownee.lenswave.gallery.GalleryListAdapter
 import com.bownee.lenswave.gallery.GalleryListView
 import com.bownee.lenswave.gallery.GalleryScrollPosition
-import com.bownee.lenswave.gallery.GallerySource
 import com.bownee.lenswave.gallery.GalleryTab
 import com.bownee.lenswave.gallery.GalleryThumbnailLoader
 import com.bownee.lenswave.gallery.LibraryAction
@@ -36,13 +34,10 @@ internal class GalleryScreen(
     scope: CoroutineScope,
     repository: ProtonPhotoGateway,
     currentUserId: () -> UserId?,
-    currentDestination: () -> GalleryDestination,
     private val actions: Actions,
 ) {
     val root = FrameLayout(activity).apply { setBackgroundColor(UiStyle.background) }
     private val pageTitle: TextView
-    private val sourceControl: LinearLayout
-    private val sourceButtons: Map<GallerySource, Button>
     private val status: TextView
     val list: GalleryListView
     val galleryHeader: LinearLayout
@@ -76,8 +71,6 @@ internal class GalleryScreen(
         val header = buildGalleryHeader()
         galleryHeader = header.container
         pageTitle = header.pageTitle
-        sourceControl = header.sourceControl
-        sourceButtons = header.sourceButtons
         status = header.status
         settingsButton = header.settingsButton
         refreshButton = header.refreshButton
@@ -101,7 +94,6 @@ internal class GalleryScreen(
             onAlbumClicked = actions.onAlbumClicked,
             onLibraryAction = actions.onLibraryAction,
             onSelectionChanged = actions.onSelectionChanged,
-            currentDestination = currentDestination,
         )
         galleryFooter = View(activity).apply {
             layoutParams = AbsListView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0)
@@ -196,24 +188,9 @@ internal class GalleryScreen(
         trashDeleteAllButton.alpha = if (refreshing) 0.5f else 1f
     }
 
-    /**
-     * Renders the title row, the source switch, and the tab bar. [sources] lists the segments
-     * the current screen offers; fewer than two hides the switch.
-     */
-    fun renderNavigation(
-        title: String,
-        tab: GalleryTab,
-        showBack: Boolean,
-        sources: List<GallerySource>,
-        selectedSource: GallerySource?,
-    ) {
+    fun renderNavigation(title: String, tab: GalleryTab, showBack: Boolean) {
         if (title.isNotEmpty()) pageTitle.text = title
         backButton.visibility = if (showBack) View.VISIBLE else View.GONE
-        sourceControl.visibility = if (sources.size > 1) View.VISIBLE else View.GONE
-        sourceButtons.forEach { (source, button) ->
-            button.visibility = if (source in sources) View.VISIBLE else View.GONE
-            styleChoice(button, source == selectedSource)
-        }
         styleChoice(photosTabButton, tab == GalleryTab.PHOTOS)
         styleChoice(libraryTabButton, tab == GalleryTab.LIBRARY)
     }
@@ -353,20 +330,6 @@ internal class GalleryScreen(
         titleRow.addView(settings, LinearLayout.LayoutParams(activity.dp(48), activity.dp(48)))
         container.addView(titleRow, matchWrap())
 
-        val sourceButtons = GallerySource.entries.associateWith { source ->
-            choiceButton(activity.getString(source.labelRes)).apply {
-                setOnClickListener { actions.onSourceSelected(source) }
-            }
-        }
-        val sourceControl = choiceGroup().apply {
-            sourceButtons.values.forEachIndexed { index, button ->
-                addView(button, LinearLayout.LayoutParams(0, activity.dp(40), 1f).apply {
-                    if (index > 0) marginStart = activity.dp(3)
-                })
-            }
-        }
-        container.addView(sourceControl, matchWrap().apply { topMargin = activity.dp(8) })
-
         val statusRow = LinearLayout(activity).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -403,8 +366,6 @@ internal class GalleryScreen(
         return Header(
             container,
             title,
-            sourceControl,
-            sourceButtons,
             status,
             settings,
             refresh,
@@ -585,7 +546,6 @@ internal class GalleryScreen(
         val onDeleteAllTrash: () -> Unit,
         val onPhotosTab: () -> Unit,
         val onLibraryTab: () -> Unit,
-        val onSourceSelected: (GallerySource) -> Unit,
         val onDeleteSelection: () -> Unit,
     )
 
@@ -599,8 +559,6 @@ internal class GalleryScreen(
     private data class Header(
         val container: LinearLayout,
         val pageTitle: TextView,
-        val sourceControl: LinearLayout,
-        val sourceButtons: Map<GallerySource, Button>,
         val status: TextView,
         val settingsButton: ImageButton,
         val refreshButton: ImageButton,

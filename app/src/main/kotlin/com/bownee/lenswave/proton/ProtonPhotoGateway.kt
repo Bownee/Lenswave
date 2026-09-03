@@ -1,7 +1,6 @@
 package com.bownee.lenswave.proton
 
 import android.graphics.Bitmap
-import com.bownee.lenswave.gallery.ProtonDuplicateSource
 import com.bownee.lenswave.gallery.ProtonGalleryReader
 import com.bownee.lenswave.gallery.ProtonSessionLifecycle
 import java.io.File
@@ -35,7 +34,7 @@ class ProtonPhotoGateway @Inject internal constructor(
     private val clientProvider: ProtonPhotosClientProvider,
     private val cache: ProtonSessionCache,
     private val sessionGuard: ProtonSessionGuard,
-) : ProtonGalleryReader, ProtonSessionLifecycle, ProtonDuplicateSource {
+) : ProtonGalleryReader, ProtonSessionLifecycle {
     override val state: StateFlow<ProtonGalleryState> = timeline.state
     override val albumsState: StateFlow<ProtonAlbumsState> = albums.albumsState
     override val albumPhotosState: StateFlow<ProtonAlbumPhotosState> = albums.albumPhotosState
@@ -151,7 +150,7 @@ class ProtonPhotoGateway @Inject internal constructor(
         }
     }
 
-    override suspend fun getOriginalFileName(userId: UserId, nodeUid: String): String? =
+    suspend fun getOriginalFileName(userId: UserId, nodeUid: String): String? =
         withContext(Dispatchers.IO) {
             sessionGuard.withActiveSession(userId) { downloads.getOriginalFileName(userId, nodeUid) }
         }
@@ -162,16 +161,6 @@ class ProtonPhotoGateway @Inject internal constructor(
                 invalidateThumbnailInActiveSession(userId, nodeUid)
                 null
             }
-        }
-    }
-
-    override suspend fun findPhotoDuplicates(
-        userId: UserId,
-        name: String,
-        generateSha1: suspend () -> ByteArray,
-    ): List<String> = withContext(Dispatchers.IO) {
-        sessionGuard.withActiveSession(userId) {
-            downloads.findPhotoDuplicates(userId, name, generateSha1)
         }
     }
 

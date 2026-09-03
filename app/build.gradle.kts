@@ -271,7 +271,6 @@ tasks.register<JacocoCoverageVerification>("jacocoDebugCoverageVerification") {
             element = "CLASS"
             includes = listOf(
                 "com.bownee.lenswave.gallery.GalleryOperationPolicy",
-                "com.bownee.lenswave.gallery.CombinedPhotoRepository",
                 "com.bownee.lenswave.proton.ProtonSessionGuard",
                 "com.bownee.lenswave.proton.ProtonAccountTransitionCoordinator",
             )
