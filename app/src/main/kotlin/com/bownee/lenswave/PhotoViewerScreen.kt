@@ -68,6 +68,25 @@ internal class PhotoViewerScreen(
     init {
         root.addView(backgroundScrim, matchParentFrame())
 
+        mediaTitle = TextView(context).apply {
+            textSize = 15f
+            setTextColor(UiStyle.text)
+            gravity = Gravity.CENTER
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+            setPadding(context.dp(16), context.dp(10), context.dp(16), context.dp(10))
+            setBackgroundColor(UiStyle.surface)
+            visibility = View.GONE
+            ViewCompat.setAccessibilityHeading(this, true)
+        }
+        photoDetailsSurface.addView(
+            mediaTitle,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = context.dp(12) },
+        )
+
         mediaFrame.layoutParams = LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             context.resources.displayMetrics.heightPixels,
@@ -137,34 +156,6 @@ internal class PhotoViewerScreen(
             ),
         )
 
-        mediaTitle = TextView(context).apply {
-            textSize = 15f
-            setTextColor(UiStyle.text)
-            gravity = Gravity.CENTER
-            maxLines = 1
-            ellipsize = TextUtils.TruncateAt.END
-            setPadding(context.dp(12), context.dp(7), context.dp(12), context.dp(7))
-            background = UiStyle.rounded(
-                context,
-                UiStyle.withAlpha(UiStyle.surface, 218),
-                16,
-            )
-            elevation = context.dp(4).toFloat()
-            visibility = View.GONE
-            ViewCompat.setAccessibilityHeading(this, true)
-        }
-        root.addView(
-            mediaTitle,
-            FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                Gravity.TOP or Gravity.CENTER_HORIZONTAL,
-            ).apply {
-                marginStart = context.dp(12)
-                marginEnd = context.dp(12)
-            },
-        )
-
         editButton = smallIconButton(context.getString(R.string.edit), R.drawable.ic_edit).apply {
             isEnabled = false
             setOnClickListener { actions.onEdit() }
@@ -223,6 +214,11 @@ internal class PhotoViewerScreen(
         root.addOnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
             if (right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop) {
                 actions.onLayoutChanged(bottom - top)
+            }
+        }
+        mediaTitle.addOnLayoutChangeListener { _, _, top, _, bottom, _, oldTop, _, oldBottom ->
+            if (bottom - top != oldBottom - oldTop && root.height > 0) {
+                actions.onLayoutChanged(root.height)
             }
         }
     }

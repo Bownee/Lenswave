@@ -783,7 +783,7 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
                     15,
                     UiStyle.navigationBorder,
                 ),
-                dp(3),
+                dp(5),
             )
         } else {
             Color.TRANSPARENT.toDrawable()

@@ -205,7 +205,8 @@ class PhotoViewerActivity : FragmentActivity() {
                 gestureStartAllowed = { _, y ->
                     request.mediaKind != MediaKind.VIDEO ||
                         playerView.height <= 0 ||
-                        y < playerView.bottom - dp(VIDEO_CONTROLS_HEIGHT_DP)
+                        y < mediaFrame.top - photoDetailsScroll.scrollY + playerView.bottom -
+                            dp(VIDEO_CONTROLS_HEIGHT_DP)
                 },
                 onVerticalDrag = ::handleDetailsDrag,
                 onHorizontalDrag = ::handleHorizontalPhotoDrag,
@@ -226,8 +227,13 @@ class PhotoViewerActivity : FragmentActivity() {
     private fun updatePhotoDetailsLayout(availableHeight: Int) {
         if (availableHeight <= 0) return
         val mediaParams = mediaFrame.layoutParams as LinearLayout.LayoutParams
-        if (mediaParams.height != availableHeight) {
-            mediaParams.height = availableHeight
+        val mediaHeight = PhotoViewerMediaLayoutPolicy.mediaHeight(
+            viewportHeight = availableHeight,
+            mediaTop = mediaFrame.top,
+        )
+        if (mediaHeight <= 0) return
+        if (mediaParams.height != mediaHeight) {
+            mediaParams.height = mediaHeight
             mediaFrame.layoutParams = mediaParams
         }
         detailsSheet.minimumHeight = (availableHeight * DETAILS_MINIMUM_HEIGHT_FRACTION).roundToInt()
@@ -1359,12 +1365,12 @@ class PhotoViewerActivity : FragmentActivity() {
                 bottomMargin = dp(8) + safeArea.bottom
                 actions.layoutParams = this
             }
-            (mediaTitle.layoutParams as FrameLayout.LayoutParams).apply {
-                topMargin = dp(8) + safeArea.top
-                marginStart = dp(12) + safeArea.left
-                marginEnd = dp(12) + safeArea.right
-                mediaTitle.layoutParams = this
-            }
+            mediaTitle.setPadding(
+                dp(16) + safeArea.left,
+                dp(10) + safeArea.top,
+                dp(16) + safeArea.right,
+                dp(10),
+            )
             actions.post(::updateMediaBounds)
             detailsSheet.setPadding(
                 dp(16) + safeArea.left,
@@ -1380,7 +1386,7 @@ class PhotoViewerActivity : FragmentActivity() {
     private fun updateMediaBounds() {
         val bottomInset = PhotoViewerMediaLayoutPolicy.bottomInset(
             viewportHeight = mediaFrame.height,
-            actionsTop = actions.top,
+            actionsTop = actions.top + photoDetailsScroll.scrollY - mediaFrame.top,
             gap = dp(MEDIA_ACTION_GAP_DP),
         )
         if (bottomInset <= 0) return

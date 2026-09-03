@@ -373,8 +373,8 @@ class GalleryListAdapter(
         val favorite = ImageButton(context).apply {
             setPaddingRelative(
                 context.dp(30),
-                context.dp(8),
-                context.dp(8),
+                context.dp(10),
+                context.dp(10),
                 context.dp(30),
             )
             imageTintList = ColorStateList.valueOf(Color.WHITE)
