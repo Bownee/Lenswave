@@ -61,6 +61,44 @@ class ProtonThumbnailQueueTest {
     }
 
     @Test
+    fun newlyVisibleItemBypassesAnOldRetryDelay() = runBlocking {
+        val queue = ProtonThumbnailQueue(FakeStore(), FakeClock())
+        queue.replaceSource(USER_ID, "timeline", listOf("photo"))
+        queue.defer(USER_ID, "photo")
+        assertNull(queue.nextReady(USER_ID))
+
+        queue.prioritizeVisible(USER_ID, setOf("photo"))
+
+        assertEquals("photo", queue.claimVisible(USER_ID, limit = 1).single().nodeUid)
+    }
+
+    @Test
+    fun unchangedVisibleItemsKeepARecentlyEarnedRetryDelay() = runBlocking {
+        val queue = ProtonThumbnailQueue(FakeStore(), FakeClock())
+        queue.replaceSource(USER_ID, "timeline", listOf("photo"))
+        queue.prioritizeVisible(USER_ID, setOf("photo"))
+        queue.claimVisible(USER_ID, limit = 1)
+        queue.settle(USER_ID, emptySet(), setOf("photo"))
+
+        queue.prioritizeVisible(USER_ID, setOf("photo"))
+
+        assertNull(queue.nextReady(USER_ID))
+    }
+
+    @Test
+    fun invalidatedThumbnailIsRestoredForImmediateDownload() = runBlocking {
+        val queue = ProtonThumbnailQueue(FakeStore(), FakeClock())
+        queue.replaceSource(USER_ID, "timeline", listOf("photo"))
+        queue.complete(USER_ID, "photo")
+
+        queue.retryNow(USER_ID, "photo", setOf("timeline", "album:one"))
+
+        val restored = queue.claimVisible(USER_ID, limit = 1).single()
+        assertEquals("photo", restored.nodeUid)
+        assertEquals(setOf("timeline", "album:one"), restored.sources)
+    }
+
+    @Test
     fun claimedBatchesDoNotDuplicateInFlightWork() = runBlocking {
         val queue = ProtonThumbnailQueue(FakeStore(), FakeClock())
         queue.replaceSource(USER_ID, "timeline", listOf("a", "b", "c"))

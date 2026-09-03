@@ -65,15 +65,7 @@ class ProtonPhotoCacheInstrumentedTest {
         val userId = "retention-${UUID.randomUUID()}"
         val clock = FakeClock(System.currentTimeMillis())
         val cache = ProtonPhotoCache(context, SecureFileStore(), clock)
-        val thumbnail = ByteArrayOutputStream().use { output ->
-            val bitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
-            try {
-                assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output))
-            } finally {
-                bitmap.recycle()
-            }
-            output.toByteArray()
-        }
+        val thumbnail = validThumbnail()
         try {
             cache.writeThumbnail(userId, "old", thumbnail)
             // Filesystems may round last-modified values, so retain a wide deterministic gap.
@@ -90,6 +82,48 @@ class ProtonPhotoCacheInstrumentedTest {
             cache.clearUser(userId)
             context.testRoot.deleteRecursively()
         }
+    }
+
+    @Test fun thumbnailValidationRequiresACompletePixelDecode() {
+        val context = isolatedContext()
+        val userId = "decode-${UUID.randomUUID()}"
+        val nodeUid = "truncated"
+        val secureFiles = SecureFileStore()
+        val cache = ProtonPhotoCache(context, secureFiles, FakeClock(System.currentTimeMillis()))
+        val truncatedThumbnail = validThumbnail().copyOf(33)
+        val thumbnailFile = File(
+            context.filesDir,
+            "proton-photo-cache/${AtomicFileStore.safeName(userId)}/thumbnails/" +
+                "${AtomicFileStore.safeName(nodeUid)}.thumb",
+        )
+        try {
+            assertFalse(runCatching {
+                cache.writeThumbnail(userId, nodeUid, truncatedThumbnail)
+            }.isSuccess)
+
+            secureFiles.write(
+                "proton-media:$userId",
+                thumbnailFile,
+                truncatedThumbnail,
+                "Could not write test thumbnail",
+            )
+            assertTrue(cache.thumbnailExists(userId, nodeUid))
+            assertFalse(cache.thumbnailIsDecodable(userId, nodeUid))
+            assertFalse(thumbnailFile.exists())
+        } finally {
+            cache.clearUser(userId)
+            context.testRoot.deleteRecursively()
+        }
+    }
+
+    private fun validThumbnail(): ByteArray = ByteArrayOutputStream().use { output ->
+        val bitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
+        try {
+            assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output))
+        } finally {
+            bitmap.recycle()
+        }
+        output.toByteArray()
     }
 
     private fun isolatedContext(): IsolatedCacheContext {

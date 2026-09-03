@@ -1,6 +1,7 @@
 package com.bownee.lenswave.proton
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import dagger.hilt.android.qualifiers.ApplicationContext
 import org.json.JSONArray
@@ -105,9 +106,14 @@ internal class ProtonPhotoCache @Inject constructor(
 
     private fun isDecodableThumbnail(bytes: ByteArray): Boolean {
         if (bytes.isEmpty()) return false
-        val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
-        return options.outWidth > 0 && options.outHeight > 0
+        val bitmap = BitmapFactory.decodeByteArray(
+            bytes,
+            0,
+            bytes.size,
+            BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.RGB_565 },
+        ) ?: return false
+        bitmap.recycle()
+        return true
     }
 
     override fun readIndex(userId: String): List<ProtonGalleryPhoto> {

@@ -164,6 +164,24 @@ internal class ProtonAlbumRepository @Inject constructor(
         }
     }
 
+    internal fun markCoverThumbnailsUnavailable(userId: UserId, nodeUids: Set<String>) {
+        if (nodeUids.isEmpty()) return
+        mutableAlbumsState.update { state ->
+            if (state.userId != userId.id) return@update state
+            var invalidatedCount = 0
+            val albums = state.albums.map { album ->
+                if (album.coverPhotoNodeUid !in nodeUids || !album.hasCoverThumbnail) return@map album
+                invalidatedCount++
+                album.copy(hasCoverThumbnail = false)
+            }
+            if (invalidatedCount == 0) return@update state
+            state.copy(
+                albums = albums,
+                downloadedCoverCount = (state.downloadedCoverCount - invalidatedCount).coerceAtLeast(0),
+            )
+        }
+    }
+
     internal fun markAlbumPhotoThumbnailsAvailable(userId: UserId, nodeUids: Set<String>) {
         if (nodeUids.isEmpty()) return
         mutableAlbumPhotosState.update { state ->
@@ -178,6 +196,24 @@ internal class ProtonAlbumRepository @Inject constructor(
             state.copy(
                 photos = photos,
                 downloadedThumbnailCount = state.downloadedThumbnailCount + completedCount,
+            )
+        }
+    }
+
+    internal fun markAlbumPhotoThumbnailsUnavailable(userId: UserId, nodeUids: Set<String>) {
+        if (nodeUids.isEmpty()) return
+        mutableAlbumPhotosState.update { state ->
+            if (state.userId != userId.id) return@update state
+            var invalidatedCount = 0
+            val photos = state.photos.map { photo ->
+                if (photo.nodeUid !in nodeUids || !photo.hasThumbnail) return@map photo
+                invalidatedCount++
+                photo.copy(hasThumbnail = false)
+            }
+            if (invalidatedCount == 0) return@update state
+            state.copy(
+                photos = photos,
+                downloadedThumbnailCount = (state.downloadedThumbnailCount - invalidatedCount).coerceAtLeast(0),
             )
         }
     }

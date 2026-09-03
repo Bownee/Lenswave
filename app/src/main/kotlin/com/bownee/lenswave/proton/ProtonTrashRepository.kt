@@ -95,6 +95,24 @@ internal class ProtonTrashRepository @Inject constructor(
         }
     }
 
+    internal fun markThumbnailsUnavailable(userId: UserId, nodeUids: Set<String>) {
+        if (nodeUids.isEmpty()) return
+        mutableState.update { state ->
+            if (state.userId != userId.id) return@update state
+            var invalidatedCount = 0
+            val photos = state.photos.map { photo ->
+                if (photo.nodeUid !in nodeUids || !photo.hasThumbnail) return@map photo
+                invalidatedCount++
+                photo.copy(hasThumbnail = false)
+            }
+            if (invalidatedCount == 0) return@update state
+            state.copy(
+                photos = photos,
+                downloadedThumbnailCount = (state.downloadedThumbnailCount - invalidatedCount).coerceAtLeast(0),
+            )
+        }
+    }
+
     suspend fun deletePermanently(
         userId: UserId,
         nodeUids: Collection<String>,

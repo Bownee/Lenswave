@@ -1,6 +1,7 @@
 package com.bownee.lenswave.gallery
 
 import android.content.Context
+import android.content.res.ColorStateList
 import android.graphics.Color
 import android.text.TextUtils
 import android.view.Gravity
@@ -11,6 +12,7 @@ import android.widget.BaseAdapter
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.core.view.setPadding
 import androidx.core.view.ViewCompat
@@ -135,6 +137,7 @@ class GalleryListAdapter(
             if (photo == null) {
                 cell.visibility = View.INVISIBLE
                 image.setImageDrawable(null)
+                cell.loading.visibility = View.GONE
                 cell.protonBadge.visibility = View.GONE
                 cell.setOnClickListener(null)
                 cell.setOnLongClickListener(null)
@@ -170,7 +173,7 @@ class GalleryListAdapter(
             )
             cell.check.visibility = if (isSelected) View.VISIBLE else View.GONE
             image.alpha = if (isSelected) 0.58f else 1f
-            bindThumbnail(image, photo)
+            bindThumbnail(cell, photo)
         }
         return container
     }
@@ -199,6 +202,7 @@ class GalleryListAdapter(
             if (album == null) {
                 cell.visibility = View.INVISIBLE
                 cell.image.setImageDrawable(null)
+                cell.loading.visibility = View.GONE
                 cell.setOnClickListener(null)
                 continue
             }
@@ -218,7 +222,7 @@ class GalleryListAdapter(
             cell.details.text = details
             cell.contentDescription = context.getString(R.string.album_accessibility, albumName, details)
             cell.setOnClickListener { onAlbumClicked(album) }
-            bindAlbumCover(cell.image, album)
+            bindAlbumCover(cell, album)
         }
         return container
     }
@@ -248,18 +252,21 @@ class GalleryListAdapter(
         onSelectionChanged(selected.values.toList())
     }
 
-    private fun bindThumbnail(image: ImageView, photo: GalleryAsset) {
+    private fun bindThumbnail(cell: PhotoCell, photo: GalleryAsset) {
+        val image = cell.image
         thumbnailLoader.load(
             asset = photo,
             allowSourceRead = GalleryFastScrollThumbnailPolicy.shouldReadSource(isFastScrolling),
         ) { bitmap ->
             if (image.tag != photo.stableId) return@load
             image.setImageBitmap(bitmap)
+            cell.loading.visibility = if (bitmap == null && !isFastScrolling) View.VISIBLE else View.GONE
             if (photo.stableId !in selected) image.alpha = if (bitmap == null) 0.45f else 1f
         }
     }
 
-    private fun bindAlbumCover(image: ImageView, album: ProtonAlbum) {
+    private fun bindAlbumCover(cell: AlbumCell, album: ProtonAlbum) {
+        val image = cell.image
         val coverNodeUid = album.coverPhotoNodeUid
         val key = coverNodeUid?.let { "album-cover:$it" } ?: "album-empty:${album.nodeUid}"
         image.tag = key
@@ -269,6 +276,9 @@ class GalleryListAdapter(
         ) { bitmap ->
             if (image.tag != key) return@load
             image.setImageBitmap(bitmap)
+            cell.loading.visibility = if (
+                bitmap == null && coverNodeUid != null && !isFastScrolling
+            ) View.VISIBLE else View.GONE
             image.alpha = if (bitmap == null) 0.48f else 1f
         }
     }
@@ -277,6 +287,11 @@ class GalleryListAdapter(
         val image = ImageView(context).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
             setBackgroundColor(UiStyle.surfaceRaised)
+        }
+        val loading = ProgressBar(context).apply {
+            indeterminateTintList = ColorStateList.valueOf(UiStyle.muted)
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            visibility = View.GONE
         }
         val check = TextView(context).apply {
             text = "✓"
@@ -304,6 +319,7 @@ class GalleryListAdapter(
 
         init {
             addView(image, LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            addView(loading, LayoutParams(context.dp(28), context.dp(28), Gravity.CENTER))
             addView(check, LayoutParams(context.dp(34), context.dp(34), Gravity.TOP or Gravity.END).apply {
                 topMargin = context.dp(8)
                 marginEnd = context.dp(8)
@@ -316,9 +332,15 @@ class GalleryListAdapter(
     }
 
     private class AlbumCell(context: Context) : LinearLayout(context) {
+        private val cover = FrameLayout(context)
         val image = ImageView(context).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
             setBackgroundColor(UiStyle.surfaceRaised)
+        }
+        val loading = ProgressBar(context).apply {
+            indeterminateTintList = ColorStateList.valueOf(UiStyle.muted)
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            visibility = View.GONE
         }
         val name = TextView(context).apply {
             setTextColor(UiStyle.text)
@@ -343,7 +365,15 @@ class GalleryListAdapter(
             orientation = VERTICAL
             isClickable = true
             isFocusable = true
-            addView(image, LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+            cover.addView(
+                image,
+                FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                ),
+            )
+            cover.addView(loading, FrameLayout.LayoutParams(context.dp(28), context.dp(28), Gravity.CENTER))
+            addView(cover, LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
             addView(name, LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
             addView(details, LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }

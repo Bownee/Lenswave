@@ -61,8 +61,7 @@ class GalleryThumbnailLoader(
             isAvailable = coverNodeUid != null && album.hasCoverThumbnail,
             allowSourceRead = allowSourceRead,
             read = {
-                val userId = protonUserId() ?: return@load null
-                protonRepository.readThumbnail(userId, requireNotNull(coverNodeUid))?.decodeThumbnail()
+                loadProtonThumbnail(requireNotNull(coverNodeUid))
             },
             onLoaded = onLoaded,
         )
@@ -84,7 +83,7 @@ class GalleryThumbnailLoader(
         key: String,
         isAvailable: Boolean,
         allowSourceRead: Boolean,
-        read: () -> Bitmap?,
+        read: suspend () -> Bitmap?,
         onLoaded: (Bitmap?) -> Unit,
     ) {
         bitmaps.get(key)?.let {
@@ -96,7 +95,7 @@ class GalleryThumbnailLoader(
         callbacks.getOrPut(key, ::mutableListOf) += onLoaded
         if (!loadingKeys.add(key)) return
         val job = scope.launch(start = CoroutineStart.LAZY) {
-            val bitmap = withContext(Dispatchers.IO) { runCatching(read).getOrNull() }
+            val bitmap = withContext(Dispatchers.IO) { runCatching { read() }.getOrNull() }
             loadingJobs.remove(key)
             loadingKeys.remove(key)
             if (bitmap != null) bitmaps.put(key, bitmap)
@@ -106,16 +105,20 @@ class GalleryThumbnailLoader(
         job.start()
     }
 
-    private fun loadAsset(asset: GalleryAsset): Bitmap? = when (val replica = asset.primaryReplica) {
+    private suspend fun loadAsset(asset: GalleryAsset): Bitmap? = when (val replica = asset.primaryReplica) {
         is PhotoReplica.Device -> context.contentResolver.loadThumbnail(
             replica.uri.toUri(),
             Size(THUMBNAIL_SIZE, THUMBNAIL_SIZE),
             null,
         )
-        is PhotoReplica.Proton -> {
-            val userId = protonUserId() ?: return null
-            protonRepository.readThumbnail(userId, replica.nodeUid)?.decodeThumbnail()
-        }
+        is PhotoReplica.Proton -> loadProtonThumbnail(replica.nodeUid)
+    }
+
+    private suspend fun loadProtonThumbnail(nodeUid: String): Bitmap? {
+        val userId = protonUserId() ?: return null
+        val bitmap = protonRepository.readThumbnail(userId, nodeUid)?.decodeThumbnail()
+        if (bitmap == null) protonRepository.invalidateThumbnail(userId, nodeUid)
+        return bitmap
     }
 
     private fun ByteArray.decodeThumbnail(): Bitmap? = BitmapFactory.decodeByteArray(

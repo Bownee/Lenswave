@@ -149,6 +149,21 @@ class ProtonPhotoGateway @Inject internal constructor(
     fun readThumbnail(userId: UserId, nodeUid: String): ByteArray? =
         downloads.readThumbnail(userId, nodeUid)
 
+    internal suspend fun invalidateThumbnail(userId: UserId, nodeUid: String) {
+        withContext(Dispatchers.IO) {
+            sessionGuard.withActiveSession(userId) {
+                val sources = thumbnailSources(nodeUid)
+                downloads.removeThumbnail(userId, nodeUid)
+                val nodeUids = setOf(nodeUid)
+                timeline.markThumbnailsUnavailable(userId, nodeUids)
+                albums.markCoverThumbnailsUnavailable(userId, nodeUids)
+                albums.markAlbumPhotoThumbnailsUnavailable(userId, nodeUids)
+                trash.markThumbnailsUnavailable(userId, nodeUids)
+                thumbnailQueue.retryNow(userId.id, nodeUid, sources)
+            }
+        }
+    }
+
     override suspend fun findPhotoDuplicates(
         userId: UserId,
         name: String,
@@ -313,6 +328,23 @@ class ProtonPhotoGateway @Inject internal constructor(
                 "$ALBUM_PHOTOS_QUEUE_SOURCE:${album.nodeUid}",
                 state.photos.filterNot(ProtonGalleryPhoto::hasThumbnail).map(ProtonGalleryPhoto::nodeUid),
             )
+        }
+    }
+
+    private fun thumbnailSources(nodeUid: String): Set<String> = buildSet {
+        if (timeline.state.value.photos.any { photo -> photo.nodeUid == nodeUid }) {
+            add(TIMELINE_QUEUE_SOURCE)
+        }
+        if (albums.albumsState.value.albums.any { album -> album.coverPhotoNodeUid == nodeUid }) {
+            add(ALBUM_COVERS_QUEUE_SOURCE)
+        }
+        if (trash.state.value.photos.any { photo -> photo.nodeUid == nodeUid }) {
+            add(TRASH_QUEUE_SOURCE)
+        }
+        albums.albumPhotosState.value.let { state ->
+            if (state.photos.any { photo -> photo.nodeUid == nodeUid }) {
+                state.albumUid?.let { albumUid -> add("$ALBUM_PHOTOS_QUEUE_SOURCE:$albumUid") }
+            }
         }
     }
 

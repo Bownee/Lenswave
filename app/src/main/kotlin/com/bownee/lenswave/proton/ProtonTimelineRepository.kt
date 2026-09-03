@@ -102,6 +102,24 @@ internal class ProtonTimelineRepository @Inject constructor(
         }
     }
 
+    internal fun markThumbnailsUnavailable(userId: UserId, nodeUids: Set<String>) {
+        if (nodeUids.isEmpty()) return
+        mutableState.update { state ->
+            if (state.userId != userId.id) return@update state
+            var invalidatedCount = 0
+            val photos = state.photos.map { photo ->
+                if (photo.nodeUid !in nodeUids || !photo.hasThumbnail) return@map photo
+                invalidatedCount++
+                photo.copy(hasThumbnail = false)
+            }
+            if (invalidatedCount == 0) return@update state
+            state.copy(
+                photos = photos,
+                downloadedThumbnailCount = (state.downloadedThumbnailCount - invalidatedCount).coerceAtLeast(0),
+            )
+        }
+    }
+
     internal suspend fun removePhotos(userId: UserId, nodeUids: Set<String>): Unit = syncMutex.withLock {
         if (nodeUids.isEmpty()) return@withLock
         cache.removePhotos(userId.id, nodeUids)

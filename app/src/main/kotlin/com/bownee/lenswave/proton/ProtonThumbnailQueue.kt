@@ -105,7 +105,8 @@ internal class ProtonThumbnailQueue @Inject constructor(
     suspend fun prioritizeVisible(userId: String, nodeUids: Collection<String>) {
         mutex.withLock {
             val visible = nodeUids.toSet()
-            if (visibleNodeUids.put(userId, visible) == visible) return@withLock
+            val previouslyVisible = visibleNodeUids.put(userId, visible).orEmpty()
+            if (previouslyVisible == visible) return@withLock
             val section = currentSectionNodeUids[userId].orEmpty()
             val entries = entries(userId)
             entries.replaceAll { nodeUid, entry ->
@@ -116,10 +117,32 @@ internal class ProtonThumbnailQueue @Inject constructor(
             var order = nextOrder(entries.values) + visible.size
             visible.forEach { nodeUid ->
                 entries[nodeUid]?.let { entry ->
-                    entries[nodeUid] = entry.copy(priority = VISIBLE_PRIORITY, order = order--)
+                    entries[nodeUid] = entry.copy(
+                        priority = VISIBLE_PRIORITY,
+                        order = order--,
+                        // A retry delay earned while off-screen must not leave a visible hole.
+                        retryAtMillis = if (nodeUid in previouslyVisible) entry.retryAtMillis else 0L,
+                    )
                 }
             }
             dirtyUsers += userId
+        }
+    }
+
+    suspend fun retryNow(userId: String, nodeUid: String, sources: Set<String>) {
+        if (sources.isEmpty()) return
+        mutex.withLock {
+            val entries = entries(userId)
+            val existing = entries[nodeUid]
+            entries[nodeUid] = ProtonThumbnailQueueEntry(
+                nodeUid = nodeUid,
+                sources = existing?.sources.orEmpty() + sources,
+                priority = VISIBLE_PRIORITY,
+                order = nextOrder(entries.values),
+                retryCount = existing?.retryCount ?: 0,
+                retryAtMillis = 0L,
+            )
+            persist(userId, entries)
         }
     }
 
