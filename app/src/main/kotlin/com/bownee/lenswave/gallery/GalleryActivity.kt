@@ -221,7 +221,6 @@ class GalleryActivity : FragmentActivity(), UpdateAvailableDialogFragment.Listen
                 },
             )
         } ?: screen.showContent()
-        screen.renderHeader(statusText = state.statusText)
         updateNavigationControls()
         if (destinationChanged) {
             adapter.clearSelection()

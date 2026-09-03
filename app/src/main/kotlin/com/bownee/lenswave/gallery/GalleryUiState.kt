@@ -46,7 +46,6 @@ data class GalleryUiState(
     val destination: GalleryDestination = GalleryDestination.Timeline,
     val title: String = "",
     val content: GalleryContent = GalleryContent.Photos(emptyList()),
-    val statusText: String = "",
     val emptyState: GalleryEmptyState? = null,
     val currentUserId: UserId? = null,
     val isProtonConnected: Boolean = false,

@@ -61,8 +61,6 @@ internal class GalleryScreen(
     private val filterChips: Map<GalleryDestination, FilterChip>
     private val galleryHeader: LinearLayout
     private val galleryFooter: View
-    private val statusRow: LinearLayout
-    private val status: TextView
     private val emptyPanel: LinearLayout
     private val emptyTitle: TextView
     private val emptyMessage: TextView
@@ -101,8 +99,6 @@ internal class GalleryScreen(
 
         val listHeader = buildListHeader()
         galleryHeader = listHeader.container
-        statusRow = listHeader.statusRow
-        status = listHeader.status
         emptyPanel = listHeader.empty.container
         emptyTitle = listHeader.empty.title
         emptyMessage = listHeader.empty.message
@@ -196,12 +192,6 @@ internal class GalleryScreen(
                 stickyDateController.schedule(list.firstVisiblePosition)
             }
         }
-    }
-
-    /** The status row only takes up space while there is something to say. */
-    fun renderHeader(statusText: String) {
-        status.text = statusText
-        statusRow.visibility = if (statusText.isBlank()) View.GONE else View.VISIBLE
     }
 
     /** Sizes the list footer that keeps the last rows clear of the floating selection bar. */
@@ -396,26 +386,12 @@ internal class GalleryScreen(
             orientation = LinearLayout.VERTICAL
             setPadding(activity.dp(16), activity.dp(4), activity.dp(16), activity.dp(10))
         }
-        val statusRow = LinearLayout(activity).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            minimumHeight = activity.dp(28)
-            visibility = View.GONE
-        }
-        val status = UiStyle.label(activity, sizeSp = 13.5f, color = UiStyle.muted).apply {
-            maxLines = 1
-            ellipsize = TextUtils.TruncateAt.END
-            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
-        }
-        statusRow.addView(status, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        container.addView(statusRow, UiStyle.matchWrap().apply { bottomMargin = activity.dp(4) })
-
         val empty = buildEmptyPanel()
         container.addView(empty.container, UiStyle.matchWrap().apply {
             topMargin = activity.dp(14)
             bottomMargin = activity.dp(12)
         })
-        return ListHeader(container, statusRow, status, empty)
+        return ListHeader(container, empty)
     }
 
     private fun buildEmptyPanel(): EmptyPanel {
@@ -590,8 +566,6 @@ internal class GalleryScreen(
 
     private data class ListHeader(
         val container: LinearLayout,
-        val statusRow: LinearLayout,
-        val status: TextView,
         val empty: EmptyPanel,
     )
 

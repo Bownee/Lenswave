@@ -51,16 +51,6 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
         protonUnavailable(inputs)?.let { return it }
         val tagIndex = inputs.protonGallery.tagIndex()
         val assets = inputs.protonGallery.photos.map { it.toGalleryAsset(tagIndex) }
-        val statusDetail = when {
-            inputs.shouldShowMetadataLoading(
-                inputs.protonGallery.syncing,
-                inputs.protonGallery.hasLoaded,
-            ) -> text.string(R.string.loading_metadata)
-            inputs.protonGallery.refreshFailed -> text.string(R.string.could_not_refresh)
-            else -> protonLoadingDetail(
-                ProtonThumbnailProgressCalculator.timeline(inputs.protonGallery.photos),
-            ).orEmpty()
-        }
         val emptyState = when {
             assets.isNotEmpty() -> null
             inputs.protonGallery.refreshFailed -> GalleryEmptyState(
@@ -73,7 +63,7 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
                 text.string(R.string.proton_photos_appear_here),
             )
         }
-        return base(inputs, GalleryContent.Photos(assets), statusDetail, emptyState)
+        return base(inputs, GalleryContent.Photos(assets), emptyState)
     }
 
     private fun tag(
@@ -84,13 +74,6 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
         val state = inputs.protonGallery.tags[destination.tag] ?: ProtonTagState()
         val tagIndex = inputs.protonGallery.tagIndex()
         val assets = state.photos.map { it.toGalleryAsset(tagIndex) }
-        val statusDetail = when {
-            state.syncing || !state.hasLoaded -> text.string(R.string.loading_metadata)
-            state.refreshFailed -> text.string(R.string.could_not_refresh)
-            else -> protonLoadingDetail(
-                ProtonThumbnailProgressCalculator.timeline(state.photos),
-            ).orEmpty()
-        }
         val label = text.string(destination.tag.labelRes)
         val emptyState = when {
             assets.isNotEmpty() -> null
@@ -104,7 +87,7 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
                 text.string(R.string.proton_tagged_media_appear_here),
             )
         }
-        return base(inputs, GalleryContent.Photos(assets), statusDetail, emptyState)
+        return base(inputs, GalleryContent.Photos(assets), emptyState)
     }
 
     private fun library(inputs: GalleryUiInputs): GalleryUiState {
@@ -140,18 +123,6 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
                 }
             }
         }
-        val statusDetail = when (inputs.protonAccountStatus) {
-            ProtonAccountStatus.DISCONNECTED -> text.string(R.string.proton_not_connected)
-            ProtonAccountStatus.CONNECTING -> text.string(R.string.loading_metadata)
-            ProtonAccountStatus.CONNECTED -> when {
-                inputs.shouldShowMetadataLoading(albums.syncing, albums.hasLoaded) ->
-                    text.string(R.string.loading_metadata)
-                albums.refreshFailed -> text.string(R.string.could_not_refresh)
-                else -> protonLoadingDetail(
-                    ProtonThumbnailProgressCalculator.albumCovers(albums.albums),
-                ).orEmpty()
-            }
-        }
         // Mirrors the media-type filters: an empty panel once the list has loaded and is empty.
         val emptyState = when {
             inputs.protonAccountStatus != ProtonAccountStatus.CONNECTED -> null
@@ -169,7 +140,6 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
         return base(
             inputs = inputs,
             content = GalleryContent.Library(sections),
-            statusText = statusDetail,
             emptyState = emptyState,
         )
     }
@@ -190,14 +160,6 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
             ?: ProtonAlbumPhotosState()
         val tagIndex = inputs.protonGallery.tagIndex()
         val assets = albumState.photos.map { it.toGalleryAsset(tagIndex) }
-        val statusDetail = when {
-            inputs.shouldShowMetadataLoading(albumState.syncing, albumState.hasLoaded) ->
-                text.string(R.string.loading_metadata)
-            albumState.refreshFailed -> text.string(R.string.could_not_refresh)
-            else -> protonLoadingDetail(
-                ProtonThumbnailProgressCalculator.timeline(albumState.photos),
-            ).orEmpty()
-        }
         val emptyState = when {
             assets.isNotEmpty() || !albumState.hasLoaded -> null
             albumState.refreshFailed -> GalleryEmptyState(
@@ -209,13 +171,12 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
                 message = text.string(R.string.album_photos_appear_here, destination.album.name),
             )
         }
-        return base(inputs, GalleryContent.Photos(assets), statusDetail, emptyState)
+        return base(inputs, GalleryContent.Photos(assets), emptyState)
     }
 
     private fun protonUnavailable(inputs: GalleryUiInputs): GalleryUiState? = when (inputs.protonAccountStatus) {
         ProtonAccountStatus.DISCONNECTED -> base(
             inputs = inputs,
-            statusText = text.string(R.string.proton_not_connected),
             emptyState = GalleryEmptyState(
                 title = text.string(R.string.connect_proton_photos),
                 message = text.string(R.string.connect_proton_message),
@@ -225,7 +186,6 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
         )
         ProtonAccountStatus.CONNECTING -> base(
             inputs = inputs,
-            statusText = text.string(R.string.loading_metadata),
             emptyState = GalleryEmptyState(
                 title = text.string(R.string.loading_metadata),
                 message = "",
@@ -237,13 +197,11 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
     private fun base(
         inputs: GalleryUiInputs,
         content: GalleryContent = GalleryContent.Photos(emptyList()),
-        statusText: String = "",
         emptyState: GalleryEmptyState? = null,
     ) = GalleryUiState(
         destination = inputs.destination,
         title = title(inputs.destination),
         content = content.sorted(),
-        statusText = statusText,
         emptyState = emptyState,
         currentUserId = inputs.currentUserId,
         isProtonConnected = inputs.currentUserId != null,
@@ -261,20 +219,6 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
         GalleryDestination.Library -> text.string(R.string.albums)
         is GalleryDestination.Tag -> text.string(destination.tag.labelRes)
         is GalleryDestination.AlbumPhotos -> destination.album.name
-    }
-
-    private fun GalleryUiInputs.shouldShowMetadataLoading(
-        syncing: Boolean,
-        hasLoaded: Boolean,
-    ): Boolean = syncing && (!hasLoaded || isRefreshing)
-
-    private fun protonLoadingDetail(progress: ProtonThumbnailProgress): String? {
-        if (progress.downloaded >= progress.total) return null
-        return text.string(
-            R.string.downloading_thumbnails_progress,
-            progress.downloaded,
-            progress.total,
-        )
     }
 
     private fun ProtonGalleryPhoto.toGalleryAsset(tagIndex: Map<String, Set<ProtonMediaTag>>): GalleryAsset {

@@ -22,7 +22,7 @@ All notable changes to Lenswave. The format follows [Keep a Changelog](https://k
 - Swiping between photos shows the neighbouring photo during the gesture.
 - Build, CI and release tooling were reworked (version catalog, strict checksums, shared CI
   workflow, test reports and lint SARIF in pull requests).
-- The gallery header no longer shows the photo or album count.
+- The gallery header no longer shows status text (counts, loading, or thumbnail progress).
 
 ### Removed
 - The Trash page and permanent deletion. Delete still moves photos to Proton Trash, where they
