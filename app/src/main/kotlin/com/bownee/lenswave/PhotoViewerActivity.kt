@@ -12,6 +12,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
+import android.text.format.DateFormat
 import android.text.format.Formatter
 import android.view.View
 import android.view.KeyEvent
@@ -66,6 +67,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import me.proton.core.domain.entity.UserId
 import javax.inject.Inject
+import java.time.ZoneId
+import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -90,6 +93,7 @@ class PhotoViewerActivity : FragmentActivity() {
     private val status get() = screen.status
     private val progress get() = screen.progress
     private val retryButton get() = screen.retryButton
+    private val mediaTitle get() = screen.mediaTitle
     private val actions get() = screen.actions
     private val editButton get() = screen.editButton
     private val favoriteButton get() = screen.favoriteButton
@@ -234,6 +238,7 @@ class PhotoViewerActivity : FragmentActivity() {
     private fun loadPhoto() {
         photoLoadJob?.cancel()
         photoReady = false
+        updateMediaTitle()
         retryButton.visibility = View.GONE
         photoView.contentDescription = getString(
             if (request.mediaKind == MediaKind.VIDEO) R.string.video_description
@@ -460,6 +465,17 @@ class PhotoViewerActivity : FragmentActivity() {
         player = null
     }
 
+    private fun updateMediaTitle() {
+        val title = PhotoViewerTitleFormatter.format(
+            capturedAtEpochMillis = request.capturedAt,
+            zoneId = ZoneId.systemDefault(),
+            locale = Locale.getDefault(),
+            use24HourTime = DateFormat.is24HourFormat(this),
+        )
+        mediaTitle.text = title.orEmpty()
+        mediaTitle.visibility = if (title == null) View.GONE else View.VISIBLE
+    }
+
     private fun updateVideoDownloadProgress(downloadProgress: ProtonOriginalDownloadProgress) {
         progress.visibility = View.VISIBLE
         status.visibility = View.VISIBLE
@@ -586,6 +602,10 @@ class PhotoViewerActivity : FragmentActivity() {
             .translationX(-offset * root.width.toFloat())
             .setDuration(160L)
             .start()
+        mediaTitle.animate()
+            .translationX(-offset * root.width.toFloat())
+            .setDuration(160L)
+            .start()
     }
 
     private fun resetPhotoStateForNavigation() {
@@ -619,6 +639,9 @@ class PhotoViewerActivity : FragmentActivity() {
         playerView.scaleX = 1f
         playerView.scaleY = 1f
         playerView.alpha = 1f
+        mediaTitle.translationX = 0f
+        mediaTitle.translationY = 0f
+        mediaTitle.alpha = 1f
         updateFavoriteButton(enabled = false)
     }
 
@@ -629,6 +652,7 @@ class PhotoViewerActivity : FragmentActivity() {
             clearThumbnailPreview()
             request = fallback.request
             request.writeTo(intent)
+            updateMediaTitle()
             resolvedUri = null
             photoTransitioning = false
             photoView.translationX = 0f
@@ -868,12 +892,14 @@ class PhotoViewerActivity : FragmentActivity() {
         cancelMediaAnimations()
         backgroundScrim.animate().cancel()
         actions.animate().cancel()
+        mediaTitle.animate().cancel()
         val progress = (distance / (root.height * 0.58f).coerceAtLeast(1f)).coerceIn(0f, 1f)
         val photoScale = 1f - 0.12f * progress
         setMediaDismissTransform(distance, photoScale)
         loadingPanel.alpha = 1f - progress
         backgroundScrim.alpha = 1f - 0.88f * progress
         actions.alpha = 1f - progress
+        mediaTitle.alpha = 1f - progress
     }
 
     private fun resetPhotoDismiss(velocity: Float = 0f) {
@@ -883,6 +909,7 @@ class PhotoViewerActivity : FragmentActivity() {
         animateMediaDismissTransform(0f, 1f, 1f, duration)
         backgroundScrim.animate().alpha(1f).setDuration(duration).setInterpolator(verticalSettleInterpolator).start()
         actions.animate().alpha(1f).setDuration(duration).setInterpolator(verticalSettleInterpolator).start()
+        mediaTitle.animate().alpha(1f).setDuration(duration).setInterpolator(verticalSettleInterpolator).start()
     }
 
     @Suppress("DEPRECATION")
@@ -936,6 +963,7 @@ class PhotoViewerActivity : FragmentActivity() {
         }
         backgroundScrim.animate().alpha(0f).setDuration(duration).setInterpolator(verticalSettleInterpolator).start()
         actions.animate().alpha(0f).setDuration(duration).setInterpolator(verticalSettleInterpolator).start()
+        mediaTitle.animate().alpha(0f).setDuration(duration).setInterpolator(verticalSettleInterpolator).start()
     }
 
     private fun showDetails(velocity: Float = 0f) {
@@ -1022,6 +1050,7 @@ class PhotoViewerActivity : FragmentActivity() {
         playerView.animate().cancel()
         thumbnailPreview.animate().cancel()
         loadingPanel.animate().cancel()
+        mediaTitle.animate().cancel()
     }
 
     private fun setMediaTranslationX(translationX: Float) {
@@ -1029,6 +1058,7 @@ class PhotoViewerActivity : FragmentActivity() {
         playerView.translationX = translationX
         thumbnailPreview.translationX = translationX
         loadingPanel.translationX = translationX
+        mediaTitle.translationX = translationX
     }
 
     private fun animateMediaTranslationX(translationX: Float, duration: Long) {
@@ -1036,6 +1066,7 @@ class PhotoViewerActivity : FragmentActivity() {
         playerView.animate().translationX(translationX).setDuration(duration).start()
         thumbnailPreview.animate().translationX(translationX).setDuration(duration).start()
         loadingPanel.animate().translationX(translationX).setDuration(duration).start()
+        mediaTitle.animate().translationX(translationX).setDuration(duration).start()
     }
 
     private fun setMediaTranslationY(translationY: Float) {
@@ -1043,6 +1074,7 @@ class PhotoViewerActivity : FragmentActivity() {
         playerView.translationY = translationY
         thumbnailPreview.translationY = translationY
         loadingPanel.translationY = translationY
+        mediaTitle.translationY = translationY
     }
 
     private fun setMediaDismissTransform(translationY: Float, scale: Float) {
@@ -1086,6 +1118,12 @@ class PhotoViewerActivity : FragmentActivity() {
             .setInterpolator(verticalSettleInterpolator)
             .start()
         loadingPanel.animate()
+            .translationY(translationY)
+            .alpha(alpha)
+            .setDuration(duration)
+            .setInterpolator(verticalSettleInterpolator)
+            .start()
+        mediaTitle.animate()
             .translationY(translationY)
             .alpha(alpha)
             .setDuration(duration)
@@ -1320,6 +1358,12 @@ class PhotoViewerActivity : FragmentActivity() {
                 rightMargin = dp(8) + safeArea.right
                 bottomMargin = dp(8) + safeArea.bottom
                 actions.layoutParams = this
+            }
+            (mediaTitle.layoutParams as FrameLayout.LayoutParams).apply {
+                topMargin = dp(8) + safeArea.top
+                marginStart = dp(12) + safeArea.left
+                marginEnd = dp(12) + safeArea.right
+                mediaTitle.layoutParams = this
             }
             actions.post(::updateMediaBounds)
             detailsSheet.setPadding(
