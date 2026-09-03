@@ -1,9 +1,7 @@
 package com.bownee.lenswave
 
 import android.content.Context
-import android.content.res.ColorStateList
 import android.graphics.Color
-import android.graphics.Typeface
 import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
@@ -69,12 +67,13 @@ internal class PhotoViewerScreen(
 
         mediaTitle = TextView(context).apply {
             textSize = 15f
+            typeface = UiStyle.medium
             setTextColor(UiStyle.text)
             gravity = Gravity.CENTER
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
             setPadding(context.dp(16), context.dp(10), context.dp(16), context.dp(10))
-            setBackgroundColor(UiStyle.surface)
+            setBackgroundColor(Color.TRANSPARENT)
             visibility = View.GONE
             ViewCompat.setAccessibilityHeading(this, true)
         }
@@ -106,7 +105,7 @@ internal class PhotoViewerScreen(
 
         progress = ProgressBar(context)
         status = TextView(context).apply {
-            textSize = 13f
+            textSize = 13.5f
             setTextColor(UiStyle.muted)
             gravity = Gravity.CENTER
             visibility = View.GONE
@@ -115,7 +114,7 @@ internal class PhotoViewerScreen(
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             visibility = View.GONE
-            addView(progress, LinearLayout.LayoutParams(context.dp(48), context.dp(48)))
+            addView(progress, LinearLayout.LayoutParams(context.dp(44), context.dp(44)))
             addView(
                 status,
                 LinearLayout.LayoutParams(
@@ -126,13 +125,18 @@ internal class PhotoViewerScreen(
             retryButton = Button(context).apply {
                 setText(R.string.retry)
                 isAllCaps = false
+                textSize = 15f
+                typeface = UiStyle.medium
+                setTextColor(UiStyle.onAccent)
+                setPadding(context.dp(24), 0, context.dp(24), 0)
+                background = UiStyle.rippled(UiStyle.rounded(context, UiStyle.accent, 24), UiStyle.onAccent)
                 visibility = View.GONE
                 setOnClickListener { actions.onRetry() }
             }
             addView(retryButton, LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 context.dp(48),
-            ).apply { topMargin = context.dp(12) })
+            ).apply { topMargin = context.dp(14) })
         }
         mediaFrame.addView(
             loadingPanel,
@@ -155,32 +159,40 @@ internal class PhotoViewerScreen(
             ),
         )
 
-        favoriteButton = smallIconButton(
-            context.getString(R.string.add_to_favorites),
+        favoriteButton = UiStyle.iconButton(
+            context,
             R.drawable.ic_favorite_border,
+            context.getString(R.string.add_to_favorites),
+            fill = UiStyle.withAlpha(UiStyle.surfaceRaised, 235),
+            sizeDp = 52,
         ).apply {
             isEnabled = false
             visibility = View.GONE
+            ViewCompat.setTooltipText(this, contentDescription)
             setOnClickListener { actions.onFavorite() }
         }
-        deleteButton = smallIconButton(
-            context.getString(if (requestIsTrashed) R.string.delete_forever else R.string.delete),
+        deleteButton = UiStyle.iconButton(
+            context,
             R.drawable.ic_delete,
-            destructive = true,
+            context.getString(if (requestIsTrashed) R.string.delete_forever else R.string.delete),
+            fill = UiStyle.withAlpha(UiStyle.dangerSoft, 240),
+            tint = UiStyle.danger,
+            sizeDp = 52,
         ).apply {
             isEnabled = false
+            ViewCompat.setTooltipText(this, contentDescription)
             setOnClickListener { actions.onDelete() }
         }
         val buttons = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
             addView(favoriteButton, LinearLayout.LayoutParams(
-                context.dp(48),
-                context.dp(48),
-            ).apply { marginEnd = context.dp(8) })
+                context.dp(52),
+                context.dp(52),
+            ).apply { marginEnd = context.dp(12) })
             addView(deleteButton, LinearLayout.LayoutParams(
-                context.dp(48),
-                context.dp(48),
+                context.dp(52),
+                context.dp(52),
             ))
         }
         this.actions = LinearLayout(context).apply {
@@ -225,17 +237,17 @@ internal class PhotoViewerScreen(
             alpha = 0f
             visibility = View.INVISIBLE
             setPadding(context.dp(16), context.dp(8), context.dp(16), context.dp(10))
-            background = UiStyle.rounded(context, UiStyle.surface, 24, stroke = null)
+            background = UiStyle.rounded(context, UiStyle.surface, 28, UiStyle.border)
             addView(FrameLayout(context).apply {
                 addView(View(context).apply {
-                    background = UiStyle.rounded(context, UiStyle.muted, 3)
-                }, FrameLayout.LayoutParams(context.dp(38), context.dp(4), Gravity.CENTER))
+                    background = UiStyle.rounded(context, UiStyle.border, 3)
+                }, FrameLayout.LayoutParams(context.dp(36), context.dp(4), Gravity.CENTER))
             }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, context.dp(26)))
             addView(TextView(context).apply {
                 setText(R.string.photo_details)
                 textSize = 20f
+                typeface = UiStyle.medium
                 setTextColor(UiStyle.text)
-                setTypeface(typeface, Typeface.BOLD)
                 ViewCompat.setAccessibilityHeading(this, true)
             }, LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -249,18 +261,6 @@ internal class PhotoViewerScreen(
         }
         return DetailsSheet(container, progress, content)
     }
-
-    private fun smallIconButton(label: String, icon: Int, destructive: Boolean = false) =
-        ImageButton(context).apply {
-            setImageResource(icon)
-            imageTintList = ColorStateList.valueOf(
-                if (destructive) Color.rgb(255, 146, 146) else UiStyle.text,
-            )
-            contentDescription = label
-            ViewCompat.setTooltipText(this, label)
-            setPadding(context.dp(12), context.dp(12), context.dp(12), context.dp(12))
-            background = UiStyle.rounded(context, UiStyle.withAlpha(UiStyle.surface, 220), 15)
-        }
 
     private fun photoLayoutParams() = FrameLayout.LayoutParams(
         ViewGroup.LayoutParams.MATCH_PARENT,

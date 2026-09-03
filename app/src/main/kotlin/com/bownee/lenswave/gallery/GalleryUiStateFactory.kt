@@ -149,8 +149,15 @@ internal class GalleryUiStateFactory(private val text: GalleryText) {
                                     label = text.string(tag.labelRes),
                                     iconRes = when (tag) {
                                         ProtonMediaTag.FAVORITES -> R.drawable.ic_favorite
+                                        ProtonMediaTag.SCREENSHOTS -> R.drawable.ic_screenshot
                                         ProtonMediaTag.VIDEOS -> R.drawable.ic_play
-                                        else -> R.drawable.ic_label
+                                        ProtonMediaTag.LIVE_PHOTOS -> R.drawable.ic_live
+                                        ProtonMediaTag.MOTION_PHOTOS -> R.drawable.ic_motion
+                                        ProtonMediaTag.SELFIES -> R.drawable.ic_person
+                                        ProtonMediaTag.PORTRAITS -> R.drawable.ic_portrait
+                                        ProtonMediaTag.BURSTS -> R.drawable.ic_burst
+                                        ProtonMediaTag.PANORAMAS -> R.drawable.ic_panorama
+                                        ProtonMediaTag.RAW -> R.drawable.ic_camera
                                     },
                                     action = LibraryAction.Open(GalleryDestination.Tag(tag)),
                                 )

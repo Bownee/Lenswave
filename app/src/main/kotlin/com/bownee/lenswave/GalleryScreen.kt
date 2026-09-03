@@ -2,8 +2,6 @@ package com.bownee.lenswave
 
 import android.content.res.ColorStateList
 import android.graphics.Color
-import android.graphics.Typeface
-import android.graphics.drawable.InsetDrawable
 import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
@@ -12,6 +10,7 @@ import android.widget.AbsListView
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.ImageButton
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.graphics.drawable.toDrawable
@@ -55,8 +54,8 @@ internal class GalleryScreen(
     val settingsButton: ImageButton
     private val backButton: ImageButton
     val trashDeleteAllButton: Button
-    private val photosTabButton: Button
-    private val libraryTabButton: Button
+    private val photosTab: TabButton
+    private val libraryTab: TabButton
 
     private var pendingStickyDatePosition: Int? = null
     private var stickyDateUpdatePosted = false
@@ -115,27 +114,32 @@ internal class GalleryScreen(
             ),
         )
 
-        stickyDate = text("", 15f, UiStyle.text).apply {
+        stickyDate = text("", 14f, UiStyle.text).apply {
             gravity = Gravity.CENTER
-            setTypeface(typeface, Typeface.BOLD)
+            typeface = UiStyle.medium
             setPadding(activity.dp(16), 0, activity.dp(16), 0)
-            background = UiStyle.rounded(activity, UiStyle.withAlpha(UiStyle.surface, 236), 20)
-            elevation = activity.dp(6).toFloat()
+            background = UiStyle.rounded(
+                activity,
+                UiStyle.withAlpha(UiStyle.surfaceRaised, 238),
+                18,
+                UiStyle.border,
+            )
+            elevation = activity.dp(4).toFloat()
             visibility = View.GONE
         }
         root.addView(
             stickyDate,
             FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
-                activity.dp(40),
+                activity.dp(36),
                 Gravity.TOP or Gravity.START,
             ),
         )
 
         val tabs = buildTabBar()
         tabBar = tabs.container
-        photosTabButton = tabs.photos
-        libraryTabButton = tabs.library
+        photosTab = tabs.photos
+        libraryTab = tabs.library
         root.addView(tabBar, bottomOverlayParams())
 
         val selection = buildSelectionBar()
@@ -186,8 +190,8 @@ internal class GalleryScreen(
     fun renderNavigation(title: String, tab: GalleryTab, showBack: Boolean) {
         if (title.isNotEmpty()) pageTitle.text = title
         backButton.visibility = if (showBack) View.VISIBLE else View.GONE
-        styleChoice(photosTabButton, tab == GalleryTab.PHOTOS)
-        styleChoice(libraryTabButton, tab == GalleryTab.LIBRARY)
+        photosTab.setSelectedTab(tab == GalleryTab.PHOTOS)
+        libraryTab.setSelectedTab(tab == GalleryTab.LIBRARY)
     }
 
     fun showContent() {
@@ -276,42 +280,34 @@ internal class GalleryScreen(
     private fun buildGalleryHeader(): Header {
         val container = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(activity.dp(16), activity.dp(10), activity.dp(16), activity.dp(10))
+            setPadding(activity.dp(16), activity.dp(12), activity.dp(16), activity.dp(6))
         }
         val titleRow = LinearLayout(activity).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        val back = ImageButton(activity).apply {
-            setImageResource(R.drawable.ic_back)
-            imageTintList = ColorStateList.valueOf(UiStyle.text)
-            background = Color.TRANSPARENT.toDrawable()
-            contentDescription = activity.getString(R.string.back)
-            setPadding(activity.dp(10), activity.dp(10), activity.dp(10), activity.dp(10))
+        val back = UiStyle.iconButton(activity, R.drawable.ic_back, activity.getString(R.string.back)).apply {
             visibility = View.GONE
             setOnClickListener {
                 if (adapter.selectedPhotos().isNotEmpty()) adapter.clearSelection() else actions.onBack()
             }
         }
-        titleRow.addView(back, LinearLayout.LayoutParams(activity.dp(48), activity.dp(48)).apply {
-            marginEnd = activity.dp(4)
+        titleRow.addView(back, LinearLayout.LayoutParams(activity.dp(44), activity.dp(44)).apply {
+            marginEnd = activity.dp(10)
         })
-        val title = text(activity.getString(R.string.photos), 30f, UiStyle.text).apply {
-            setTypeface(typeface, Typeface.BOLD)
+        val title = text(activity.getString(R.string.photos), 28f, UiStyle.text).apply {
+            typeface = UiStyle.medium
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
             ViewCompat.setAccessibilityHeading(this, true)
         }
         titleRow.addView(title, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        val settings = ImageButton(activity).apply {
-            setImageResource(R.drawable.ic_settings)
-            imageTintList = ColorStateList.valueOf(UiStyle.text)
-            background = UiStyle.rounded(activity, UiStyle.surface, 16)
-            contentDescription = activity.getString(R.string.settings)
-            setPadding(activity.dp(10), activity.dp(10), activity.dp(10), activity.dp(10))
-            setOnClickListener { actions.onSettings() }
-        }
-        titleRow.addView(settings, LinearLayout.LayoutParams(activity.dp(48), activity.dp(48)))
+        val settings = UiStyle.iconButton(
+            activity,
+            R.drawable.ic_settings,
+            activity.getString(R.string.settings),
+        ).apply { setOnClickListener { actions.onSettings() } }
+        titleRow.addView(settings, LinearLayout.LayoutParams(activity.dp(44), activity.dp(44)))
         container.addView(titleRow, matchWrap())
 
         val statusRow = LinearLayout(activity).apply {
@@ -319,32 +315,34 @@ internal class GalleryScreen(
             gravity = Gravity.CENTER_VERTICAL
             minimumHeight = activity.dp(28)
         }
-        val status = text("", 13f, UiStyle.muted).apply {
+        val status = text("", 13.5f, UiStyle.muted).apply {
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
             accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
         }
         statusRow.addView(status, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        val deleteAll = iconLabelButton(activity.getString(R.string.delete_all), R.drawable.ic_delete).apply {
-            textSize = 12f
-            setPadding(activity.dp(12), 0, activity.dp(12), 0)
+        val deleteAll = pillButton(
+            activity.getString(R.string.delete_all),
+            R.drawable.ic_delete,
+            destructive = true,
+        ).apply {
             visibility = View.GONE
             setOnClickListener { actions.onDeleteAllTrash() }
         }
         statusRow.addView(
             deleteAll,
-            LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, activity.dp(48)).apply {
-                marginEnd = activity.dp(20)
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, activity.dp(40)).apply {
+                marginEnd = activity.dp(16)
             },
         )
         container.addView(statusRow, matchWrap().apply {
-            topMargin = activity.dp(8)
-            bottomMargin = activity.dp(8)
+            topMargin = activity.dp(2)
+            bottomMargin = activity.dp(4)
         })
 
         val empty = buildEmptyPanel()
         container.addView(empty.container, matchWrap().apply {
-            topMargin = activity.dp(10)
+            topMargin = activity.dp(14)
             bottomMargin = activity.dp(12)
         })
         return Header(
@@ -359,141 +357,127 @@ internal class GalleryScreen(
     }
 
     private fun buildEmptyPanel(): EmptyPanel {
+        val icon = ImageView(activity).apply {
+            setImageResource(R.drawable.ic_cloud)
+            imageTintList = ColorStateList.valueOf(UiStyle.accent)
+            setPadding(activity.dp(14), activity.dp(14), activity.dp(14), activity.dp(14))
+            background = UiStyle.circle(activity, UiStyle.accentSoft)
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
         val title = text("", 20f, UiStyle.text).apply {
             gravity = Gravity.CENTER
-            setTypeface(typeface, Typeface.BOLD)
+            typeface = UiStyle.medium
         }
-        val message = text("", 13f, UiStyle.muted).apply { gravity = Gravity.CENTER }
+        val message = text("", 14f, UiStyle.muted).apply {
+            gravity = Gravity.CENTER
+            setLineSpacing(0f, 1.15f)
+        }
         val action = accentButton(activity.getString(R.string.continue_action)).apply { visibility = View.GONE }
         val container = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             visibility = View.GONE
-            setPadding(activity.dp(24), activity.dp(28), activity.dp(24), activity.dp(28))
-            background = UiStyle.rounded(activity, UiStyle.surface, 22)
+            setPadding(activity.dp(24), activity.dp(30), activity.dp(24), activity.dp(26))
+            background = UiStyle.rounded(activity, UiStyle.surface, 26, UiStyle.border)
+            addView(icon, LinearLayout.LayoutParams(activity.dp(64), activity.dp(64)).apply {
+                bottomMargin = activity.dp(16)
+            })
             addView(title, matchWrap())
             addView(message, matchWrap().apply { topMargin = activity.dp(8) })
-            addView(action, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, activity.dp(48)).apply {
-                topMargin = activity.dp(18)
+            addView(action, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, activity.dp(50)).apply {
+                topMargin = activity.dp(20)
             })
         }
         return EmptyPanel(container, title, message, action)
     }
 
     private fun buildTabBar(): TabBar {
-        val photos = choiceButton(activity.getString(R.string.photos)).apply {
+        val photos = TabButton(activity, R.drawable.ic_photo, activity.getString(R.string.photos)).apply {
             setOnClickListener { actions.onPhotosTab() }
         }
-        val library = choiceButton(activity.getString(R.string.library)).apply {
+        val library = TabButton(activity, R.drawable.ic_library, activity.getString(R.string.library)).apply {
             setOnClickListener { actions.onLibraryTab() }
         }
-        val container = choiceGroup().apply {
-            addView(photos, LinearLayout.LayoutParams(0, activity.dp(48), 1f))
-            addView(library, LinearLayout.LayoutParams(0, activity.dp(48), 1f).apply {
-                marginStart = activity.dp(3)
+        val container = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(activity.dp(6), activity.dp(6), activity.dp(6), activity.dp(6))
+            background = UiStyle.rounded(
+                activity,
+                UiStyle.withAlpha(UiStyle.surface, 242),
+                30,
+                UiStyle.border,
+            )
+            elevation = activity.dp(10).toFloat()
+            addView(photos, LinearLayout.LayoutParams(0, activity.dp(52), 1f))
+            addView(library, LinearLayout.LayoutParams(0, activity.dp(52), 1f).apply {
+                marginStart = activity.dp(6)
             })
         }
         return TabBar(container, photos, library)
     }
 
     private fun buildSelectionBar(): SelectionBar {
-        val count = text(activity.resources.getQuantityString(R.plurals.selected_photo_count, 0, 0), 15f, UiStyle.text).apply {
-            setTypeface(typeface, Typeface.BOLD)
+        val count = text(activity.resources.getQuantityString(R.plurals.selected_photo_count, 0, 0), 16f, UiStyle.text).apply {
+            typeface = UiStyle.medium
             gravity = Gravity.CENTER_VERTICAL
             setPadding(activity.dp(12), 0, activity.dp(8), 0)
         }
-        val delete = iconLabelButton(activity.getString(R.string.delete), R.drawable.ic_delete, destructive = true).apply {
+        val delete = pillButton(activity.getString(R.string.delete), R.drawable.ic_delete, destructive = true).apply {
             setOnClickListener { actions.onDeleteSelection() }
         }
+        val close = UiStyle.iconButton(
+            activity,
+            R.drawable.ic_close,
+            activity.getString(R.string.cancel_selection),
+        ).apply { setOnClickListener { adapter.clearSelection() } }
         val container = LinearLayout(activity).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(activity.dp(6), activity.dp(6), activity.dp(6), activity.dp(6))
-            background = UiStyle.rounded(activity, UiStyle.withAlpha(UiStyle.surface, 250), 22, UiStyle.border)
-            addView(ImageButton(activity).apply {
-                setImageResource(R.drawable.ic_close)
-                imageTintList = ColorStateList.valueOf(UiStyle.text)
-                background = UiStyle.rounded(activity, UiStyle.surfaceRaised, 15)
-                contentDescription = activity.getString(R.string.cancel_selection)
-                setPadding(activity.dp(10), activity.dp(10), activity.dp(10), activity.dp(10))
-                setOnClickListener { adapter.clearSelection() }
-            }, LinearLayout.LayoutParams(activity.dp(48), activity.dp(48)))
+            setPadding(activity.dp(8), activity.dp(8), activity.dp(8), activity.dp(8))
+            background = UiStyle.rounded(
+                activity,
+                UiStyle.withAlpha(UiStyle.surface, 246),
+                30,
+                UiStyle.border,
+            )
+            elevation = activity.dp(10).toFloat()
+            addView(close, LinearLayout.LayoutParams(activity.dp(44), activity.dp(44)))
             addView(count, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            addView(delete, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, activity.dp(48)))
+            addView(delete, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, activity.dp(44)))
         }
         return SelectionBar(container, count, delete)
     }
 
-    private fun choiceGroup() = LinearLayout(activity).apply {
-        orientation = LinearLayout.HORIZONTAL
-        gravity = Gravity.CENTER_VERTICAL
-        setPadding(activity.dp(3), activity.dp(3), activity.dp(3), activity.dp(3))
-        background = UiStyle.rounded(
-            activity,
-            UiStyle.navigationSurface,
-            20,
-            UiStyle.navigationBorder,
-        )
-    }
-
-    private fun choiceButton(label: String) = Button(activity).apply {
-        text = label
-        textSize = 13f
-        setTextColor(UiStyle.muted)
-        isAllCaps = false
-        gravity = Gravity.CENTER
-        minWidth = 0
-        minimumWidth = 0
-        minHeight = 0
-        minimumHeight = 0
-        setPadding(activity.dp(8), 0, activity.dp(8), 0)
-        background = Color.TRANSPARENT.toDrawable()
-    }
-
-    private fun styleChoice(button: Button, selected: Boolean) {
-        button.isSelected = selected
-        button.isActivated = selected
-        ViewCompat.setStateDescription(
-            button,
-            activity.getString(if (selected) R.string.selected else R.string.not_selected),
-        )
-        button.setTextColor(if (selected) UiStyle.text else UiStyle.navigationMuted)
-        button.background = if (selected) {
-            InsetDrawable(
-                UiStyle.rounded(
-                    activity,
-                    UiStyle.navigationSelected,
-                    15,
-                    UiStyle.navigationBorder,
-                ),
-                activity.dp(3),
-            )
-        } else {
-            Color.TRANSPARENT.toDrawable()
-        }
-    }
-
-    private fun iconLabelButton(label: String, icon: Int, destructive: Boolean = false) =
+    private fun pillButton(label: String, icon: Int, destructive: Boolean = false) =
         Button(activity).apply {
             text = label
-            textSize = 13f
-            setTextColor(if (destructive) Color.rgb(255, 146, 146) else UiStyle.text)
+            textSize = 14f
+            typeface = UiStyle.medium
+            val tint = if (destructive) UiStyle.danger else UiStyle.text
+            setTextColor(tint)
             isAllCaps = false
+            minWidth = 0
+            minimumWidth = 0
+            minHeight = 0
+            minimumHeight = 0
             setCompoundDrawablesRelativeWithIntrinsicBounds(icon, 0, 0, 0)
-            TextViewCompat.setCompoundDrawableTintList(this, ColorStateList.valueOf(
-                if (destructive) Color.rgb(255, 146, 146) else UiStyle.text
-            ))
-            compoundDrawablePadding = activity.dp(7)
-            setPadding(activity.dp(14), 0, activity.dp(14), 0)
-            background = UiStyle.rounded(activity, UiStyle.surfaceRaised, 15)
+            TextViewCompat.setCompoundDrawableTintList(this, ColorStateList.valueOf(tint))
+            compoundDrawablePadding = activity.dp(6)
+            setPadding(activity.dp(14), 0, activity.dp(16), 0)
+            background = UiStyle.rippled(
+                UiStyle.rounded(activity, if (destructive) UiStyle.dangerSoft else UiStyle.surfaceRaised, 22),
+                tint,
+            )
         }
 
     private fun accentButton(label: String) = Button(activity).apply {
         text = label
-        textSize = 14f
-        setTextColor(Color.WHITE)
+        textSize = 15f
+        typeface = UiStyle.medium
+        setTextColor(UiStyle.onAccent)
         isAllCaps = false
-        background = UiStyle.rounded(activity, UiStyle.accentDark, 15, null)
+        background = UiStyle.rippled(UiStyle.rounded(activity, UiStyle.accent, 25), UiStyle.onAccent)
     }
 
     private fun text(value: String, size: Float, color: Int) = TextView(activity).apply {
@@ -515,6 +499,49 @@ internal class GalleryScreen(
         marginStart = activity.dp(16)
         marginEnd = activity.dp(16)
         bottomMargin = activity.dp(12)
+    }
+
+    /** A tab in the floating bottom bar: icon and label, tinted by selection state. */
+    private class TabButton(
+        context: android.content.Context,
+        icon: Int,
+        label: String,
+    ) : LinearLayout(context) {
+        private val iconView = ImageView(context).apply {
+            setImageResource(icon)
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        private val labelView = TextView(context).apply {
+            text = label
+            textSize = 14f
+            typeface = UiStyle.medium
+        }
+
+        init {
+            orientation = HORIZONTAL
+            gravity = Gravity.CENTER
+            isClickable = true
+            isFocusable = true
+            contentDescription = label
+            addView(iconView, LayoutParams(context.dp(22), context.dp(22)).apply { marginEnd = context.dp(8) })
+            addView(labelView, LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            setSelectedTab(false)
+        }
+
+        fun setSelectedTab(selected: Boolean) {
+            isSelected = selected
+            ViewCompat.setStateDescription(
+                this,
+                context.getString(if (selected) R.string.selected else R.string.not_selected),
+            )
+            val tint = if (selected) UiStyle.accent else UiStyle.muted
+            iconView.imageTintList = ColorStateList.valueOf(tint)
+            labelView.setTextColor(if (selected) UiStyle.text else UiStyle.muted)
+            background = UiStyle.rippled(
+                UiStyle.rounded(context, if (selected) UiStyle.accentSoft else Color.TRANSPARENT, 24),
+                UiStyle.accent,
+            )
+        }
     }
 
     internal class Actions(
@@ -555,8 +582,8 @@ internal class GalleryScreen(
 
     private data class TabBar(
         val container: LinearLayout,
-        val photos: Button,
-        val library: Button,
+        val photos: TabButton,
+        val library: TabButton,
     )
 
     private data class SelectionBar(

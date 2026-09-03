@@ -6,6 +6,7 @@ import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
 import android.text.format.DateFormat
@@ -738,17 +739,19 @@ class PhotoViewerActivity : FragmentActivity() {
     private fun addDetailsRow(item: PhotoMetadataItem) {
         detailsContent.addView(LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(12), dp(9), dp(12), dp(9))
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            background = UiStyle.rippled(UiStyle.rounded(this@PhotoViewerActivity, Color.TRANSPARENT, 14))
             addView(TextView(this@PhotoViewerActivity).apply {
                 text = item.label
-                textSize = 11f
+                textSize = 12f
+                typeface = UiStyle.medium
                 setTextColor(UiStyle.muted)
             })
             addView(TextView(this@PhotoViewerActivity).apply {
                 text = item.value
-                textSize = 15f
+                textSize = 15.5f
                 setTextColor(UiStyle.text)
-                setPadding(0, dp(2), 0, 0)
+                setPadding(0, dp(3), 0, 0)
             })
             if (item.action is PhotoMetadataAction.OpenMap) {
                 addView(TextView(this@PhotoViewerActivity).apply {
