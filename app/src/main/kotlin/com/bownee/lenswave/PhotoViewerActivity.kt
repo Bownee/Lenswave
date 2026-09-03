@@ -77,6 +77,7 @@ class PhotoViewerActivity : FragmentActivity() {
     private val photoDetailsSurface get() = screen.photoDetailsSurface
     private val mediaFrame get() = screen.mediaFrame
     private val thumbnailPreview get() = screen.thumbnailPreview
+    private val peekPreview get() = screen.peekPreview
     private val photoView get() = screen.photoView
     private val playerView get() = screen.playerView
     private val loadingPanel get() = screen.loadingPanel
@@ -101,6 +102,11 @@ class PhotoViewerActivity : FragmentActivity() {
     private var dismissing = false
     private var photoReady = false
     private var thumbnailBitmap: Bitmap? = null
+    private var previewStableId: String? = null
+    private var peekStableId: String? = null
+    private var peekOffset = 0
+    private var peekDragDistance = 0f
+    private var peekJob: Job? = null
     private var navigationFallback: NavigationFallback? = null
     private var photoLoadJob: Job? = null
     private var videoProgressJob: Job? = null
@@ -129,6 +135,7 @@ class PhotoViewerActivity : FragmentActivity() {
         detailsScrollAnimator?.cancel()
         cancelLoadingPanelDelay()
         clearThumbnailPreview()
+        hidePeek()
         photoView.close()
         releasePlayer()
         super.onDestroy()
@@ -274,6 +281,11 @@ class PhotoViewerActivity : FragmentActivity() {
     }
 
     private suspend fun showCachedProtonThumbnail(requestedPhoto: PhotoRequest) {
+        if (previewStableId == requestedPhoto.stableId && thumbnailPreview.isVisible) {
+            // The peek that slid in during the swipe already shows this photo's thumbnail.
+            photoView.alpha = 0f
+            return
+        }
         val bitmap = protonRepository.loadThumbnail(
             UserId(requestedPhoto.userId),
             requestedPhoto.nodeUid,
@@ -289,6 +301,7 @@ class PhotoViewerActivity : FragmentActivity() {
 
         clearThumbnailPreview()
         thumbnailBitmap = requireNotNull(bitmap)
+        previewStableId = requestedPhoto.stableId
         thumbnailPreview.setImageBitmap(bitmap)
         thumbnailPreview.visibility = View.VISIBLE
         thumbnailPreview.animate().cancel()
@@ -505,13 +518,16 @@ class PhotoViewerActivity : FragmentActivity() {
         }
 
         val offset = if (distance > 0f) 1 else -1
-        if (adjacentTo(request.stableId, offset) == null) {
+        val adjacent = adjacentTo(request.stableId, offset)
+        if (adjacent == null) {
             resetHorizontalPhotoDrag()
             return
         }
         if (!finished) {
             cancelMediaAnimations()
-            setMediaTranslationX(-distance.coerceIn(-root.width.toFloat(), root.width.toFloat()))
+            val boundedDistance = distance.coerceIn(-root.width.toFloat(), root.width.toFloat())
+            setMediaTranslationX(-boundedDistance)
+            showPeek(adjacent, offset, boundedDistance)
             return
         }
 
@@ -522,6 +538,72 @@ class PhotoViewerActivity : FragmentActivity() {
     private fun resetHorizontalPhotoDrag() {
         cancelMediaAnimations()
         animateMediaTranslationX(0f, 160L)
+        if (peekPreview.isVisible) {
+            peekPreview.animate()
+                .translationX(peekOffset * root.width.toFloat())
+                .setDuration(160L)
+                .withEndAction(::hidePeek)
+                .start()
+        } else {
+            hidePeek()
+        }
+    }
+
+    /** Positions the neighbour's thumbnail one screen away in the drag direction, loading it first. */
+    private fun showPeek(adjacent: PhotoRequest, offset: Int, dragDistance: Float) {
+        peekDragDistance = dragDistance
+        if (peekStableId != adjacent.stableId || peekOffset != offset) {
+            peekJob?.cancel()
+            peekStableId = adjacent.stableId
+            peekOffset = offset
+            peekPreview.setImageDrawable(null)
+            peekPreview.visibility = View.GONE
+            peekJob = lifecycleScope.launch {
+                val bitmap = protonRepository.loadThumbnail(UserId(adjacent.userId), adjacent.nodeUid)
+                if (bitmap == null || peekStableId != adjacent.stableId) return@launch
+                peekPreview.setImageBitmap(bitmap)
+                peekPreview.alpha = 1f
+                peekPreview.visibility = View.VISIBLE
+                positionPeek(peekDragDistance)
+            }
+        }
+        positionPeek(dragDistance)
+    }
+
+    private fun positionPeek(dragDistance: Float) {
+        peekPreview.animate().cancel()
+        peekPreview.translationX = -dragDistance + peekOffset * root.width.toFloat()
+    }
+
+    private fun hidePeek() {
+        peekJob?.cancel()
+        peekJob = null
+        peekStableId = null
+        peekOffset = 0
+        peekPreview.animate().cancel()
+        peekPreview.setImageDrawable(null)
+        peekPreview.visibility = View.GONE
+        peekPreview.translationX = 0f
+    }
+
+    /**
+     * After a completed swipe the peek is already showing the new photo's thumbnail at rest, so it
+     * becomes the preview directly instead of reloading it through a black frame.
+     */
+    private fun adoptPeekAsPreview() {
+        val bitmap = (peekPreview.drawable as? android.graphics.drawable.BitmapDrawable)?.bitmap
+        if (bitmap == null || peekStableId != request.stableId) {
+            hidePeek()
+            return
+        }
+        thumbnailBitmap = bitmap
+        previewStableId = request.stableId
+        thumbnailPreview.setImageBitmap(bitmap)
+        thumbnailPreview.alpha = 1f
+        thumbnailPreview.translationX = 0f
+        thumbnailPreview.visibility = View.VISIBLE
+        photoView.alpha = 0f
+        hidePeek()
     }
 
     private fun navigatePhoto(offset: Int) {
@@ -535,6 +617,9 @@ class PhotoViewerActivity : FragmentActivity() {
         navigationFallback = NavigationFallback(previousRequest, resolvedUri)
         setActionsEnabled(false)
         cancelMediaAnimations()
+        if (peekPreview.isVisible && peekStableId == adjacent.stableId) {
+            peekPreview.animate().translationX(0f).setDuration(160L).start()
+        }
         val activeMedia = activeMediaView()
         activeMedia.animate()
             .translationX(-offset * root.width.toFloat())
@@ -545,6 +630,7 @@ class PhotoViewerActivity : FragmentActivity() {
                 request = adjacent
                 request.writeTo(intent)
                 resetPhotoStateForNavigation()
+                adoptPeekAsPreview()
                 photoTransitioning = false
                 loadPhoto()
             }
@@ -1286,7 +1372,7 @@ class PhotoViewerActivity : FragmentActivity() {
             gap = dp(MEDIA_ACTION_GAP_DP),
         )
         if (inset <= 0) return
-        listOf(photoView, thumbnailPreview, playerView, loadingPanel).forEach { media ->
+        listOf(photoView, thumbnailPreview, peekPreview, playerView, loadingPanel).forEach { media ->
             (media.layoutParams as FrameLayout.LayoutParams).apply {
                 topMargin = inset
                 bottomMargin = inset
@@ -1306,6 +1392,7 @@ class PhotoViewerActivity : FragmentActivity() {
         thumbnailPreview.scaleX = 1f
         thumbnailPreview.scaleY = 1f
         thumbnailBitmap = null
+        previewStableId = null
     }
 
     private data class NavigationFallback(

@@ -44,6 +44,12 @@ internal class PhotoViewerScreen(
         alpha = 0f
         importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
     }
+    /** The neighbouring photo's thumbnail that follows a horizontal drag one screen away. */
+    val peekPreview = ImageView(context).apply {
+        scaleType = ImageView.ScaleType.FIT_CENTER
+        visibility = View.GONE
+        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+    }
     val photoView = FullResolutionPhotoView(context)
     val playerView = PlayerView(context).apply {
         useController = true
@@ -101,6 +107,7 @@ internal class PhotoViewerScreen(
             ),
         )
 
+        mediaFrame.addView(peekPreview, photoLayoutParams())
         mediaFrame.addView(thumbnailPreview, photoLayoutParams())
         mediaFrame.addView(photoView, photoLayoutParams())
         mediaFrame.addView(playerView, photoLayoutParams())
