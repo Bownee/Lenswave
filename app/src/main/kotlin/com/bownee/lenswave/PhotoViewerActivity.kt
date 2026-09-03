@@ -48,7 +48,6 @@ import com.bownee.lenswave.metadata.PhotoMetadataReader
 import com.bownee.lenswave.proton.ProtonPhotoGateway
 import com.bownee.lenswave.proton.ProtonOriginalDownloadProgress
 import com.bownee.lenswave.proton.ProtonOriginalStream
-import com.bownee.lenswave.storage.TransientPhotoFiles
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -132,7 +131,6 @@ class PhotoViewerActivity : FragmentActivity() {
         clearThumbnailPreview()
         photoView.close()
         releasePlayer()
-        if (isFinishing) TransientPhotoFiles.deleteIfOwned(this, resolvedUri)
         super.onDestroy()
     }
 
@@ -297,9 +295,6 @@ class PhotoViewerActivity : FragmentActivity() {
         photoView.load(uri) { result ->
             if (request.stableId != requestedStableId) return@load
             result.onSuccess {
-                navigationFallback?.uri
-                    ?.takeIf { it != uri }
-                    ?.let { TransientPhotoFiles.deleteIfOwned(this, it) }
                 navigationFallback = null
                 photoReady = true
                 hideLoadingPanel()
@@ -369,9 +364,6 @@ class PhotoViewerActivity : FragmentActivity() {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 if (playbackState != Player.STATE_READY || request.stableId != requestedStableId) return
                 if (photoReady) return
-                navigationFallback?.uri
-                    ?.takeIf { it != uri }
-                    ?.let { TransientPhotoFiles.deleteIfOwned(this@PhotoViewerActivity, it) }
                 navigationFallback = null
                 photoReady = true
                 videoProgressJob?.cancel()
