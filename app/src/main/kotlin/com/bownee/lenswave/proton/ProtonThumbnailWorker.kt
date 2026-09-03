@@ -43,6 +43,14 @@ class ProtonThumbnailWorker(
             if (session.activeUserId != requestedUserId) {
                 return Result.failure()
             }
+            val networkMonitor = ProtonThumbnailNetworkMonitor(applicationContext)
+            if (!networkMonitor.hasValidatedUnmeteredNetwork()) {
+                return resolve(
+                    repository,
+                    ProtonThumbnailWorkIssue.INCOMPLETE,
+                    publishStatus = false,
+                )
+            }
             val foregroundInfoFactory = ProtonThumbnailForegroundInfoFactory(applicationContext)
             publishForeground(repository, foregroundInfoFactory)
             repository.updateThumbnailWorkStatus(
@@ -56,6 +64,11 @@ class ProtonThumbnailWorker(
                 var sawFailure = false
                 var runIssue: ProtonThumbnailWorkIssue? = null
                 while (true) {
+                    if (!networkMonitor.hasValidatedUnmeteredNetwork()) {
+                        completedWithinTime = true
+                        runIssue = ProtonThumbnailWorkIssue.INCOMPLETE
+                        break
+                    }
                     when (val step = repository.downloadNextQueuedThumbnailBatch(requestedUserId)) {
                         ProtonThumbnailQueueStep.Downloaded -> {
                             publishForeground(repository, foregroundInfoFactory)
@@ -150,7 +163,10 @@ class ProtonThumbnailWorker(
                 .setInputData(workDataOf(KEY_USER_ID to userId.id))
                 .setConstraints(
                     Constraints.Builder()
-                        .setRequiredNetworkType(NetworkType.UNMETERED)
+                        // A network JobScheduler constraint can be revoked as the phone enters
+                        // Doze, even after this worker has promoted itself to a foreground service.
+                        // The worker checks for validated unmetered access between batches instead.
+                        .setRequiredNetworkType(NetworkType.NOT_REQUIRED)
                         .setRequiresBatteryNotLow(true)
                         .setRequiresStorageNotLow(true)
                         .build()
