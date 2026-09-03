@@ -128,7 +128,7 @@ internal class PhotoViewerScreen(
         backButton = ImageButton(context).apply {
             setImageResource(R.drawable.ic_back)
             imageTintList = ColorStateList.valueOf(Color.WHITE)
-            background = UiStyle.rounded(context, Color.argb(220, 29, 33, 40), 18)
+            background = UiStyle.rounded(context, UiStyle.withAlpha(UiStyle.surface, 220), 18)
             contentDescription = context.getString(R.string.back)
             setPadding(context.dp(10), context.dp(10), context.dp(10), context.dp(10))
             setOnClickListener { actions.onBack() }
@@ -202,7 +202,7 @@ internal class PhotoViewerScreen(
             alpha = 0f
             visibility = View.INVISIBLE
             setPadding(context.dp(16), context.dp(8), context.dp(16), context.dp(10))
-            background = UiStyle.rounded(context, Color.rgb(27, 30, 36), 24, stroke = null)
+            background = UiStyle.rounded(context, UiStyle.surface, 24, stroke = null)
             addView(FrameLayout(context).apply {
                 addView(View(context).apply {
                     background = UiStyle.rounded(context, UiStyle.muted, 3)
@@ -236,7 +236,7 @@ internal class PhotoViewerScreen(
             contentDescription = label
             ViewCompat.setTooltipText(this, label)
             setPadding(context.dp(12), context.dp(12), context.dp(12), context.dp(12))
-            background = UiStyle.rounded(context, Color.argb(220, 29, 33, 40), 15)
+            background = UiStyle.rounded(context, UiStyle.withAlpha(UiStyle.surface, 220), 15)
         }
 
     private fun photoLayoutParams() = FrameLayout.LayoutParams(

@@ -29,6 +29,9 @@ object UiStyle {
 
     private fun color(resource: Int): Int = ContextCompat.getColor(applicationContext, resource)
 
+    internal fun withAlpha(color: Int, alpha: Int): Int =
+        Color.argb(alpha, Color.red(color), Color.green(color), Color.blue(color))
+
     fun rounded(context: Context, fill: Int, radiusDp: Int, stroke: Int? = border) =
         GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE

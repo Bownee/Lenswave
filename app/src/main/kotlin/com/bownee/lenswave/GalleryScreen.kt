@@ -126,7 +126,7 @@ internal class GalleryScreen(
             gravity = Gravity.CENTER
             setTypeface(typeface, Typeface.BOLD)
             setPadding(activity.dp(16), 0, activity.dp(16), 0)
-            background = UiStyle.rounded(activity, Color.argb(236, 20, 23, 28), 20)
+            background = UiStyle.rounded(activity, UiStyle.withAlpha(UiStyle.surface, 236), 20)
             elevation = activity.dp(6).toFloat()
             visibility = View.GONE
         }
@@ -430,7 +430,7 @@ internal class GalleryScreen(
     private fun buildDevicePicker() = LinearLayout(activity).apply {
         orientation = LinearLayout.VERTICAL
         setPadding(activity.dp(6), activity.dp(6), activity.dp(6), activity.dp(6))
-        background = UiStyle.rounded(activity, Color.argb(250, 29, 33, 40), 20)
+        background = UiStyle.rounded(activity, UiStyle.withAlpha(UiStyle.surface, 250), 20)
         DeviceCollectionPicker.collections.forEach { collection ->
             val button = sectionButton(activity.getString(DeviceCollectionPicker.menuLabelRes(collection))).apply {
                 gravity = Gravity.START or Gravity.CENTER_VERTICAL
@@ -456,7 +456,7 @@ internal class GalleryScreen(
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(activity.dp(6), activity.dp(6), activity.dp(6), activity.dp(6))
-            background = UiStyle.rounded(activity, Color.argb(250, 29, 33, 40), 22, UiStyle.border)
+            background = UiStyle.rounded(activity, UiStyle.withAlpha(UiStyle.surface, 250), 22, UiStyle.border)
             addView(ImageButton(activity).apply {
                 setImageResource(R.drawable.ic_close)
                 imageTintList = ColorStateList.valueOf(UiStyle.text)
