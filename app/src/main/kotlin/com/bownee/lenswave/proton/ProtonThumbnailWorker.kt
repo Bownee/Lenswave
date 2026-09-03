@@ -31,7 +31,7 @@ class ProtonThumbnailWorker(
             RepositoryEntryPoint::class.java,
         )
         val repository = entryPoint.repository()
-        val attempt = runAttemptCount + 1
+        val attempt = (runAttemptCount + 1).coerceAtMost(ProtonThumbnailWorkPolicy.MAX_ATTEMPTS)
         var statusPublished = false
         return try {
             val requestedUserId = UserId(userId)
@@ -143,7 +143,7 @@ class ProtonThumbnailWorker(
         LenswaveDiagnostics.reportState(
             operation = "thumbnail-worker",
             state = state,
-            attempt = runAttemptCount + 1,
+            attempt = (runAttemptCount + 1).coerceAtMost(ProtonThumbnailWorkPolicy.MAX_ATTEMPTS),
             maximumAttempts = ProtonThumbnailWorkPolicy.MAX_ATTEMPTS,
         )
     }
@@ -196,7 +196,7 @@ internal object ProtonThumbnailWorkPolicy {
         runAttemptCount: Int,
         issue: ProtonThumbnailWorkIssue?,
     ): ProtonThumbnailWorkResolution {
-        val attempt = runAttemptCount + 1
+        val attempt = (runAttemptCount + 1).coerceAtMost(MAX_ATTEMPTS)
         if (issue == null) {
             return ProtonThumbnailWorkResolution(
                 ProtonThumbnailWorkDecision.SUCCESS,

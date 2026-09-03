@@ -57,7 +57,7 @@ internal class ProtonTimelineRepository @Inject constructor(
                         ProtonGalleryPhoto(
                             nodeUid = item.nodeUid.value,
                             captureTimeEpochSeconds = item.captureTime.epochSecond,
-                            hasThumbnail = cache.thumbnailIsDecodable(userId.id, item.nodeUid.value),
+                            hasThumbnail = cache.thumbnailExists(userId.id, item.nodeUid.value),
                         )
                     }
                 },

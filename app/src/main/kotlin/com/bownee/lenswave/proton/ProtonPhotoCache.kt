@@ -36,7 +36,7 @@ internal class ProtonPhotoCache @Inject constructor(
     private val validatedThumbnails = ConcurrentHashMap.newKeySet<ThumbnailCacheKey>()
 
     /** Metadata hydration only needs availability; authenticated contents are validated when read. */
-    fun thumbnailExists(userId: String, nodeUid: String): Boolean =
+    override fun thumbnailExists(userId: String, nodeUid: String): Boolean =
         thumbnailFile(userId, nodeUid).let { file ->
             (file.isFile && file.length() > 0L).also { exists ->
                 if (!exists) file.delete()

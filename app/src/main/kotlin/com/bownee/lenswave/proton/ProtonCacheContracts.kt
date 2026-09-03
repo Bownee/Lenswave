@@ -10,7 +10,7 @@ interface ProtonTimelineCache {
     fun readIndex(userId: String): List<ProtonGalleryPhoto>
     fun hasTimelineSnapshot(userId: String): Boolean
     fun writeIndex(userId: String, photos: List<ProtonGalleryPhoto>)
-    fun thumbnailIsDecodable(userId: String, nodeUid: String): Boolean
+    fun thumbnailExists(userId: String, nodeUid: String): Boolean
     fun reconcilePhotos(
         userId: String,
         cachedNodeUids: Collection<String>,
@@ -27,14 +27,14 @@ interface ProtonAlbumCache {
     fun hasAlbumPhotosSnapshot(userId: String, albumUid: String): Boolean
     fun writeAlbumPhotos(userId: String, albumUid: String, photos: List<ProtonGalleryPhoto>)
     fun reconcileAlbums(userId: String, remoteAlbumUids: Collection<String>)
-    fun thumbnailIsDecodable(userId: String, nodeUid: String): Boolean
+    fun thumbnailExists(userId: String, nodeUid: String): Boolean
 }
 
 interface ProtonTrashCache {
     fun readTrash(userId: String): List<ProtonTrashPhoto>
     fun hasTrashSnapshot(userId: String): Boolean
     fun writeTrash(userId: String, photos: List<ProtonTrashPhoto>)
-    fun thumbnailIsDecodable(userId: String, nodeUid: String): Boolean
+    fun thumbnailExists(userId: String, nodeUid: String): Boolean
     fun removePhotos(userId: String, nodeUids: Collection<String>)
 }
 

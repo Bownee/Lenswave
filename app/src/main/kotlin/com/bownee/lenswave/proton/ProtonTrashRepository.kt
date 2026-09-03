@@ -57,7 +57,7 @@ internal class ProtonTrashRepository @Inject constructor(
                 requireNotNull(photosClient.getNode(nodeUid)) {
                     "Proton returned no node for ${nodeUid.value}"
                 }.toProtonTrashPhoto(
-                    hasThumbnail = cache.thumbnailIsDecodable(userId.id, nodeUid.value),
+                    hasThumbnail = cache.thumbnailExists(userId.id, nodeUid.value),
                 )
             }.sortedByDescending(ProtonTrashPhoto::trashedAtEpochSeconds).toMutableList().also {
                 cache.writeTrash(userId.id, it)

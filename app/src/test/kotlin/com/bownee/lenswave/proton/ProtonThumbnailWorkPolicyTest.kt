@@ -57,4 +57,23 @@ class ProtonThumbnailWorkPolicyTest {
         )
         assertEquals("stopped-timeout", resolution.diagnosticState)
     }
+
+    @Test
+    fun `attempt count remains valid when restored work exceeds the limit`() {
+        val resolution = ProtonThumbnailWorkPolicy.resolve(
+            runAttemptCount = ProtonThumbnailWorkPolicy.MAX_ATTEMPTS + 3,
+            issue = ProtonThumbnailWorkIssue.ERROR,
+        )
+
+        assertEquals(ProtonThumbnailWorkDecision.FAILURE, resolution.decision)
+        assertEquals(
+            ProtonThumbnailWorkStatus.Stopped(
+                ProtonThumbnailWorkPolicy.MAX_ATTEMPTS,
+                ProtonThumbnailWorkPolicy.MAX_ATTEMPTS,
+                ProtonThumbnailWorkIssue.ERROR,
+            ),
+            resolution.status,
+        )
+        assertEquals("stopped-error", resolution.diagnosticState)
+    }
 }

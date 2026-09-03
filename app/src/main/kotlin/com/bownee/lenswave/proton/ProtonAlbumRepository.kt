@@ -122,7 +122,7 @@ internal class ProtonAlbumRepository @Inject constructor(
                         ProtonGalleryPhoto(
                             nodeUid = item.nodeUid.value,
                             captureTimeEpochSeconds = item.captureTime.epochSecond,
-                            hasThumbnail = cache.thumbnailIsDecodable(userId.id, item.nodeUid.value),
+                            hasThumbnail = cache.thumbnailExists(userId.id, item.nodeUid.value),
                         )
                     }.sortedByDescending(ProtonGalleryPhoto::captureTimeEpochSeconds)
                 },
@@ -266,7 +266,7 @@ internal class ProtonAlbumRepository @Inject constructor(
             createdAtEpochSeconds = albumNode.creationTime.epochSecond,
             lastActivityEpochSeconds = (albumNode.lastActivityTime ?: albumNode.creationTime).epochSecond,
             hasCoverThumbnail = albumNode.coverPhotoNodeUid?.let { coverUid ->
-                cache.thumbnailIsDecodable(userId.id, coverUid.value)
+                cache.thumbnailExists(userId.id, coverUid.value)
             } == true,
             isShared = albumNode.isShared,
         )
