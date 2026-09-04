@@ -720,7 +720,7 @@ internal class GalleryScreen(
         private const val REFRESH_SPINNER_END_DP = 56
 
         /** Pulls that begin this close under the filter chips do not refresh. */
-        private const val PULL_GAP_BELOW_CHIPS_DP = 24
+        private const val PULL_GAP_BELOW_CHIPS_DP = 48
         private const val SCROLL_TO_TOP_JUMP_ROWS = 12
     }
 }
