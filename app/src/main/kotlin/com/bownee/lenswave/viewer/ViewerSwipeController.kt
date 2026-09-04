@@ -45,6 +45,9 @@ internal class ViewerSwipeController(
 
         /** Installs [bitmap] as the thumbnail stand-in for the current request. */
         fun adoptPreview(bitmap: Bitmap)
+
+        /** A finished swipe or key press found no neighbour in the direction of [offset]. */
+        fun onNavigationEdge(offset: Int)
     }
 
     private val root get() = screen.root
@@ -81,6 +84,7 @@ internal class ViewerSwipeController(
         val adjacent = adjacentTo(host.request.stableId, offset)
         if (adjacent == null) {
             resetHorizontalPhotoDrag()
+            if (finished) host.onNavigationEdge(offset)
             return
         }
         if (!finished) {
@@ -201,7 +205,11 @@ internal class ViewerSwipeController(
 
     fun navigatePhoto(offset: Int) {
         if (host.gesturesBlocked) return
-        val adjacent = adjacentTo(host.request.stableId, offset) ?: return
+        val adjacent = adjacentTo(host.request.stableId, offset)
+        if (adjacent == null) {
+            host.onNavigationEdge(offset)
+            return
+        }
         lastNavigationOffset = Integer.signum(offset)
 
         host.beginNavigation()

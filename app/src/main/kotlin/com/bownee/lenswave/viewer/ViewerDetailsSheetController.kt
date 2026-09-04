@@ -159,6 +159,16 @@ internal class ViewerDetailsSheetController(
         animateDetailsOffset(0, velocity)
     }
 
+    /**
+     * Marks the sheet open before anything is laid out, for a recreated viewer whose sheet was
+     * open: [synchronizeWithImage] then settles it against the image once that is on screen,
+     * and the rows load with the photo like they do for any open sheet.
+     */
+    fun restoreShown() {
+        shown = true
+        detailsSheet.visibility = View.VISIBLE
+    }
+
     /** Fixes the offsets a drag or animation will move between. */
     private fun beginMotion() {
         motionMaximumOffset = maximumDetailsOffset()

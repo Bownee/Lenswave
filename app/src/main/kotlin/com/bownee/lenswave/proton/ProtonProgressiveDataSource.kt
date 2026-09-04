@@ -36,12 +36,8 @@ internal class ProtonProgressiveDataSource(
             )
         if (remaining == null) {
             // Worth a line in the log: this is what a truncated or wrongly sized download looks like.
-            LenswaveDiagnostics.reportState(
-                LenswaveOperation.VIDEO_PLAYBACK,
-                "open-beyond-end-position-${dataSpec.position}-available-${state.availableBytes}",
-                1,
-                1,
-            )
+            // The state is a fixed token; the offsets would only push the line past its size cap.
+            LenswaveDiagnostics.reportState(LenswaveOperation.VIDEO_PLAYBACK, STATE_OPEN_BEYOND_END, 1, 1)
             throw DataSourceException(PlaybackException.ERROR_CODE_IO_READ_POSITION_OUT_OF_RANGE)
         }
         input = RandomAccessFile(stream.file, "r").apply { seek(dataSpec.position) }
@@ -109,5 +105,9 @@ internal class ProtonProgressiveDataSource(
         private val stream: ProtonOriginalStream,
     ) : DataSource.Factory {
         override fun createDataSource(): DataSource = ProtonProgressiveDataSource(stream)
+    }
+
+    private companion object {
+        const val STATE_OPEN_BEYOND_END = "open-beyond-end"
     }
 }

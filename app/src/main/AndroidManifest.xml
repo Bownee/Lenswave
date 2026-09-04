@@ -63,10 +63,19 @@
         android:roundIcon="@mipmap/ic_launcher"
         android:supportsRtl="true"
         android:theme="@style/Theme.Lenswave"
+        android:usesCleartextTraffic="false"
         tools:replace="android:theme">
+        <!--
+            The launcher activity owns its task outright: an empty affinity keeps other apps'
+            activities (task hijacking) out of it, and singleTop keeps a relaunch from stacking a second
+            instance on top. The viewer is started from it without task flags, so it
+            joins this task regardless of affinity.
+        -->
         <activity
             android:name=".gallery.GalleryActivity"
-            android:exported="true">
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:taskAffinity="">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -219,6 +228,11 @@
                 android:name="me.proton.core.userrecovery.presentation.compose.DeviceRecoveryInitializer"
                 tools:node="remove" />
         </provider>
+
+        <!-- The pause action of the thumbnail download notification; only this app holds its PendingIntent. -->
+        <receiver
+            android:name=".proton.ProtonThumbnailPauseReceiver"
+            android:exported="false" />
 
         <!-- WorkManager promotes long-running thumbnail downloads to a data-sync service. -->
         <service

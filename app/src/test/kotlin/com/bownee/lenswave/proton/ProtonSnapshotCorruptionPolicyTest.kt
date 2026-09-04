@@ -1,5 +1,6 @@
 package com.bownee.lenswave.proton
 
+import com.bownee.lenswave.storage.SecureFileStore
 import org.json.JSONException
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -35,6 +36,22 @@ class ProtonSnapshotCorruptionPolicyTest {
         assertFalse(ProtonSnapshotCorruptionPolicy.isCorrupt(ProviderException("keymaster timed out")))
         assertFalse(ProtonSnapshotCorruptionPolicy.isCorrupt(IllegalStateException("Could not store data key")))
         assertFalse(ProtonSnapshotCorruptionPolicy.isCorrupt(RuntimeException("wrapped", IOException("disk busy"))))
+    }
+
+    @Test
+    fun anUnavailableDataKeyIsNeverCorruptionOfTheFileBeingRead() {
+        val unavailable =
+            SecureFileStore.DataKeyUnavailableException(
+                IllegalArgumentException("Wrapped data key is invalid"),
+            )
+
+        assertFalse(ProtonSnapshotCorruptionPolicy.isCorrupt(unavailable))
+        assertFalse(ProtonSnapshotCorruptionPolicy.isCorrupt(IllegalStateException("read failed", unavailable)))
+        assertFalse(
+            ProtonSnapshotCorruptionPolicy.isCorrupt(
+                SecureFileStore.DataKeyUnavailableException(ProviderException("keymaster timed out")),
+            ),
+        )
     }
 
     @Test

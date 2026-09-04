@@ -6,7 +6,6 @@ import android.os.Bundle
 import android.widget.Toast
 import androidx.core.net.toUri
 import androidx.fragment.app.FragmentActivity
-import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import com.bownee.lenswave.BuildConfig
 import com.bownee.lenswave.R
@@ -16,9 +15,10 @@ import com.bownee.lenswave.update.UpdateAvailableDialogFragment
 import kotlinx.coroutines.launch
 
 /**
- * Checks for a newer release at startup and shows the update dialog once the activity is resumed,
- * carrying an unshown version across configuration changes. The hosting activity must implement
- * [UpdateAvailableDialogFragment.Listener] and forward its callbacks here.
+ * Checks for a newer release at startup and shows the update dialog as soon as the fragment
+ * manager can take it (see [GalleryUpdatePromptPolicy]), carrying an unshown version across
+ * configuration changes. The hosting activity must implement [UpdateAvailableDialogFragment.Listener]
+ * and forward its callbacks here.
  */
 internal class GalleryUpdatePresenter(
     private val activity: FragmentActivity,
@@ -43,18 +43,24 @@ internal class GalleryUpdatePresenter(
     }
 
     fun showPendingUpdate() {
-        val versionName = pendingVersionName ?: return
-        if (!activity.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return
         val fragmentManager = activity.supportFragmentManager
-        if (fragmentManager.isStateSaved) return
-        if (fragmentManager.findFragmentByTag(UpdateAvailableDialogFragment.TAG) != null) {
-            pendingVersionName = null
+        val decision =
+            GalleryUpdatePromptPolicy.decide(
+                pendingVersionName = pendingVersionName,
+                stateSaved = fragmentManager.isStateSaved,
+                dialogShowing = fragmentManager.findFragmentByTag(UpdateAvailableDialogFragment.TAG) != null,
+            )
+        if (decision == GalleryUpdatePromptPolicy.Decision.NOTHING ||
+            decision == GalleryUpdatePromptPolicy.Decision.WAIT
+        ) {
             return
         }
-        UpdateAvailableDialogFragment.create(versionName, BuildConfig.VERSION_NAME).show(
-            fragmentManager,
-            UpdateAvailableDialogFragment.TAG,
-        )
+        if (decision == GalleryUpdatePromptPolicy.Decision.SHOW) {
+            UpdateAvailableDialogFragment.create(requireNotNull(pendingVersionName), BuildConfig.VERSION_NAME).show(
+                fragmentManager,
+                UpdateAvailableDialogFragment.TAG,
+            )
+        }
         pendingVersionName = null
     }
 

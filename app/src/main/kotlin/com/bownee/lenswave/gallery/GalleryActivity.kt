@@ -30,11 +30,11 @@ import com.bownee.lenswave.gallery.GalleryDestination
 import com.bownee.lenswave.gallery.GalleryEmptyAction
 import com.bownee.lenswave.gallery.GalleryFastScrollLayoutPolicy
 import com.bownee.lenswave.gallery.GalleryGrouping
+import com.bownee.lenswave.gallery.GalleryMutationEvent
 import com.bownee.lenswave.gallery.GalleryNavigationPolicy
 import com.bownee.lenswave.gallery.GalleryNotificationPermissionPrompter
 import com.bownee.lenswave.gallery.GalleryRowSet
 import com.bownee.lenswave.gallery.GalleryScrollPosition
-import com.bownee.lenswave.gallery.GalleryScrollPositionStore
 import com.bownee.lenswave.gallery.GallerySettingsPresenter
 import com.bownee.lenswave.gallery.GalleryThumbnailCacheIdentity
 import com.bownee.lenswave.gallery.GalleryThumbnailCachePolicy
@@ -42,12 +42,12 @@ import com.bownee.lenswave.gallery.GalleryUiState
 import com.bownee.lenswave.gallery.GalleryUpdatePresenter
 import com.bownee.lenswave.gallery.GalleryViewModel
 import com.bownee.lenswave.gallery.LibraryAction
-import com.bownee.lenswave.gallery.PhotoDeletionExecutor
 import com.bownee.lenswave.gallery.ProtonThumbnailImageSource
 import com.bownee.lenswave.proton.ProtonAlbum
 import com.bownee.lenswave.update.AppUpdateChecker
 import com.bownee.lenswave.update.UpdateAvailableDialogFragment
 import com.bownee.lenswave.viewer.PhotoViewerActivity
+import com.bownee.lenswave.viewer.ViewerPrivacySettings
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -66,20 +66,21 @@ import javax.inject.Inject
 @AndroidEntryPoint
 class GalleryActivity :
     FragmentActivity(),
-    UpdateAvailableDialogFragment.Listener {
+    UpdateAvailableDialogFragment.Listener,
+    TrashConfirmationDialogFragment.Listener {
     @Inject lateinit var accountManager: AccountManager
 
     @Inject lateinit var authOrchestrator: AuthOrchestrator
 
     @Inject lateinit var thumbnailSource: ProtonThumbnailImageSource
 
-    @Inject lateinit var photoDeletionExecutor: PhotoDeletionExecutor
-
     @Inject lateinit var observeUserSettings: ObserveUserSettings
 
     @Inject lateinit var updateTelemetry: PerformUpdateTelemetry
 
     @Inject lateinit var appUpdateChecker: AppUpdateChecker
+
+    @Inject lateinit var viewerPrivacySettings: ViewerPrivacySettings
 
     private val viewModel: GalleryViewModel by lazy {
         ViewModelProvider(this)[GalleryViewModel::class.java]
@@ -114,8 +115,9 @@ class GalleryActivity :
                 groupingGeneration.update { generation -> generation + 1 }
             }
         }
-    private val scrollPositions = GalleryScrollPositionStore()
     private var pendingScrollRestore: GalleryDestination? = null
+    private var pendingSelectionRestore = false
+    private var viewerLaunched = false
     private var safeBottom = 0
     private var thumbnailCacheIdentity: GalleryThumbnailCacheIdentity? = null
 
@@ -152,16 +154,11 @@ class GalleryActivity :
                 observeUserSettings = observeUserSettings,
                 updateTelemetry = updateTelemetry,
                 currentUserId = { currentUiState.currentUserId },
+                privacySettings = viewerPrivacySettings,
                 onConnectProton = ::connectProton,
                 onDisconnectProton = viewModel::disconnectProton,
             )
-        deletionCoordinator =
-            GalleryDeletionCoordinator(
-                activity = this,
-                deletionExecutor = photoDeletionExecutor,
-                currentUserId = { currentUiState.currentUserId },
-                onSelectionCleared = { adapter.clearSelection() },
-            )
+        deletionCoordinator = GalleryDeletionCoordinator(activity = this)
         buildInterface()
         onBackPressedDispatcher.addCallback(
             this,
@@ -179,12 +176,14 @@ class GalleryActivity :
 
     override fun onResume() {
         super.onResume()
+        viewerLaunched = false
         viewModel.resumeThumbnailDownloads()
         updatePresenter.showPendingUpdate()
     }
 
     override fun onDestroy() {
         if (this::screen.isInitialized) screen.dispose()
+        settingsPresenter.dispose()
         unregisterReceiver(timeChangeReceiver)
         authCoordinator.unregister()
         super.onDestroy()
@@ -202,12 +201,23 @@ class GalleryActivity :
 
     override fun onSaveInstanceState(outState: Bundle) {
         updatePresenter.save(outState)
+        saveScrollPosition()
         super.onSaveInstanceState(outState)
+    }
+
+    /** Hands the position of the page on screen to the view model, which outlives this activity. */
+    private fun saveScrollPosition() {
+        val destination = renderedDestination ?: return
+        // A restore still pending means the list does not show that page's position yet.
+        if (pendingScrollRestore == destination) return
+        screen.captureScrollPosition()?.let { position -> viewModel.saveScrollPosition(destination, position) }
     }
 
     override fun onUpdateRequested() = updatePresenter.onUpdateRequested()
 
     override fun onUpdateSnoozed(versionName: String) = updatePresenter.onUpdateSnoozed(versionName)
+
+    override fun onTrashConfirmed(nodeUids: List<String>) = viewModel.trashPhotos(nodeUids)
 
     private fun buildInterface() {
         screen =
@@ -249,6 +259,14 @@ class GalleryActivity :
                 viewModel.runPeriodicSync()
             }
         }
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                viewModel.mutationEvents.collect { event ->
+                    if (event is GalleryMutationEvent.Trashed) adapter.clearSelection()
+                    deletionCoordinator.showOutcome(event)
+                }
+            }
+        }
     }
 
     /**
@@ -272,12 +290,9 @@ class GalleryActivity :
             val rows = buildRows(state.content)
             if (destinationChanged) {
                 // The list still shows the previous page here, so its position can be captured.
-                renderedDestination?.let { previousDestination ->
-                    screen.captureScrollPosition()?.let { position ->
-                        scrollPositions.save(previousDestination, position)
-                    }
-                }
+                saveScrollPosition()
                 pendingScrollRestore = state.destination
+                pendingSelectionRestore = true
             }
             adapter.submitRows(rows)
             renderedDestination = state.destination
@@ -285,12 +300,24 @@ class GalleryActivity :
             renderedGrouping = grouping
         }
         currentUiState = state
-        if (contentChanged || destinationChanged) restorePendingScrollPosition(state)
+        if (contentChanged || destinationChanged) {
+            restorePendingScrollPosition(state)
+            restorePendingSelection(state)
+        }
         renderEmptyState(state.emptyState)
         updateNavigationControls()
-        if (destinationChanged) {
-            adapter.clearSelection()
-        }
+    }
+
+    /**
+     * Applies the view model's selection to the grid: empty after a navigation, or the selection
+     * kept across a recreation once the page's rows are there to carry it.
+     */
+    private fun restorePendingSelection(state: GalleryUiState) {
+        if (!pendingSelectionRestore) return
+        val selection = viewModel.selectedStableIds
+        if (selection.isNotEmpty() && adapter.count == 0 && state.emptyState == null) return
+        pendingSelectionRestore = false
+        adapter.setSelection(selection)
     }
 
     /** The panel is small but re-applying it (three texts and a listener) on every publish is not free. */
@@ -401,14 +428,24 @@ class GalleryActivity :
         settingsPresenter.showMenu(screen.settingsButton)
     }
 
+    /** A second tap before the viewer is up must not open a second viewer; the guard lifts on resume. */
     private fun openPhoto(photo: GalleryAsset) {
         val userId = currentUiState.currentUserId ?: return
+        if (viewerLaunched) return
+        viewerLaunched = true
         viewerLauncher.launch(
-            PhotoViewerActivity.createIntent(this, photo, userId, currentUiState.visibleAssets),
+            PhotoViewerActivity.createIntent(
+                this,
+                photo,
+                userId,
+                currentUiState.visibleAssets,
+                currentUiState.destination,
+            ),
         )
     }
 
     private fun showSelection(selected: List<GalleryAsset>) {
+        viewModel.setSelection(selected.mapTo(LinkedHashSet(selected.size)) { it.stableId })
         screen.renderSelection(selectedCount = selected.size)
         updateNavigationControls()
     }
@@ -448,7 +485,7 @@ class GalleryActivity :
     private fun restorePendingScrollPosition(state: GalleryUiState) {
         val destination = pendingScrollRestore ?: return
         if (destination != state.destination) return
-        val savedPosition = scrollPositions.positionFor(destination)
+        val savedPosition = viewModel.scrollPositions.positionFor(destination)
         if (savedPosition != null &&
             savedPosition.firstVisiblePosition > 0 &&
             adapter.count == 0 &&

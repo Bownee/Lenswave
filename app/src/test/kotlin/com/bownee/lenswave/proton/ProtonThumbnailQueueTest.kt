@@ -260,6 +260,38 @@ class ProtonThumbnailQueueTest {
         }
 
     @Test
+    fun aWriteThatKeepsFailingIsGivenUpOnUntilTheNextChange() =
+        runTest {
+            val store = FakeStore()
+            val failures = mutableListOf<Throwable>()
+            val queue =
+                ProtonThumbnailQueue(store, FakeClock(), ProtonQueueName.THUMBNAILS, backgroundScope, failures::add)
+            queue.replaceSource(USER_ID, "timeline", candidates("a", "b"))
+            queue.claimReady(USER_ID, limit = 2)
+            queue.flush(USER_ID)
+            store.failWrites = true
+            val attemptsBefore = store.writeAttempts
+            queue.settle(USER_ID, setOf("a"), emptySet())
+
+            advanceTimeBy(ProtonQueueFlushPolicy.FLUSH_DELAY_MILLIS)
+            runCurrent()
+            // The first write and every retry the chain allows; then it stops asking.
+            advanceTimeBy(
+                ProtonQueueFlushPolicy.MAX_WRITE_RETRY_DELAY_MILLIS * (ProtonQueueFlushPolicy.MAX_WRITE_RETRIES + 5),
+            )
+            runCurrent()
+            assertEquals(1 + ProtonQueueFlushPolicy.MAX_WRITE_RETRIES, store.writeAttempts - attemptsBefore)
+            assertEquals(1, failures.size)
+
+            // The next change starts a fresh chain, and a disk that works again gets the write.
+            store.failWrites = false
+            queue.settle(USER_ID, setOf("b"), emptySet())
+            advanceTimeBy(ProtonQueueFlushPolicy.FLUSH_DELAY_MILLIS)
+            runCurrent()
+            assertEquals(emptyList<ProtonThumbnailQueueEntry>(), store.entries.getValue(USER_ID))
+        }
+
+    @Test
     fun forgettingAUserDiscardsItsPendingWrite() =
         runTest {
             val store = FakeStore()
@@ -554,6 +586,9 @@ class ProtonThumbnailQueueTest {
         val entries = mutableMapOf<String, List<ProtonThumbnailQueueEntry>>()
         val previewEntries = mutableMapOf<String, List<ProtonThumbnailQueueEntry>>()
         var writeCount = 0
+
+        /** Every call, the refused ones included; [writeCount] counts only the writes that landed. */
+        var writeAttempts = 0
         var readCount = 0
         var failWrites = false
         var onRead: () -> Unit = {}
@@ -572,6 +607,7 @@ class ProtonThumbnailQueueTest {
             queue: ProtonQueueName,
             entries: List<ProtonThumbnailQueueEntry>,
         ) {
+            writeAttempts++
             if (failWrites) throw java.io.IOException("disk full")
             writeCount++
             entriesFor(queue)[userId] = entries.toList()

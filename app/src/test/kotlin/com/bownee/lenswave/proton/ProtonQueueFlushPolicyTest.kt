@@ -63,6 +63,16 @@ class ProtonQueueFlushPolicyTest {
         )
     }
 
+    @Test
+    fun `a failing write is given up on after a few retries`() {
+        val retries = ProtonQueueFlushPolicy.MAX_WRITE_RETRIES
+        assertTrue(retries in 3..10)
+        assertTrue(ProtonQueueFlushPolicy.shouldRetryAfterFailedWrite(1))
+        assertTrue(ProtonQueueFlushPolicy.shouldRetryAfterFailedWrite(retries))
+        assertFalse(ProtonQueueFlushPolicy.shouldRetryAfterFailedWrite(retries + 1))
+        assertFalse(ProtonQueueFlushPolicy.shouldRetryAfterFailedWrite(Int.MAX_VALUE))
+    }
+
     @Test(expected = IllegalArgumentException::class)
     fun `a retry needs a failure`() {
         ProtonQueueFlushPolicy.retryDelayAfterFailedWrite(0)

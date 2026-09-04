@@ -1,7 +1,6 @@
 package com.bownee.lenswave.viewer
 
 import android.app.Activity
-import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -10,30 +9,36 @@ import android.os.Bundle
 import android.text.format.DateFormat
 import android.view.KeyEvent
 import android.view.View
+import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.core.graphics.Insets
+import androidx.core.os.BundleCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.isVisible
 import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import com.bownee.lenswave.R
 import com.bownee.lenswave.UiStyle
 import com.bownee.lenswave.applyBottomOverlayInsets
 import com.bownee.lenswave.configureEdgeToEdgeWindow
 import com.bownee.lenswave.dp
 import com.bownee.lenswave.gallery.GalleryAsset
+import com.bownee.lenswave.gallery.GalleryDestination
+import com.bownee.lenswave.gallery.GalleryNavigationCodec
 import com.bownee.lenswave.gallery.MediaKind
 import com.bownee.lenswave.gallery.PhotoDeletionDecision
-import com.bownee.lenswave.gallery.PhotoDeletionExecutor
 import com.bownee.lenswave.gallery.PhotoDeletionPolicy
 import com.bownee.lenswave.gallery.ProtonOriginalMediaSource
-import com.bownee.lenswave.gallery.ProtonPhotoMutations
 import com.bownee.lenswave.gallery.ProtonThumbnailImageSource
+import com.bownee.lenswave.gallery.StoredGalleryNavigation
+import com.bownee.lenswave.gallery.TrashConfirmationDialogFragment
 import com.bownee.lenswave.metadata.PhotoMetadataHints
 import com.bownee.lenswave.metadata.PhotoMetadataReader
 import dagger.hilt.android.AndroidEntryPoint
@@ -60,16 +65,20 @@ import kotlin.math.roundToInt
  * [ViewerVideoController].
  */
 @AndroidEntryPoint
-class PhotoViewerActivity : FragmentActivity() {
+class PhotoViewerActivity :
+    FragmentActivity(),
+    TrashConfirmationDialogFragment.Listener {
     @Inject lateinit var originalMedia: ProtonOriginalMediaSource
 
     @Inject lateinit var thumbnailSource: ProtonThumbnailImageSource
 
-    @Inject lateinit var photoMutations: ProtonPhotoMutations
-
     @Inject lateinit var metadataReader: PhotoMetadataReader
 
-    @Inject lateinit var photoDeletionExecutor: PhotoDeletionExecutor
+    @Inject lateinit var mutationCoordinator: ViewerMutationCoordinator
+
+    @Inject lateinit var navigationSourceProvider: PhotoNavigationSourceProvider
+
+    @Inject lateinit var privacySettings: ViewerPrivacySettings
 
     private lateinit var screen: PhotoViewerScreen
     private val root get() = screen.root
@@ -96,13 +105,33 @@ class PhotoViewerActivity : FragmentActivity() {
     private lateinit var request: PhotoRequest
     private var navigationRequests: MutableList<PhotoRequest> = mutableListOf()
 
-    /** The gallery's full list and where [navigationRequests] sits in it; null after a process death. */
+    /** Index of the first entry of [navigationRequests] in the gallery's list; -1 when unknown. */
+    private var navigationStart = -1
+
+    /** Size of the gallery list the window was cut from; -1 when unknown. */
+    private var navigationTotal = -1
+
+    /** The gallery page the list came from, for rebuilding it after a process death. */
+    private var sourceDestination: GalleryDestination? = null
+    private var navigationRehydration: Job? = null
+    private var navigationRehydrationFailed = false
+    private var edgeToast: Toast? = null
+
+    /** A zoom kept across recreation, applied once the restored photo's original is decoded. */
+    private var pendingZoomFactor: Float? = null
+
+    /** The gallery's full list, when it is still in the process and lines up with [navigationRequests]. */
     private var navigationSource: PhotoNavigationSources.Source? = null
-    private var navigationWindow: PhotoNavigationWindowPolicy.Window? = null
+    private val navigationWindow: PhotoNavigationWindowPolicy.Window?
+        get() =
+            navigationStart.takeIf { it >= 0 }?.let {
+                PhotoNavigationWindowPolicy.Window(
+                    it,
+                    it + navigationRequests.size,
+                )
+            }
     private var resolvedUri: Uri? = null
     private var photoTransitioning = false
-    private var deletionInProgress = false
-    private var favoriteInProgress = false
     private var dismissing = false
     private var photoReady = false
     private var previewStableId: String? = null
@@ -114,23 +143,200 @@ class PhotoViewerActivity : FragmentActivity() {
     /** Set in onDestroy; posted work that outlives the Activity checks it and does nothing. */
     private var destroyed = false
 
-    /** Accumulates what the gallery must refresh; a later result must not drop an earlier flag. */
+    /**
+     * Accumulates what the gallery must refresh; a later result must not drop an earlier flag,
+     * and a recreation must not drop any of them either (see [onSaveInstanceState]).
+     */
     private val resultIntent = Intent()
+
+    /** A mutation of the photo on screen is still running in [mutationCoordinator]. */
+    private val mutationInFlight: Boolean get() = mutationCoordinator.isInFlight(request.stableId)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        request = PhotoRequest.from(intent)
-        navigationRequests = PhotoRequest.navigationFrom(intent).ifEmpty { listOf(request) }.toMutableList()
+        // Set before any content: a secure window keeps the photos out of screenshots and recordings.
+        if (privacySettings.blockScreenshots) {
+            window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
+        }
+        restoreNavigation(savedInstanceState)
         restoreNavigationSource()
+        // A restored window may already have its edge near; the same check a swipe makes.
+        extendNavigationWindow()
+        restoreResult(savedInstanceState)
         configureEdgeToEdgeWindow()
         buildInterface()
+        restoreViewingState(savedInstanceState)
         onBackPressedDispatcher.addCallback(
             this,
             object : OnBackPressedCallback(true) {
                 override fun handleOnBackPressed() = handleBack()
             },
         )
+        observeMutationOutcomes()
         loadPhoto()
+    }
+
+    /**
+     * The photo on screen and the navigation window around it go to the saved state, so a
+     * recreated viewer (a rotation, or a process death) reopens where the user was rather than
+     * where the gallery opened it. The window is cut down to the policy's radius around the
+     * current photo: a long swipe run can have grown it to hundreds of entries, and the state
+     * bundle has a hard size limit.
+     */
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putParcelable(STATE_REQUEST, request)
+        val local = navigationRequests.indexOfFirst { it.stableId == request.stableId }.coerceAtLeast(0)
+        val kept = PhotoNavigationWindowPolicy.initial(local, navigationRequests.size)
+        outState.putParcelableArrayList(STATE_NAVIGATION, ArrayList(navigationRequests.subList(kept.start, kept.end)))
+        outState.putInt(STATE_NAVIGATION_START, if (navigationStart < 0) -1 else navigationStart + kept.start)
+        outState.putInt(STATE_NAVIGATION_TOTAL, navigationTotal)
+        RESULT_EXTRAS.forEach { extra -> outState.putBoolean(extra, resultIntent.getBooleanExtra(extra, false)) }
+        // How the photo is being looked at: the open sheet, the zoom, and where a video is.
+        outState.putBoolean(STATE_DETAILS_SHOWN, details.shown)
+        outState.putFloat(STATE_ZOOM_FACTOR, photoView.zoomFactor())
+        video.playbackState()?.let { playback ->
+            outState.putLong(STATE_VIDEO_POSITION, playback.positionMillis)
+            outState.putBoolean(STATE_VIDEO_PLAY_WHEN_READY, playback.playWhenReady)
+        }
+        super.onSaveInstanceState(outState)
+    }
+
+    /** Re-applies what [onSaveInstanceState] kept of how the photo was being looked at; call once the views exist. */
+    private fun restoreViewingState(savedInstanceState: Bundle?) {
+        if (savedInstanceState == null) return
+        if (savedInstanceState.getBoolean(STATE_DETAILS_SHOWN, false)) details.restoreShown()
+        val zoom = savedInstanceState.getFloat(STATE_ZOOM_FACTOR, 1f)
+        if (zoom > ZOOM_RESTORE_THRESHOLD) pendingZoomFactor = zoom
+        if (savedInstanceState.containsKey(STATE_VIDEO_POSITION)) {
+            video.restorePlayback(
+                ViewerPlaybackState(
+                    positionMillis = savedInstanceState.getLong(STATE_VIDEO_POSITION, 0L),
+                    playWhenReady = savedInstanceState.getBoolean(STATE_VIDEO_PLAY_WHEN_READY, true),
+                ),
+            )
+        }
+    }
+
+    /** The saved state wins over the intent: the intent describes where the viewer was opened, not where it is. */
+    private fun restoreNavigation(savedInstanceState: Bundle?) {
+        val savedRequest =
+            savedInstanceState?.let {
+                BundleCompat.getParcelable(
+                    it,
+                    STATE_REQUEST,
+                    PhotoRequest::class.java,
+                )
+            }
+        if (savedInstanceState != null && savedRequest != null) {
+            request = savedRequest
+            navigationRequests =
+                BundleCompat
+                    .getParcelableArrayList(savedInstanceState, STATE_NAVIGATION, PhotoRequest::class.java)
+                    .orEmpty()
+                    .ifEmpty { listOf(request) }
+                    .toMutableList()
+            navigationStart = savedInstanceState.getInt(STATE_NAVIGATION_START, -1)
+            navigationTotal = savedInstanceState.getInt(STATE_NAVIGATION_TOTAL, -1)
+        } else {
+            request = PhotoRequest.from(intent)
+            navigationRequests = PhotoRequest.navigationFrom(intent).ifEmpty { listOf(request) }.toMutableList()
+            navigationStart = intent.getIntExtra(EXTRA_NAVIGATION_START, -1)
+            navigationTotal = intent.getIntExtra(EXTRA_NAVIGATION_TOTAL, -1)
+        }
+        sourceDestination = sourceDestination(intent)
+    }
+
+    /** Whether the gallery list had entries beyond the window in the direction of [offset]. */
+    private fun galleryContinues(offset: Int): Boolean {
+        val window = navigationWindow ?: return false
+        return if (offset < 0) window.start > 0 else navigationTotal > window.end
+    }
+
+    /**
+     * After a process death the in-process list is gone. This rebuilds it from the page's cache
+     * around the current photo, once, the first time the window would need to grow; while it is
+     * loading (or if it cannot be rebuilt) a swipe past the edge says so instead of bouncing.
+     */
+    private fun rehydrateNavigationSource() {
+        if (navigationRehydration != null || navigationRehydrationFailed) return
+        val destination = sourceDestination ?: return
+        val userId = UserId(request.userId)
+        navigationRehydration =
+            lifecycleScope.launch {
+                val assets = withContext(Dispatchers.IO) { navigationSourceProvider.load(destination, userId) }
+                if (assets == null || !adoptNavigationSource(assets, userId)) navigationRehydrationFailed = true
+            }
+    }
+
+    /** Re-cuts the window from [assets] around the current photo, keeping entries already resolved. */
+    private fun adoptNavigationSource(
+        assets: List<GalleryAsset>,
+        userId: UserId,
+    ): Boolean {
+        val index = assets.indexOfFirst { it.stableId == request.stableId }
+        if (index < 0) return false
+        val window = PhotoNavigationWindowPolicy.initial(index, assets.size)
+        val existing = navigationRequests.associateBy { it.stableId }
+        navigationRequests =
+            assets.subList(window.start, window.end).mapTo(ArrayList(window.size)) { asset ->
+                existing[asset.stableId] ?: PhotoRequest.from(asset, userId.id)
+            }
+        navigationStart = window.start
+        navigationTotal = assets.size
+        navigationSource = PhotoNavigationSources.Source(PhotoNavigationSources.NO_TOKEN, userId.id, assets)
+        return true
+    }
+
+    private fun showNavigationEdge(offset: Int) {
+        // With the list at hand the window grows before the edge, so an edge here is the gallery's own.
+        if (navigationSource != null || !galleryContinues(offset)) return
+        rehydrateNavigationSource()
+        edgeToast?.cancel()
+        edgeToast = Toast.makeText(this, R.string.no_more_photos_loaded, Toast.LENGTH_SHORT).also { it.show() }
+    }
+
+    private fun restoreResult(savedInstanceState: Bundle?) {
+        if (savedInstanceState == null) return
+        RESULT_EXTRAS.forEach { extra -> if (savedInstanceState.getBoolean(extra, false)) recordResult(extra) }
+    }
+
+    private fun recordResult(extra: String) {
+        setResult(Activity.RESULT_OK, resultIntent.putExtra(extra, true))
+    }
+
+    /** Applies the outcome of every favourite or trash call, including one that finished while recreating. */
+    private fun observeMutationOutcomes() {
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                mutationCoordinator.outcomes.collect { outcomes -> outcomes.forEach(::applyMutationOutcome) }
+            }
+        }
+    }
+
+    private fun applyMutationOutcome(outcome: ViewerMutationCoordinator.Outcome) {
+        mutationCoordinator.consume(outcome)
+        when (outcome) {
+            is ViewerMutationCoordinator.Outcome.FavoriteSet -> {
+                if (outcome.succeeded) {
+                    updateNavigationRequest(outcome.stableId) { item -> item.withFavorite(outcome.favorite) }
+                    if (request.stableId == outcome.stableId) setCurrentRequest(request.withFavorite(outcome.favorite))
+                    recordResult(EXTRA_FAVORITE_CHANGED)
+                } else {
+                    Toast.makeText(this, R.string.could_not_update_favorite, Toast.LENGTH_LONG).show()
+                }
+                updateFavoriteButton()
+            }
+
+            is ViewerMutationCoordinator.Outcome.Trashed -> {
+                if (outcome.succeeded) {
+                    recordResult(EXTRA_PHOTO_DELETED)
+                    if (request.stableId == outcome.stableId) finish()
+                } else {
+                    Toast.makeText(this, R.string.could_not_move_to_proton_trash, Toast.LENGTH_LONG).show()
+                    setActionsEnabled(actionsEnabled)
+                }
+            }
+        }
     }
 
     override fun onDestroy() {
@@ -268,6 +474,8 @@ class PhotoViewerActivity : FragmentActivity() {
                             this@PhotoViewerActivity.commitNavigation(adjacent)
 
                         override fun adoptPreview(bitmap: Bitmap) = this@PhotoViewerActivity.adoptPreview(bitmap)
+
+                        override fun onNavigationEdge(offset: Int) = showNavigationEdge(offset)
                     },
             )
         video =
@@ -311,51 +519,51 @@ class PhotoViewerActivity : FragmentActivity() {
             )
     }
 
-    /** The single place the current request changes, so the intent never lags it. */
+    /** The single place the current request changes; [onSaveInstanceState] carries it across recreation. */
     private fun setCurrentRequest(value: PhotoRequest) {
         request = value
-        request.writeTo(intent)
     }
 
     /**
-     * Finds the in-process gallery list the intent's window was cut from. The window is trusted
-     * only if it still lines up with that list; after a process death there is no list and the
-     * viewer keeps the window the intent carried.
+     * Finds the in-process gallery list the window was cut from. The window is trusted only if
+     * it still lines up with that list; after a process death there is no list and the viewer
+     * keeps the window it was restored with.
      */
     private fun restoreNavigationSource() {
         val source = PhotoNavigationSources.find(intent.getLongExtra(EXTRA_NAVIGATION_TOKEN, -1L)) ?: return
-        val start = intent.getIntExtra(EXTRA_NAVIGATION_START, -1)
-        val window = PhotoNavigationWindowPolicy.Window(start, start + navigationRequests.size)
+        val window = navigationWindow ?: return
         val linesUp =
-            start >= 0 &&
-                window.end <= source.assets.size &&
-                source.assets[start].stableId == navigationRequests.first().stableId &&
+            window.end <= source.assets.size &&
+                source.assets[window.start].stableId == navigationRequests.first().stableId &&
                 source.assets[window.end - 1].stableId == navigationRequests.last().stableId
         if (!linesUp) return
         navigationSource = source
-        navigationWindow = window
     }
 
     /**
      * Grows the navigation window from the gallery list while the user swipes towards an edge.
      * Existing entries are kept (they may carry a resolved name or a changed favourite); the
-     * list is replaced rather than mutated so the swipe controller rebuilds its index, and the
-     * intent's window follows so a recreated Activity starts from where the user is.
+     * list is replaced rather than mutated so the swipe controller rebuilds its index.
      */
     private fun extendNavigationWindow() {
-        val source = navigationSource ?: return
         val window = navigationWindow ?: return
         val local = navigationRequests.indexOfFirst { it.stableId == request.stableId }
         if (local < 0) return
+        val source = navigationSource
+        if (source == null) {
+            // Nothing to grow from in the process; rebuild the list once the edge comes near.
+            if (PhotoNavigationWindowPolicy.extended(window, window.start + local, navigationTotal) != null) {
+                rehydrateNavigationSource()
+            }
+            return
+        }
         val grown = PhotoNavigationWindowPolicy.extended(window, window.start + local, source.assets.size) ?: return
         val extended = ArrayList<PhotoRequest>(grown.size)
         source.assets.subList(grown.start, window.start).mapTo(extended) { PhotoRequest.from(it, source.userId) }
         extended.addAll(navigationRequests)
         source.assets.subList(window.end, grown.end).mapTo(extended) { PhotoRequest.from(it, source.userId) }
         navigationRequests = extended
-        navigationWindow = grown
-        intent.putParcelableArrayListExtra(EXTRA_NAVIGATION, ArrayList(extended))
-        intent.putExtra(EXTRA_NAVIGATION_START, grown.start)
+        navigationStart = grown.start
     }
 
     /**
@@ -595,6 +803,10 @@ class PhotoViewerActivity : FragmentActivity() {
                     photoReady = true
                     hideLoadingPanel()
                     setActionsEnabled(true)
+                    pendingZoomFactor?.let { zoom ->
+                        pendingZoomFactor = null
+                        photoView.restoreZoomFactor(zoom)
+                    }
                     if (details.shown) details.ensureMetadataLoaded()
                     postDetailsSynchronization()
                     if (thumbnailPreview.isVisible) {
@@ -681,6 +893,9 @@ class PhotoViewerActivity : FragmentActivity() {
 
     /** Called by the swipe controller once the current media has slid away. */
     private fun commitNavigation(adjacent: PhotoRequest) {
+        // A zoom or playback position kept for the restored photo has no business on its neighbour.
+        pendingZoomFactor = null
+        video.discardPendingPlayback()
         setCurrentRequest(adjacent)
         extendNavigationWindow()
         resetPhotoStateForNavigation()
@@ -775,53 +990,22 @@ class PhotoViewerActivity : FragmentActivity() {
 
     private fun setActionsEnabled(enabled: Boolean) {
         actionsEnabled = enabled
-        deleteButton.isEnabled = enabled
-        deleteButton.alpha = if (enabled) 1f else 0.45f
+        deleteButton.isEnabled = enabled && !mutationInFlight
+        deleteButton.alpha = if (deleteButton.isEnabled) 1f else 0.45f
         updateFavoriteButton(enabled)
     }
 
     private fun updateFavoriteButton(enabled: Boolean = actionsEnabled) {
         favoriteButton.visibility = View.VISIBLE
-        favoriteButton.isEnabled = enabled && !favoriteInProgress
+        favoriteButton.isEnabled = enabled && !mutationInFlight
         favoriteButton.alpha = if (favoriteButton.isEnabled) 1f else 0.45f
         UiStyle.applyFavoriteIcon(favoriteButton, request.isFavorite)
     }
 
+    /** The call runs in [mutationCoordinator]; its outcome comes back through [applyMutationOutcome]. */
     private fun toggleFavorite() {
-        if (favoriteInProgress) return
-        val userId = UserId(request.userId)
-        val nodeUids = listOf(request.nodeUid)
-        val favorite = !request.isFavorite
-        favoriteInProgress = true
-        updateFavoriteButton()
-        lifecycleScope.launch {
-            try {
-                val result = photoMutations.setFavorite(userId, nodeUids, favorite)
-                if (result.updatedCount != 1) {
-                    Toast
-                        .makeText(
-                            this@PhotoViewerActivity,
-                            R.string.could_not_update_favorite,
-                            Toast.LENGTH_LONG,
-                        ).show()
-                    return@launch
-                }
-                setCurrentRequest(request.withFavorite(favorite))
-                updateNavigationRequest(request.stableId) { item -> item.withFavorite(favorite) }
-                setResult(Activity.RESULT_OK, resultIntent.putExtra(EXTRA_FAVORITE_CHANGED, true))
-            } catch (error: CancellationException) {
-                throw error
-            } catch (_: Throwable) {
-                Toast
-                    .makeText(
-                        this@PhotoViewerActivity,
-                        R.string.could_not_update_favorite,
-                        Toast.LENGTH_LONG,
-                    ).show()
-            } finally {
-                favoriteInProgress = false
-                updateFavoriteButton()
-            }
+        if (mutationCoordinator.setFavorite(UserId(request.userId), request, !request.isFavorite)) {
+            updateFavoriteButton()
         }
     }
 
@@ -913,54 +1097,27 @@ class PhotoViewerActivity : FragmentActivity() {
     }
 
     private fun confirmTrashProtonPhoto() {
-        AlertDialog
-            .Builder(this)
-            .setTitle(R.string.move_to_proton_trash_question)
-            .setMessage(R.string.recover_from_proton_trash)
-            .setNegativeButton(R.string.cancel, null)
-            .setPositiveButton(R.string.move_to_trash) { _, _ -> trashProtonPhoto() }
-            .show()
-    }
-
-    private fun trashProtonPhoto() {
-        if (deletionInProgress) return
-        val userId = UserId(request.userId)
-        val nodeUid = request.nodeUid
-        deletionInProgress = true
-        setActionsEnabled(false)
-        lifecycleScope.launch {
-            try {
-                val result = photoDeletionExecutor.trashProton(userId, listOf(nodeUid))
-                if (result.successfulCount == 1) {
-                    finishDeleted()
-                } else {
-                    deletionInProgress = false
-                    setActionsEnabled(true)
-                    Toast
-                        .makeText(
-                            this@PhotoViewerActivity,
-                            R.string.could_not_move_to_proton_trash,
-                            Toast.LENGTH_LONG,
-                        ).show()
-                }
-            } catch (error: CancellationException) {
-                throw error
-            } catch (_: Throwable) {
-                deletionInProgress = false
-                setActionsEnabled(true)
-                Toast
-                    .makeText(
-                        this@PhotoViewerActivity,
-                        R.string.could_not_move_to_proton_trash,
-                        Toast.LENGTH_LONG,
-                    ).show()
-            }
+        if (supportFragmentManager.isStateSaved ||
+            supportFragmentManager.findFragmentByTag(TrashConfirmationDialogFragment.TAG) != null
+        ) {
+            return
         }
+        TrashConfirmationDialogFragment
+            .create(listOf(request.nodeUid), singlePhoto = true)
+            .show(supportFragmentManager, TrashConfirmationDialogFragment.TAG)
     }
 
-    private fun finishDeleted() {
-        setResult(Activity.RESULT_OK, resultIntent.putExtra(EXTRA_PHOTO_DELETED, true))
-        finish()
+    /** The dialog may have been answered on a recreated activity; the photo it named is the one to trash. */
+    override fun onTrashConfirmed(nodeUids: List<String>) {
+        val target = navigationRequests.firstOrNull { it.nodeUid in nodeUids } ?: return
+        trashProtonPhoto(target)
+    }
+
+    /** The call runs in [mutationCoordinator]; its outcome comes back through [applyMutationOutcome]. */
+    private fun trashProtonPhoto(target: PhotoRequest) {
+        if (mutationCoordinator.trash(UserId(target.userId), target) && target.stableId == request.stableId) {
+            setActionsEnabled(false)
+        }
     }
 
     private fun applySystemInsets() {
@@ -1083,17 +1240,40 @@ class PhotoViewerActivity : FragmentActivity() {
         const val EXTRA_NAVIGATION = "com.bownee.lenswave.extra.NAVIGATION"
         const val EXTRA_NAVIGATION_START = "com.bownee.lenswave.extra.NAVIGATION_START"
         const val EXTRA_NAVIGATION_TOKEN = "com.bownee.lenswave.extra.NAVIGATION_TOKEN"
+        const val EXTRA_NAVIGATION_TOTAL = "com.bownee.lenswave.extra.NAVIGATION_TOTAL"
+        const val EXTRA_SOURCE_DESTINATION = "com.bownee.lenswave.extra.SOURCE_DESTINATION"
+        const val EXTRA_SOURCE_ALBUM_UID = "com.bownee.lenswave.extra.SOURCE_ALBUM_UID"
+        const val EXTRA_SOURCE_ALBUM_NAME = "com.bownee.lenswave.extra.SOURCE_ALBUM_NAME"
+        const val EXTRA_SOURCE_TAG = "com.bownee.lenswave.extra.SOURCE_TAG"
+        private val RESULT_EXTRAS = listOf(EXTRA_PHOTO_DELETED, EXTRA_FAVORITE_CHANGED)
+        private const val STATE_REQUEST = "viewer.request"
+        private const val STATE_NAVIGATION = "viewer.navigation"
+        private const val STATE_NAVIGATION_START = "viewer.navigation-start"
+        private const val STATE_NAVIGATION_TOTAL = "viewer.navigation-total"
+        private const val STATE_DETAILS_SHOWN = "viewer.details-shown"
+        private const val STATE_ZOOM_FACTOR = "viewer.zoom-factor"
+        private const val STATE_VIDEO_POSITION = "viewer.video-position"
+        private const val STATE_VIDEO_PLAY_WHEN_READY = "viewer.video-play-when-ready"
+
+        /** A zoom this close to fit is not worth re-applying over the clean fit the load produces. */
+        private const val ZOOM_RESTORE_THRESHOLD = 1.05f
         private const val DETAILS_MINIMUM_HEIGHT_FRACTION = 0.55f
         private const val MEDIA_ACTION_GAP_DP = 8
         private const val VIDEO_CONTROLS_HEIGHT_DP = 80
         private const val FULL_QUALITY_CROSSFADE_MILLIS = 180L
         private const val LOADING_PANEL_DELAY_MILLIS = 300L
 
+        /**
+         * [destination] names the gallery page [navigation] came from, so a viewer restored after
+         * a process death can rebuild the list from the page's cache (see
+         * [PhotoNavigationSourceProvider]).
+         */
         fun createIntent(
             context: Context,
             photo: GalleryAsset,
             userId: UserId,
             navigation: List<GalleryAsset> = listOf(photo),
+            destination: GalleryDestination? = null,
         ): Intent {
             val request = PhotoRequest.from(photo, userId.id)
             val currentIndex = navigation.indexOfFirst { it.stableId == photo.stableId }.coerceAtLeast(0)
@@ -1108,8 +1288,26 @@ class PhotoViewerActivity : FragmentActivity() {
                     },
                 )
                 putExtra(EXTRA_NAVIGATION_START, window.start)
+                putExtra(EXTRA_NAVIGATION_TOTAL, navigation.size)
                 putExtra(EXTRA_NAVIGATION_TOKEN, PhotoNavigationSources.publish(userId.id, navigation))
+                destination?.let { source ->
+                    val stored = GalleryNavigationCodec.encode(source)
+                    putExtra(EXTRA_SOURCE_DESTINATION, stored.destination)
+                    putExtra(EXTRA_SOURCE_ALBUM_UID, stored.albumUid)
+                    putExtra(EXTRA_SOURCE_ALBUM_NAME, stored.albumName)
+                    putExtra(EXTRA_SOURCE_TAG, stored.tag)
+                }
             }
         }
+
+        private fun sourceDestination(intent: Intent): GalleryDestination? =
+            GalleryNavigationCodec.decode(
+                StoredGalleryNavigation(
+                    destination = intent.getStringExtra(EXTRA_SOURCE_DESTINATION),
+                    albumUid = intent.getStringExtra(EXTRA_SOURCE_ALBUM_UID),
+                    albumName = intent.getStringExtra(EXTRA_SOURCE_ALBUM_NAME),
+                    tag = intent.getStringExtra(EXTRA_SOURCE_TAG),
+                ),
+            )
     }
 }

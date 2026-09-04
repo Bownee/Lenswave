@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.core.content.edit
 import com.bownee.lenswave.proton.ProtonAlbumReference
 import com.bownee.lenswave.proton.ProtonMediaTag
+import com.bownee.lenswave.viewer.ViewerPrivacySettings
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -87,6 +88,7 @@ internal object GalleryPreferenceWarmUp {
     fun warm(context: Context) {
         context.getSharedPreferences(SharedPreferencesGalleryNavigationStore.PREFERENCES_NAME, Context.MODE_PRIVATE).all
         context.getSharedPreferences(GalleryNotificationPermissionPrompter.PREFERENCES_NAME, Context.MODE_PRIVATE).all
+        context.getSharedPreferences(ViewerPrivacySettings.PREFERENCES_NAME, Context.MODE_PRIVATE).all
     }
 }
 

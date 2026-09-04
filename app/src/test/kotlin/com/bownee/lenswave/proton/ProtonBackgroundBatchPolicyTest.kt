@@ -108,6 +108,22 @@ class ProtonBackgroundBatchPolicyTest {
         assertNull(
             ProtonBackgroundBatchPolicy.idleWaitMillis(ProtonThumbnailQueueStep.Idle(hasPending = false), 120_000L),
         )
+        // The default cap is seconds, not minutes: the run holds a wakelock while it sleeps.
+        assertTrue(ProtonBackgroundBatchPolicy.MAX_IDLE_WAIT_MILLIS <= 10_000L)
+        assertNull(ProtonBackgroundBatchPolicy.idleWaitMillis(idle))
+        assertEquals(
+            ProtonBackgroundBatchPolicy.MAX_IDLE_WAIT_MILLIS,
+            ProtonBackgroundBatchPolicy.idleWaitMillis(
+                ProtonThumbnailQueueStep.Idle(
+                    hasPending = true,
+                    retryAfterMillis = ProtonBackgroundBatchPolicy.MAX_IDLE_WAIT_MILLIS,
+                ),
+            ),
+        )
+        assertEquals(
+            ProtonThumbnailWorkPolicy.FOREGROUND_BUSY_RETRY_MILLIS,
+            ProtonBackgroundBatchPolicy.idleWaitMillis(ProtonThumbnailWorkPolicy.foregroundBusyStep()),
+        )
         assertEquals(
             5L,
             ProtonBackgroundBatchPolicy
