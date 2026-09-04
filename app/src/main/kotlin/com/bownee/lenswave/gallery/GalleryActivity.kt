@@ -47,6 +47,7 @@ import com.bownee.lenswave.proton.ProtonAlbum
 import com.bownee.lenswave.update.AppUpdateChecker
 import com.bownee.lenswave.update.UpdateAvailableDialogFragment
 import com.bownee.lenswave.viewer.PhotoViewerActivity
+import com.bownee.lenswave.viewer.ViewerPrivacySettings
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -78,6 +79,8 @@ class GalleryActivity :
     @Inject lateinit var updateTelemetry: PerformUpdateTelemetry
 
     @Inject lateinit var appUpdateChecker: AppUpdateChecker
+
+    @Inject lateinit var viewerPrivacySettings: ViewerPrivacySettings
 
     private val viewModel: GalleryViewModel by lazy {
         ViewModelProvider(this)[GalleryViewModel::class.java]
@@ -151,6 +154,7 @@ class GalleryActivity :
                 observeUserSettings = observeUserSettings,
                 updateTelemetry = updateTelemetry,
                 currentUserId = { currentUiState.currentUserId },
+                privacySettings = viewerPrivacySettings,
                 onConnectProton = ::connectProton,
                 onDisconnectProton = viewModel::disconnectProton,
             )

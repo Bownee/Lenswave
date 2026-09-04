@@ -9,6 +9,7 @@ import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.lifecycleScope
 import com.bownee.lenswave.BuildConfig
 import com.bownee.lenswave.R
+import com.bownee.lenswave.viewer.ViewerPrivacySettings
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import me.proton.core.domain.entity.UserId
@@ -25,6 +26,7 @@ internal class GallerySettingsPresenter(
     private val observeUserSettings: ObserveUserSettings,
     private val updateTelemetry: PerformUpdateTelemetry,
     private val currentUserId: () -> UserId?,
+    private val privacySettings: ViewerPrivacySettings,
     private val onConnectProton: () -> Unit,
     private val onDisconnectProton: () -> Unit,
 ) {
@@ -41,11 +43,15 @@ internal class GallerySettingsPresenter(
                     menu.add(Menu.NONE, SETTINGS_DISCONNECT_PROTON, 0, R.string.disconnect_proton)
                 }
                 menu.add(Menu.NONE, SETTINGS_PRIVACY, 1, R.string.privacy_and_data)
+                menu.add(Menu.NONE, SETTINGS_BLOCK_SCREENSHOTS, 2, R.string.block_screenshots_in_viewer).apply {
+                    isCheckable = true
+                    isChecked = privacySettings.blockScreenshots
+                }
                 menu
                     .add(
                         Menu.NONE,
                         Menu.NONE,
-                        2,
+                        3,
                         activity.getString(R.string.app_version, BuildConfig.VERSION_NAME),
                     ).isEnabled = false
                 setOnMenuItemClickListener { item ->
@@ -53,6 +59,7 @@ internal class GallerySettingsPresenter(
                         SETTINGS_CONNECT_PROTON -> onConnectProton()
                         SETTINGS_DISCONNECT_PROTON -> confirmDisconnectProton()
                         SETTINGS_PRIVACY -> showPrivacySettings()
+                        SETTINGS_BLOCK_SCREENSHOTS -> privacySettings.blockScreenshots = !item.isChecked
                     }
                     true
                 }
@@ -134,5 +141,6 @@ internal class GallerySettingsPresenter(
         const val SETTINGS_CONNECT_PROTON = 1
         const val SETTINGS_DISCONNECT_PROTON = 2
         const val SETTINGS_PRIVACY = 3
+        const val SETTINGS_BLOCK_SCREENSHOTS = 4
     }
 }
