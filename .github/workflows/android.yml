@@ -27,9 +27,9 @@ jobs:
       pull-requests: write
       security-events: write
 
-  # Branch protection requires a check with exactly this name. A job called through a reusable
-  # workflow reports as "Verify / verify", so this gate carries the required name and only runs
-  # (and therefore only reports) when the verify job succeeded.
+  # Branch protection requires a check with exactly this name. Jobs called through a reusable
+  # workflow report as "Verify / <job>", so this gate carries the required name and only runs
+  # (and therefore only reports) when every verify job succeeded.
   gate:
     name: Test, lint, and build all runtime modes
     needs: verify
@@ -91,6 +91,19 @@ jobs:
           emulator-options: -no-window -gpu software -noaudio -no-boot-anim -camera-back none
           script: echo "Generated AVD snapshot for caching."
 
+      # Both variants are compiled before the emulator boots so it is not sitting idle through
+      # the R8 pass, and the connected tasks below find their APKs up to date.
+      - name: Build device-test APKs
+        run: |
+          ./gradlew assembleDebug assembleDebugAndroidTest \
+            -Plenswave.includeX86TestAbi=true --stacktrace
+          ./gradlew assembleMinified assembleMinifiedAndroidTest \
+            -Plenswave.instrumentationBuildType=minified -Plenswave.includeX86TestAbi=true --stacktrace
+
+      - name: Verify minified instrumentation contract
+        shell: bash
+        run: scripts/verify-minified-contract.sh app/build/outputs/mapping/minified
+
       - name: Run minimum-SDK device tests
         uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
         with:
@@ -104,7 +117,6 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu software -no-snapshot-save -noaudio -no-boot-anim -camera-back none
           script: |
-            chmod +x gradlew
             ./gradlew connectedDebugAndroidTest -Plenswave.includeX86TestAbi=true --stacktrace
             ./gradlew connectedMinifiedAndroidTest -Plenswave.instrumentationBuildType=minified -Plenswave.includeX86TestAbi=true -Pandroid.testInstrumentationRunnerArguments.class=com.bownee.lenswave.proton.ProtonSdkJniContractInstrumentedTest --stacktrace
 

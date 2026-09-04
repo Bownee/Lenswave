@@ -22,7 +22,7 @@ Lenswave supports Android 10 (API 29) and later.
 Requirements: JDK 21, Android SDK platform 36 and build-tools 36.0.0.
 
 ```shell
-./gradlew testDebugUnitTest jacocoDebugCoverageVerification lintDebug lintRelease assembleDebug
+./gradlew testDebugUnitTest jacocoDebugCoverageVerification lintDebug assembleDebug
 ```
 
 Use `gradlew.bat` on Windows. Debug APKs are written to `app/build/outputs/apk/debug/`.
