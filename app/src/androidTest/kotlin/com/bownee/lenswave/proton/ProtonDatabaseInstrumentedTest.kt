@@ -15,13 +15,16 @@ class ProtonDatabaseInstrumentedTest {
     fun roomDatabaseIsEncrypted() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val secureFiles = SecureFileStore(context)
-        val database = context.getDatabasePath("proton-session.db")
-        val passphraseFile = java.io.File(context.noBackupFilesDir, "proton-session.key")
+        // Its own file and key scope: the app under test owns the real session database and may
+        // open it on a background thread at any time.
+        val database = context.getDatabasePath(DATABASE_NAME)
+        val passphraseFile = java.io.File(context.noBackupFilesDir, KEY_FILE_NAME)
         context.deleteDatabase(database.name)
         passphraseFile.delete()
-        secureFiles.deleteKey("proton-session-database-key")
+        secureFiles.deleteKey(KEY_SCOPE)
         try {
-            val room = ProtonCoreDatabase.create(context, DatabasePassphraseStore(context, secureFiles))
+            val passphrases = DatabasePassphraseStore(context, secureFiles, KEY_FILE_NAME, KEY_SCOPE)
+            val room = ProtonCoreDatabase.create(context, passphrases, DATABASE_NAME)
             try {
                 room.openHelper.writableDatabase
             } finally {
@@ -33,7 +36,13 @@ class ProtonDatabaseInstrumentedTest {
         } finally {
             context.deleteDatabase(database.name)
             passphraseFile.delete()
-            secureFiles.deleteKey("proton-session-database-key")
+            secureFiles.deleteKey(KEY_SCOPE)
         }
+    }
+
+    private companion object {
+        const val DATABASE_NAME = "instrumentation-session.db"
+        const val KEY_FILE_NAME = "instrumentation-session.key"
+        const val KEY_SCOPE = "instrumentation-session-database-key"
     }
 }

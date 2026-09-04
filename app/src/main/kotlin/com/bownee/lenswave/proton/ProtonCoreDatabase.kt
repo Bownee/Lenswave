@@ -149,14 +149,15 @@ abstract class ProtonCoreDatabase :
         fun create(
             context: Context,
             passphraseStore: DatabasePassphraseStore,
+            name: String = NAME,
         ): ProtonCoreDatabase {
             System.loadLibrary("sqlcipher")
             // The factory keeps this array by reference and SQLCipher reads it on the first real
             // open, so it must stay intact for the lifetime of the database. Never zero it here.
             val passphrase = passphraseStore.getOrCreate()
-            ProtonDatabaseKeyMigration.rekeyLegacyDatabase(context.getDatabasePath(NAME), passphrase)
+            ProtonDatabaseKeyMigration.rekeyLegacyDatabase(context.getDatabasePath(name), passphrase)
             return Room
-                .databaseBuilder(context, ProtonCoreDatabase::class.java, NAME)
+                .databaseBuilder(context, ProtonCoreDatabase::class.java, name)
                 .openHelperFactory(SupportOpenHelperFactory(passphrase))
                 .build()
         }

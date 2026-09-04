@@ -8,31 +8,38 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
-class DatabasePassphraseStore
+class DatabasePassphraseStore internal constructor(
+    context: Context,
+    private val secureFiles: SecureFileStore,
+    fileName: String,
+    private val scope: String,
+) {
     @Inject
     constructor(
         @ApplicationContext context: Context,
-        private val secureFiles: SecureFileStore,
-    ) {
-        private val passphraseFile = File(context.noBackupFilesDir, "proton-session.key")
+        secureFiles: SecureFileStore,
+    ) : this(context, secureFiles, DEFAULT_FILE_NAME, DEFAULT_SCOPE)
 
-        @Synchronized
-        fun getOrCreate(): ByteArray {
-            if (passphraseFile.isFile) {
-                return secureFiles.read(DATABASE_KEY_SCOPE, passphraseFile)
-            }
-            val passphrase = ByteArray(PASSPHRASE_BYTES).also(SecureRandom()::nextBytes)
-            secureFiles.write(
-                DATABASE_KEY_SCOPE,
-                passphraseFile,
-                passphrase,
-                "Could not protect the Proton database key",
-            )
-            return passphrase
-        }
+    private val passphraseFile = File(context.noBackupFilesDir, fileName)
 
-        private companion object {
-            const val DATABASE_KEY_SCOPE = "proton-session-database-key"
-            const val PASSPHRASE_BYTES = 32
+    @Synchronized
+    fun getOrCreate(): ByteArray {
+        if (passphraseFile.isFile) {
+            return secureFiles.read(scope, passphraseFile)
         }
+        val passphrase = ByteArray(PASSPHRASE_BYTES).also(SecureRandom()::nextBytes)
+        secureFiles.write(
+            scope,
+            passphraseFile,
+            passphrase,
+            "Could not protect the Proton database key",
+        )
+        return passphrase
     }
+
+    private companion object {
+        const val DEFAULT_FILE_NAME = "proton-session.key"
+        const val DEFAULT_SCOPE = "proton-session-database-key"
+        const val PASSPHRASE_BYTES = 32
+    }
+}
