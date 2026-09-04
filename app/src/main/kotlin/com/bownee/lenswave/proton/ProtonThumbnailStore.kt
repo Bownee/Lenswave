@@ -9,6 +9,7 @@ import com.bownee.lenswave.LenswaveClock
 import com.bownee.lenswave.storage.AtomicFileStore
 import com.bownee.lenswave.storage.SecureFileStore
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
 import java.io.ByteArrayOutputStream
 import java.io.File
 import javax.inject.Inject
@@ -61,44 +62,56 @@ internal class ProtonThumbnailStore
             nodeUid: String,
         ): Bitmap? = bitmaps.get(ThumbnailKey(userId, nodeUid))?.takeUnless(Bitmap::isRecycled)
 
+        /**
+         * The decoded thumbnail, from memory or disk. [isActive] is consulted before the decrypt
+         * and again before the decode; when it turns false the load throws [CancellationException]
+         * instead of spending the decode on a cell that has scrolled away. Callers outside a
+         * coroutine leave it at its default.
+         */
         fun load(
             userId: String,
             nodeUid: String,
+            isActive: () -> Boolean = { true },
         ): Bitmap? {
             val key = ThumbnailKey(userId, nodeUid)
             peek(userId, nodeUid)?.let { return it }
             return synchronized(lock(key)) {
-                bitmaps.get(key)?.takeUnless(Bitmap::isRecycled) ?: loadFromDisk(key)
+                bitmaps.get(key)?.takeUnless(Bitmap::isRecycled) ?: loadFromDisk(key, isActive)
             }
         }
 
+        /**
+         * A complete pixel decode is the validation: a thumbnail that only carries a header would
+         * otherwise be stored, fail in the grid, be queued again and downloaded again forever
+         * (see the instrumented test on truncated thumbnails). The decode happens outside the
+         * shard lock, and the bytes are stored as delivered unless they need downsampling, so a
+         * normal 480 px thumbnail is never re-encoded; the lock covers only the commit and the
+         * cache put.
+         */
         fun write(
             userId: String,
             nodeUid: String,
             bytes: ByteArray,
         ) {
-            val key = ThumbnailKey(userId, nodeUid)
-            synchronized(lock(key)) {
-                val bitmap =
-                    ProtonThumbnailCodec.decode(bytes)
-                        ?: throw IllegalArgumentException("Proton returned an invalid thumbnail image")
-                try {
+            val decoded =
+                ProtonThumbnailCodec.decodeForStore(bytes)
+                    ?: throw IllegalArgumentException("Proton returned an invalid thumbnail image")
+            val bitmap = decoded.bitmap
+            try {
+                val stored = if (decoded.downsampled) ProtonThumbnailCodec.encode(bitmap) else bytes
+                val key = ThumbnailKey(userId, nodeUid)
+                synchronized(lock(key)) {
                     val target = file(userId, nodeUid)
                     val existed = target.isFile && target.length() > 0L
                     target.parentFile?.mkdirs()
-                    secureFiles.write(
-                        scope(userId),
-                        target,
-                        ProtonThumbnailCodec.encode(bitmap),
-                        "Could not commit thumbnail cache file",
-                    )
+                    secureFiles.write(scope(userId), target, stored, "Could not commit thumbnail cache file")
                     target.setLastModified(clock.nowMillis())
                     if (!existed) adjustCount(userId, 1)
                     bitmaps.put(key, bitmap)
-                } catch (error: Throwable) {
-                    bitmap.recycle()
-                    throw error
                 }
+            } catch (error: Throwable) {
+                bitmap.recycle()
+                throw error
             }
         }
 
@@ -132,24 +145,41 @@ internal class ProtonThumbnailStore
         }
 
         fun maintain(userId: String) {
-            val directory = directory(userId)
-            directory.listFiles()?.filter(::isStalePartial)?.forEach(File::delete)
-            counts.remove(userId)
-            pruneMemoryCache(userId)
+            sweep(userId) { file -> isStalePartial(file) }
         }
 
+        /** [retainedNames] are file names without extension, as [AtomicFileStore.safeName] produces them. */
         fun removeUnreferenced(
             userId: String,
-            retainedNodeUids: Collection<String>,
+            retainedNames: Set<String>,
         ) {
-            val retainedNames = retainedNodeUids.mapTo(mutableSetOf(), AtomicFileStore::safeName)
-            directory(userId).listFiles()?.forEach { file ->
-                if (isStalePartial(file) || (file.extension != "part" && file.nameWithoutExtension !in retainedNames)) {
+            sweep(userId) { file ->
+                isStalePartial(file) || (file.extension != "part" && file.nameWithoutExtension !in retainedNames)
+            }
+        }
+
+        /**
+         * One directory listing serves the deletion, the refreshed count and the memory prune:
+         * listing a large thumbnail directory is the expensive part of housekeeping, and the
+         * previous code did it up to three times and then stat'ed every cached bitmap on top.
+         */
+        private fun sweep(
+            userId: String,
+            prunable: (File) -> Boolean,
+        ) {
+            val files = directory(userId).listFiles().orEmpty()
+            var remaining = 0
+            val remainingNames = HashSet<String>(files.size * 4 / 3 + 1)
+            files.forEach { file ->
+                if (prunable(file)) {
                     file.delete()
+                } else if (file.isFile && file.extension == "thumb" && file.length() > 0L) {
+                    remaining++
+                    remainingNames += file.nameWithoutExtension
                 }
             }
-            counts.remove(userId)
-            pruneMemoryCache(userId)
+            counts[userId] = remaining
+            pruneMemoryCache(userId, remainingNames)
         }
 
         fun clearMemory(userId: String) {
@@ -179,12 +209,16 @@ internal class ProtonThumbnailStore
             return runCatching { secureFiles.read(scope(userId), file) }.getOrNull()
         }
 
-        private fun loadFromDisk(key: ThumbnailKey): Bitmap? {
+        private fun loadFromDisk(
+            key: ThumbnailKey,
+            isActive: () -> Boolean,
+        ): Bitmap? {
             val file = file(key.userId, key.nodeUid)
             if (!file.isFile || file.length() <= 0L) {
                 file.delete()
                 return null
             }
+            if (!isActive()) throw CancellationException("Thumbnail load cancelled before decrypting")
             val bytes =
                 try {
                     secureFiles.read(scope(key.userId), file)
@@ -192,6 +226,8 @@ internal class ProtonThumbnailStore
                     file.delete()
                     return null
                 }
+            // A fling cancels loads faster than they decode; the decode is the part worth skipping.
+            if (!isActive()) throw CancellationException("Thumbnail load cancelled before decoding")
             val bitmap = ProtonThumbnailCodec.decode(bytes)
             if (bitmap == null) {
                 file.delete()
@@ -202,11 +238,15 @@ internal class ProtonThumbnailStore
             return bitmap
         }
 
-        private fun pruneMemoryCache(userId: String) {
+        /** Drops cached bitmaps whose file is gone, judged against one listing rather than a stat per key. */
+        private fun pruneMemoryCache(
+            userId: String,
+            storedNames: Set<String>,
+        ) {
             bitmaps
                 .snapshot()
                 .keys
-                .filter { key -> key.userId == userId && !exists(key.userId, key.nodeUid) }
+                .filter { key -> key.userId == userId && AtomicFileStore.safeName(key.nodeUid) !in storedNames }
                 .forEach(bitmaps::remove)
         }
 
@@ -250,19 +290,29 @@ internal object ProtonThumbnailCodec {
     private const val TARGET_LONG_EDGE = 480
     private const val JPEG_QUALITY = 88
 
-    fun decode(bytes: ByteArray): Bitmap? {
+    /** The grid-sized bitmap, plus whether the source was subsampled to get there. */
+    class Decoded(
+        val bitmap: Bitmap,
+        /** True when the delivered bytes are larger than the grid needs and are worth re-encoding. */
+        val downsampled: Boolean,
+    )
+
+    fun decode(bytes: ByteArray): Bitmap? = decodeForStore(bytes)?.bitmap
+
+    fun decodeForStore(bytes: ByteArray): Decoded? {
         if (bytes.isEmpty()) return null
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        val sampleSize = ProtonPreviewDecodePolicy.sampleSize(bounds.outWidth, bounds.outHeight, TARGET_LONG_EDGE)
         val options =
             BitmapFactory.Options().apply {
                 inPreferredConfig = Bitmap.Config.RGB_565
-                inSampleSize = sampleSize(bounds.outWidth, bounds.outHeight)
+                inSampleSize = sampleSize
             }
         val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options) ?: return null
         val longEdge = max(decoded.width, decoded.height)
-        if (longEdge <= TARGET_LONG_EDGE) return decoded
+        if (longEdge <= TARGET_LONG_EDGE) return Decoded(decoded, downsampled = sampleSize > 1)
         val scale = TARGET_LONG_EDGE.toFloat() / longEdge
         val scaled =
             decoded.scale(
@@ -270,7 +320,7 @@ internal object ProtonThumbnailCodec {
                 (decoded.height * scale).toInt().coerceAtLeast(1),
             )
         if (scaled !== decoded) decoded.recycle()
-        return scaled
+        return Decoded(scaled, downsampled = sampleSize > 1)
     }
 
     fun encode(bitmap: Bitmap): ByteArray =
@@ -280,14 +330,4 @@ internal object ProtonThumbnailCodec {
             }
             output.toByteArray()
         }
-
-    private fun sampleSize(
-        width: Int,
-        height: Int,
-    ): Int {
-        val longEdge = max(width, height)
-        var sample = 1
-        while (longEdge / (sample * 2) >= TARGET_LONG_EDGE) sample *= 2
-        return sample
-    }
 }

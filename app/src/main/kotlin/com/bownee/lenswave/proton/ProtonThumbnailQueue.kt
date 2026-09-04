@@ -1,10 +1,20 @@
 package com.bownee.lenswave.proton
 
 import com.bownee.lenswave.LenswaveClock
+import com.bownee.lenswave.LenswaveDiagnostics
+import com.bownee.lenswave.LenswaveOperation
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import javax.inject.Qualifier
@@ -80,15 +90,23 @@ internal sealed interface ProtonThumbnailQueueStep {
 /**
  * A persistent, per-user download queue ordered newest capture time first. One instance serves
  * thumbnails and another previews; [name] selects which file each persists to.
+ *
+ * The in-memory map is authoritative. Changes mark the user's queue dirty and are written back
+ * on the schedule [ProtonQueueFlushPolicy] decides; [flush] forces the write. Serialization and
+ * encryption happen from a snapshot outside [mutex], and [writeMutex] keeps writes in generation
+ * order so an older snapshot can never land on top of a newer one.
  */
 internal class ProtonThumbnailQueue(
     private val store: ProtonThumbnailQueueStore,
     private val clock: LenswaveClock,
     private val name: ProtonQueueName = ProtonQueueName.THUMBNAILS,
+    private val flushScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
 ) {
     private val mutex = Mutex()
+    private val writeMutex = Mutex()
     private val entriesByUser = mutableMapOf<String, LinkedHashMap<String, ProtonThumbnailQueueEntry>>()
     private val claimedNodeUids = mutableMapOf<String, MutableSet<String>>()
+    private val persistence = mutableMapOf<String, UserPersistence>()
 
     suspend fun replaceSource(
         userId: String,
@@ -98,6 +116,7 @@ internal class ProtonThumbnailQueue(
         replaceSources(userId, mapOf(source to pendingCandidates))
     }
 
+    /** A source replacement is a full reconciliation, so it is written through at once. */
     suspend fun replaceSources(
         userId: String,
         pendingCandidatesBySource: Map<String, Collection<ProtonThumbnailCandidate>>,
@@ -140,8 +159,9 @@ internal class ProtonThumbnailQueue(
             }
             entries.values.removeAll { entry -> entry.sources.isEmpty() }
             claimedNodeUids[userId]?.retainAll(entries.keys)
-            persist(userId, entries)
+            markChanged(userId)
         }
+        flush(userId)
     }
 
     suspend fun retryNow(
@@ -164,7 +184,7 @@ internal class ProtonThumbnailQueue(
                     retryCount = existing?.retryCount ?: 0,
                     retryAtMillis = 0L,
                 )
-            persist(userId, entries)
+            markChanged(userId)
         }
     }
 
@@ -176,14 +196,15 @@ internal class ProtonThumbnailQueue(
             require(limit > 0) { "Thumbnail claim limit must be positive" }
             val now = clock.nowMillis()
             val claimed = claimedNodeUids.getOrPut(userId, ::mutableSetOf)
-            entries(userId)
-                .values
-                .asSequence()
-                .filter { entry -> entry.retryAtMillis <= now }
-                .filterNot { entry -> entry.nodeUid in claimed }
-                .sortedWith(NEWEST_FIRST)
-                .take(limit)
-                .toList()
+            val ready =
+                entries(userId)
+                    .values
+                    .asSequence()
+                    .filter { entry -> entry.retryAtMillis <= now }
+                    .filterNot { entry -> entry.nodeUid in claimed }
+                    .asIterable()
+            ProtonQueueSelectionPolicy
+                .takeFirst(ready, limit, NEWEST_FIRST)
                 .onEach { entry -> claimed += entry.nodeUid }
         }
 
@@ -224,9 +245,8 @@ internal class ProtonThumbnailQueue(
                 claimed.removeAll(settled)
                 if (claimed.isEmpty()) claimedNodeUids.remove(userId)
             }
-            if (completed.isNotEmpty() || dropped > 0 || failedNodeUids.any(entries::containsKey)) {
-                persist(userId, entries)
-            }
+            val changes = completed.size + dropped + failedNodeUids.count(entries::containsKey)
+            if (changes > 0) markChanged(userId, changes)
             completed
         }
 
@@ -261,11 +281,67 @@ internal class ProtonThumbnailQueue(
                 ?.let { retryAt -> (retryAt - clock.nowMillis()).coerceAtLeast(0L) }
         }
 
+    /**
+     * Drops the user's queue from memory without writing it: the caller is erasing the user's
+     * files, and a write landing afterwards would leave a queue behind for an account that is
+     * gone. Waits for a write already in progress so nothing lands after this returns.
+     */
     suspend fun forget(userId: String) {
         mutex.withLock {
             entriesByUser.remove(userId)
             claimedNodeUids.remove(userId)
+            persistence.remove(userId)?.scheduledFlush?.cancel()
         }
+        writeMutex.withLock {}
+    }
+
+    /** Writes every unflushed change for [userId] before returning; a no-op when nothing changed. */
+    suspend fun flush(userId: String) {
+        val snapshot =
+            mutex.withLock {
+                val state = persistence[userId] ?: return
+                state.scheduledFlush?.let { scheduled ->
+                    state.scheduledFlush = null
+                    if (scheduled !== currentCoroutineContext()[Job]) scheduled.cancel()
+                }
+                if (state.generation == state.writtenGeneration) return
+                Snapshot(entries(userId).values.toList(), state.generation)
+            }
+        writeMutex.withLock {
+            val state = mutex.withLock { persistence[userId] } ?: return
+            if (ProtonQueueFlushPolicy.isStale(snapshot.generation, state.writtenGeneration)) return
+            try {
+                store.writeQueue(userId, name, snapshot.entries)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                // The queue stays dirty; the next change or forced flush tries again.
+                LenswaveDiagnostics.reportFailure(LenswaveOperation.DOWNLOAD_QUEUE_PERSIST, error)
+                return
+            }
+            mutex.withLock {
+                if (state.writtenGeneration < snapshot.generation) state.writtenGeneration = snapshot.generation
+            }
+        }
+    }
+
+    /** Records [changes] in-memory edits and schedules the write [ProtonQueueFlushPolicy] asks for. */
+    private fun markChanged(
+        userId: String,
+        changes: Int = 1,
+    ) {
+        val state = persistence.getOrPut(userId, ::UserPersistence)
+        state.generation += changes
+        val unflushed = (state.generation - state.writtenGeneration).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+        val delayMillis =
+            ProtonQueueFlushPolicy.flushDelayMillis(unflushed, flushScheduled = state.scheduledFlush != null)
+                ?: return
+        state.scheduledFlush?.cancel()
+        state.scheduledFlush =
+            flushScope.launch {
+                if (delayMillis > 0L) delay(delayMillis)
+                flush(userId)
+            }
     }
 
     private fun entries(userId: String): LinkedHashMap<String, ProtonThumbnailQueueEntry> =
@@ -273,17 +349,22 @@ internal class ProtonThumbnailQueue(
             store.readQueue(userId, name).associateByTo(linkedMapOf(), ProtonThumbnailQueueEntry::nodeUid)
         }
 
-    private fun persist(
-        userId: String,
-        entries: Map<String, ProtonThumbnailQueueEntry>,
-    ) {
-        store.writeQueue(userId, name, entries.values.toList())
-    }
-
     private fun retryDelayMillis(retryCount: Int): Long {
         val multiplier = 1L shl (retryCount - 1).coerceIn(0, MAX_RETRY_SHIFT)
         return (BASE_RETRY_MILLIS * multiplier).coerceAtMost(MAX_RETRY_MILLIS)
     }
+
+    private class UserPersistence {
+        /** Bumped per in-memory change; [writtenGeneration] trails it until a flush catches up. */
+        var generation = 0L
+        var writtenGeneration = 0L
+        var scheduledFlush: Job? = null
+    }
+
+    private class Snapshot(
+        val entries: List<ProtonThumbnailQueueEntry>,
+        val generation: Long,
+    )
 
     companion object {
         /** Six failures span roughly half an hour of backoff before an entry is given up on. */

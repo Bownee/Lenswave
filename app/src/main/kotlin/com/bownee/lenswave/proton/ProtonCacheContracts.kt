@@ -93,9 +93,17 @@ internal interface ProtonAlbumCache {
 }
 
 interface ProtonMediaCache {
+    /** A cheap file stat; use it to skip work, never as proof that the bytes decode. */
+    fun thumbnailExists(
+        userId: String,
+        nodeUid: String,
+    ): Boolean
+
+    /** [isActive] false aborts the load with a CancellationException before the costly decode. */
     fun loadThumbnail(
         userId: String,
         nodeUid: String,
+        isActive: () -> Boolean = { true },
     ): Bitmap?
 
     /** In-memory thumbnail only; never reads disk, so it is safe on the main thread. */

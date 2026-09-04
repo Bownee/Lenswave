@@ -2,6 +2,7 @@ package com.bownee.lenswave.proton
 
 import com.bownee.lenswave.LenswaveClock
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.TestScope
 import me.proton.core.domain.entity.UserId
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -11,11 +12,12 @@ import org.junit.Test
 class ProtonRenditionSyncTest {
     private val clock = FakeClock()
     private val store = FakeStore()
-    private val thumbnails = ProtonThumbnailQueue(store, clock, ProtonQueueName.THUMBNAILS)
-    private val previews = ProtonThumbnailQueue(store, clock, ProtonQueueName.PREVIEWS)
+    private val flushScope = TestScope().backgroundScope
+    private val thumbnails = ProtonThumbnailQueue(store, clock, ProtonQueueName.THUMBNAILS, flushScope)
+    private val previews = ProtonThumbnailQueue(store, clock, ProtonQueueName.PREVIEWS, flushScope)
     private val source = FakeSource()
     private val availability = FakeAvailability()
-    private val sync = ProtonRenditionSync(source, availability, thumbnails, previews)
+    private val sync = ProtonRenditionSync(source, availability, thumbnails, previews, clock)
 
     @Test
     fun `previews reported only in the final result still leave the queue`() =
@@ -93,12 +95,61 @@ class ProtonRenditionSyncTest {
             )
         }
 
+    @Test
+    fun `thumbnail marks are coalesced within the publish interval and flushed at batch end`() =
+        runBlocking {
+            thumbnails.replaceSource(USER.id, ProtonSyncKeys.QueueSource.TIMELINE, candidates("a", "b", "c"))
+            source.thumbnailProgress =
+                listOf("a", "b", "c").map { nodeUid -> ThumbnailBatchResult(setOf(nodeUid), emptyMap()) }
+            source.thumbnailResult = ThumbnailBatchResult(setOf("a", "b", "c"), emptyMap())
+
+            sync.downloadNextBatch(USER, allowPreviews = true) {}
+
+            assertEquals(
+                listOf(setOf("a"), setOf("b", "c")),
+                availability.thumbnailsAvailable.map(PublishedThumbnails::timeline),
+            )
+            assertEquals(0, thumbnails.pendingCount(USER.id))
+        }
+
+    @Test
+    fun `marks publish again once the interval has passed`() =
+        runBlocking {
+            thumbnails.replaceSource(USER.id, ProtonSyncKeys.QueueSource.TIMELINE, candidates("a", "b", "c"))
+            source.thumbnailProgress =
+                listOf("a", "b", "c").map { nodeUid -> ThumbnailBatchResult(setOf(nodeUid), emptyMap()) }
+            source.beforeProgress = { clock.value += ProtonThumbnailWorkPolicy.PROGRESS_PUBLISH_INTERVAL_MILLIS }
+
+            sync.downloadNextBatch(USER, allowPreviews = true) {}
+
+            assertEquals(
+                listOf(setOf("a"), setOf("b"), setOf("c")),
+                availability.thumbnailsAvailable.map(PublishedThumbnails::timeline),
+            )
+        }
+
+    @Test
+    fun `a preview stored in place of a missing thumbnail leaves the preview queue`() =
+        runBlocking {
+            thumbnails.replaceSource(USER.id, ProtonSyncKeys.QueueSource.TIMELINE, candidates("a"))
+            previews.replaceSource(USER.id, ProtonSyncKeys.QueueSource.TIMELINE_PREVIEWS, candidates("a", "b"))
+            source.thumbnailResult = ThumbnailBatchResult(setOf("a"), emptyMap(), previewsStored = setOf("a"))
+
+            sync.downloadNextBatch(USER, allowPreviews = false) {}
+
+            assertEquals(0, thumbnails.pendingCount(USER.id))
+            assertEquals(1, previews.pendingCount(USER.id))
+            assertEquals(listOf(setOf("a")), availability.previewsAvailable)
+        }
+
     private fun candidates(vararg nodeUids: String) =
         nodeUids.mapIndexed { index, nodeUid -> ProtonThumbnailCandidate(nodeUid, index.toLong()) }
 
     private class FakeSource : ProtonRenditionSource {
         var thumbnailResult = ThumbnailBatchResult(emptySet(), emptyMap())
         var thumbnailFailure: Throwable? = null
+        var thumbnailProgress: List<ThumbnailBatchResult>? = null
+        var beforeProgress: () -> Unit = {}
         var previewProgress: List<ThumbnailBatchResult> = emptyList()
         var previewResult = ThumbnailBatchResult(emptySet(), emptyMap())
         var previewCalls = 0
@@ -112,7 +163,10 @@ class ProtonRenditionSyncTest {
             onProgress: suspend (ThumbnailBatchResult) -> Unit,
         ): ThumbnailBatchResult {
             thumbnailFailure?.let { throw it }
-            onProgress(thumbnailResult)
+            (thumbnailProgress ?: listOf(thumbnailResult)).forEach { result ->
+                beforeProgress()
+                onProgress(result)
+            }
             return thumbnailResult
         }
 

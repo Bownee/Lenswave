@@ -143,11 +143,11 @@ internal class ProtonPreviewStore
             dropDecoded { key -> key.userId == userId }
         }
 
+        /** [retainedNames] are file names without extension, as [AtomicFileStore.safeName] produces them. */
         fun removeUnreferenced(
             userId: String,
-            retainedNodeUids: Collection<String>,
+            retainedNames: Set<String>,
         ) {
-            val retainedNames = retainedNodeUids.mapTo(mutableSetOf(), AtomicFileStore::safeName)
             directory(userId).listFiles()?.forEach { file ->
                 if (isStalePartial(file) || (file.extension != "part" && file.nameWithoutExtension !in retainedNames)) {
                     file.delete()

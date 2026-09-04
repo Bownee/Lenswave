@@ -32,7 +32,8 @@ internal class ProtonRenditionDownloads
         fun loadThumbnail(
             userId: UserId,
             nodeUid: String,
-        ): Bitmap? = cache.loadThumbnail(userId.id, nodeUid)
+            isActive: () -> Boolean = { true },
+        ): Bitmap? = cache.loadThumbnail(userId.id, nodeUid, isActive)
 
         fun peekThumbnail(
             userId: UserId,
@@ -47,7 +48,8 @@ internal class ProtonRenditionDownloads
             val requested = nodeUids.distinct()
             val successful =
                 requested.filterTo(mutableSetOf()) { nodeUid ->
-                    cache.loadThumbnail(userId.id, nodeUid) != null
+                    // A file stat only: decoding here would evict the gallery's own bitmaps.
+                    cache.thumbnailExists(userId.id, nodeUid)
                 }
             if (successful.isNotEmpty()) {
                 onProgress(ThumbnailBatchResult(successful.toSet(), emptyMap()))
@@ -186,6 +188,11 @@ internal class ProtonRenditionDownloads
             val missing = nodeUids.filterNot(successful::contains)
             if (missing.isEmpty()) return ThumbnailBatchResult(successful, emptyMap())
 
+            // The preview rendition stands in for a missing thumbnail. It is the same bytes the
+            // preview queue would fetch later, so they go into the preview store as well and the
+            // caller settles the node out of that queue; the mirror of the NOT_FOUND substitution
+            // in downloadPreviews.
+            val previewsStored = mutableSetOf<String>()
             val previewResult =
                 downloadThumbnailPass(
                     photosClient,
@@ -193,6 +200,12 @@ internal class ProtonRenditionDownloads
                     missing,
                     ThumbnailType.PREVIEW,
                     onProgress,
+                    store = { nodeUid, bytes ->
+                        cache.writeThumbnail(userId.id, nodeUid, bytes)
+                        if (runCatching { cache.writePreview(userId.id, nodeUid, bytes) }.isSuccess) {
+                            previewsStored += nodeUid
+                        }
+                    },
                 )
             successful += previewResult.successfulNodeUids
             previewResult.failures.forEach { (nodeUid, kind) -> failures.record(nodeUid, kind) }
@@ -200,10 +213,13 @@ internal class ProtonRenditionDownloads
                 failures.putIfAbsent(nodeUid, ThumbnailFailureKind.OTHER)
             }
             val finalFailures = failures.filterKeys { nodeUid -> nodeUid !in successful }
+            if (previewsStored.isNotEmpty()) {
+                onProgress(ThumbnailBatchResult(emptySet(), emptyMap(), previewsStored = previewsStored.toSet()))
+            }
             if (finalFailures.isNotEmpty()) {
                 onProgress(ThumbnailBatchResult(emptySet(), finalFailures))
             }
-            return ThumbnailBatchResult(successful, finalFailures)
+            return ThumbnailBatchResult(successful, finalFailures, previewsStored)
         }
 
         private suspend fun downloadThumbnailPass(
@@ -351,6 +367,8 @@ internal class ProtonRenditionDownloads
 internal data class ThumbnailBatchResult(
     val successfulNodeUids: Set<String>,
     val failures: Map<String, ThumbnailFailureKind>,
+    /** Nodes whose preview rendition served as the thumbnail and was stored as a preview too. */
+    val previewsStored: Set<String> = emptySet(),
 )
 
 internal object ProtonThumbnailDownloadPolicy {
