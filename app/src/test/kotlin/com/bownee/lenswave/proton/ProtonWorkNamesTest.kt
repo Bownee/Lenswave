@@ -20,4 +20,13 @@ class ProtonWorkNamesTest {
     fun differentUsersGetDifferentWorkNames() {
         assertNotEquals(ProtonWorkNames.thumbnails(UserId("user-a")), ProtonWorkNames.thumbnails(UserId("user-b")))
     }
+
+    @Test
+    fun theLegacyChargingNameIsTheOneOlderVersionsUsed() {
+        // Cancelling anything left under it after an upgrade needs the exact old spelling.
+        assertEquals(
+            "${ProtonWorkNames.thumbnails(UserId("abc"))}-charging",
+            ProtonWorkNames.legacyThumbnailsWhileCharging(UserId("abc")),
+        )
+    }
 }

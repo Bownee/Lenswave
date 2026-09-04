@@ -72,6 +72,26 @@ class GalleryListAdapter(
         notifySelectionChanged()
     }
 
+    /**
+     * Replaces the selection with the listed photos that the rows still show, e.g. the selection
+     * the view model kept while the activity was recreated. Listeners hear about it only when the
+     * selection actually changed.
+     */
+    fun setSelection(stableIds: Set<String>) {
+        val next = linkedMapOf<String, GalleryAsset>()
+        if (stableIds.isNotEmpty()) {
+            for (row in rows) {
+                if (row !is GalleryRow.Photos) continue
+                for (item in row.items) if (item.stableId in stableIds) next[item.stableId] = item
+            }
+        }
+        if (next.keys == selected.keys) return
+        selected.clear()
+        selected.putAll(next)
+        forEachVisiblePhotoCell { cell -> applySelection(cell, cell.asset?.stableId in selected) }
+        notifySelectionChanged()
+    }
+
     /** Forgets every thumbnail on screen; the visible cells reload theirs from the (new) source. */
     fun clearThumbnails() {
         thumbnailLoader.clear()

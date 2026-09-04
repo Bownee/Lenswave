@@ -56,16 +56,26 @@ internal object ProtonBackgroundBatchPolicy {
     /**
      * Pending work whose earliest retry is due now and that still could not be claimed can only
      * be held by claims nobody settled or released; the background sync is the sole claimer.
+     * That holds because [ProtonThumbnailRunGuard] admits one worker run per process: only the
+     * active run reaches this decision, so releasing every claim never takes a batch away from
+     * another run.
      */
     fun hasStaleClaims(idle: ProtonThumbnailQueueStep.Idle): Boolean = idle.hasPending && idle.retryAfterMillis == 0L
 
     /**
-     * How long an idle run should sleep before claiming again instead of ending and leaving the
-     * restart to WorkManager, whose retries cannot start in the background. Null means end the run.
+     * The longest an idle run sleeps in place. A run is a foreground service holding a wakelock,
+     * so a sleep of minutes (the earlier cap) kept the phone awake for nothing, and a failing
+     * tail of retries kept it awake for as long as the run limit allowed. A retry due within a
+     * few seconds is still worth a sleep, because ending and starting a job costs more than
+     * that; anything longer ends the run, and the follow-up request carries the backoff as its
+     * initial delay ([ProtonThumbnailFollowUpPolicy]) while nothing is held awake.
      */
+    const val MAX_IDLE_WAIT_MILLIS = 5_000L
+
+    /** How long an idle run should sleep before claiming again; null means end the run. */
     fun idleWaitMillis(
         idle: ProtonThumbnailQueueStep.Idle,
-        maxWaitMillis: Long,
+        maxWaitMillis: Long = MAX_IDLE_WAIT_MILLIS,
     ): Long? {
         if (!idle.hasPending) return null
         val delay = idle.retryAfterMillis ?: return null

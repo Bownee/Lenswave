@@ -90,4 +90,53 @@ class ProtonTransferCoordinatorTest {
             }
             assertTrue(backgroundStarted)
         }
+
+    @Test
+    fun `the background side reports a foreground transfer that outlasts its patience`() =
+        runBlocking {
+            val coordinator = ProtonTransferCoordinator()
+            val foregroundStarted = CompletableDeferred<Unit>()
+            val releaseForeground = CompletableDeferred<Unit>()
+            val foreground =
+                async {
+                    coordinator.withForegroundTransfer {
+                        foregroundStarted.complete(Unit)
+                        releaseForeground.await()
+                    }
+                }
+            foregroundStarted.await()
+
+            assertFalse(coordinator.awaitNoForegroundTransfer(timeoutMillis = 20L))
+
+            releaseForeground.complete(Unit)
+            withTimeout(1_000L) {
+                foreground.await()
+                assertTrue(coordinator.awaitNoForegroundTransfer(timeoutMillis = 20L))
+            }
+        }
+
+    @Test
+    fun `a pass already under way goes ahead after a bounded wait`() =
+        runBlocking {
+            val coordinator = ProtonTransferCoordinator()
+            val foregroundStarted = CompletableDeferred<Unit>()
+            val releaseForeground = CompletableDeferred<Unit>()
+            val foreground =
+                async {
+                    coordinator.withForegroundTransfer {
+                        foregroundStarted.complete(Unit)
+                        releaseForeground.await()
+                    }
+                }
+            foregroundStarted.await()
+
+            var backgroundStarted = false
+            withTimeout(1_000L) {
+                coordinator.withBackgroundTransfer(maxWaitMillis = 20L) { backgroundStarted = true }
+            }
+            assertTrue(backgroundStarted)
+
+            releaseForeground.complete(Unit)
+            foreground.await()
+        }
 }

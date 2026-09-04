@@ -6,6 +6,8 @@ import android.graphics.BitmapFactory
 import android.util.LruCache
 import androidx.core.graphics.scale
 import com.bownee.lenswave.LenswaveClock
+import com.bownee.lenswave.LenswaveDiagnostics
+import com.bownee.lenswave.LenswaveOperation
 import com.bownee.lenswave.storage.AtomicFileStore
 import com.bownee.lenswave.storage.SecureFileStore
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -37,6 +39,7 @@ internal class ProtonThumbnailStore
                 ): Int = value.byteCount / 1_024
             }
         private val locks = Array(LOCK_COUNT) { Any() }
+        private val transientReadFailures = ProtonRenditionReadFailures()
 
         /** Stored-thumbnail counts per user; listing a large directory on every progress tick is too slow. */
         private val counts = java.util.concurrent.ConcurrentHashMap<String, Int>()
@@ -92,10 +95,18 @@ internal class ProtonThumbnailStore
             val bytes =
                 try {
                     secureFiles.read(scope(userId), file)
-                } catch (_: Exception) {
-                    discardUnreadable(key, file)
-                    return null
+                } catch (error: Exception) {
+                    // Only a file that is provably bad is discarded (the caller then queues it
+                    // again); a Keystore or I/O hiccup keeps the file and is retried on the
+                    // next bind, and must not read as "corrupt" to the caller either.
+                    if (ProtonSnapshotCorruptionPolicy.isCorrupt(error)) {
+                        discardUnreadable(key, file)
+                        return null
+                    }
+                    transientReadFailures.report(error)
+                    throw ProtonRenditionUnavailableException(error)
                 }
+            transientReadFailures.recovered()
             // A fling cancels loads faster than they decode; the decode is the part worth skipping.
             if (!isActive()) throw CancellationException("Thumbnail load cancelled before decoding")
             val bitmap = ProtonThumbnailCodec.decode(bytes)
@@ -321,6 +332,37 @@ internal class ProtonThumbnailStore
             const val LOCK_COUNT = 32
         }
     }
+
+/**
+ * A stored rendition exists and is intact but cannot be decrypted right now (the Keystore or the
+ * disk refused for a moment). Callers show nothing for it and ask again later; unlike a null
+ * result, it never means the file is bad or worth downloading again.
+ */
+internal class ProtonRenditionUnavailableException(
+    cause: Throwable,
+) : RuntimeException("The stored rendition cannot be read right now", cause)
+
+/**
+ * Reports the first transient read failure of a streak and stays quiet until a read succeeds
+ * again: a Keystore that is down for a minute would otherwise log once per grid cell.
+ */
+internal class ProtonRenditionReadFailures(
+    private val reportFailure: (Throwable) -> Unit = { error ->
+        LenswaveDiagnostics.reportFailure(LenswaveOperation.RENDITION_READ, error)
+    },
+) {
+    private val reported =
+        java.util.concurrent.atomic
+            .AtomicBoolean()
+
+    fun report(error: Throwable) {
+        if (reported.compareAndSet(false, true)) reportFailure(error)
+    }
+
+    fun recovered() {
+        reported.set(false)
+    }
+}
 
 internal object ProtonThumbnailCodec {
     private const val TARGET_LONG_EDGE = 480

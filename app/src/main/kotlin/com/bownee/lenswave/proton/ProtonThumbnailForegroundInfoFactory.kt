@@ -8,10 +8,9 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import androidx.core.app.NotificationCompat
 import androidx.work.ForegroundInfo
-import androidx.work.WorkManager
 import com.bownee.lenswave.R
 import com.bownee.lenswave.gallery.GalleryActivity
-import java.util.UUID
+import me.proton.core.domain.entity.UserId
 
 /** Which rendition the background worker is currently downloading. */
 internal enum class ProtonDownloadPhase {
@@ -87,9 +86,14 @@ internal object ProtonThumbnailNotificationPolicy {
  * Builds the worker's progress notification. One instance lives for one worker run and is asked
  * every 1.5 s, so the channel is created once and both PendingIntents are memoized: neither
  * depends on the progress, and registering PendingIntents is a binder call each time.
+ *
+ * The action is a pause, not WorkManager's cancel: cancelling one worker id stopped that run
+ * only, and the next resume started downloads again. The pause is remembered for the user
+ * ([ProtonThumbnailPauseStore]) until a manual refresh lifts it.
  */
 internal class ProtonThumbnailForegroundInfoFactory(
     private val context: Context,
+    userId: UserId,
 ) {
     private var channelCreated = false
     private val openApp by lazy {
@@ -102,24 +106,13 @@ internal class ProtonThumbnailForegroundInfoFactory(
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
     }
-    private var cancelWork: Pair<UUID, PendingIntent>? = null
+    private val pauseDownloads by lazy { ProtonThumbnailPauseReceiver.pendingIntent(context, userId) }
 
-    fun create(
-        workerId: UUID,
-        progress: ProtonThumbnailNotificationProgress,
-    ): ForegroundInfo {
+    fun create(progress: ProtonThumbnailNotificationProgress): ForegroundInfo {
         if (!channelCreated) {
             createNotificationChannel()
             channelCreated = true
         }
-        val cancelWork =
-            cancelWork
-                ?.takeIf { (memoizedWorkerId, _) -> memoizedWorkerId == workerId }
-                ?.second
-                ?: WorkManager
-                    .getInstance(context)
-                    .createCancelPendingIntent(workerId)
-                    .also { intent -> cancelWork = workerId to intent }
         val notification =
             NotificationCompat
                 .Builder(context, CHANNEL_ID)
@@ -133,8 +126,11 @@ internal class ProtonThumbnailForegroundInfoFactory(
                 .setCategory(NotificationCompat.CATEGORY_PROGRESS)
                 .setPriority(NotificationCompat.PRIORITY_LOW)
                 .setProgress(progress.total, progress.downloaded, !progress.isDeterminate)
-                .addAction(R.drawable.ic_close, context.getString(R.string.cancel), cancelWork)
-                .build()
+                .addAction(
+                    R.drawable.ic_close,
+                    context.getString(R.string.thumbnail_download_notification_pause),
+                    pauseDownloads,
+                ).build()
         return ForegroundInfo(
             NOTIFICATION_ID,
             notification,

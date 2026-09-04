@@ -5,18 +5,23 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.bownee.lenswave.LenswaveClock
+import com.bownee.lenswave.LenswaveDispatchers
 import com.bownee.lenswave.proton.ProtonAccountSessionManager
 import com.bownee.lenswave.proton.ProtonAccountSessionState
 import com.bownee.lenswave.proton.ProtonAlbum
 import com.bownee.lenswave.proton.ProtonAlbumPhotosState
+import com.bownee.lenswave.proton.ProtonAlbumReference
 import com.bownee.lenswave.proton.ProtonAlbumsState
 import com.bownee.lenswave.proton.ProtonGalleryState
 import com.bownee.lenswave.proton.ProtonThumbnailScheduler
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -25,6 +30,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -35,362 +41,532 @@ import me.proton.core.accountmanager.domain.AccountManager
 import me.proton.core.domain.entity.UserId
 import javax.inject.Inject
 
+/** What a photo mutation run by [GalleryViewModel] came to; the activity on screen reports it once. */
+internal sealed interface GalleryMutationEvent {
+    data class Trashed(
+        val successfulCount: Int,
+        val failedCount: Int,
+    ) : GalleryMutationEvent
+
+    data object TrashFailed : GalleryMutationEvent
+}
+
 @HiltViewModel
-class GalleryViewModel
+class GalleryViewModel internal constructor(
+    galleryText: GalleryText,
+    private val accountManager: AccountManager,
+    private val protonRepository: ProtonGalleryReader,
+    private val protonThumbnailScheduler: ProtonThumbnailScheduler,
+    private val accountSession: StateFlow<ProtonAccountSessionState>,
+    private val navigationStore: GalleryNavigationStore,
+    private val deletionExecutor: PhotoDeletionExecutor,
+    private val savedStateHandle: SavedStateHandle,
+    private val clock: LenswaveClock,
+    private val dispatchers: LenswaveDispatchers,
+) : ViewModel() {
+    /** The production wiring; tests use the primary constructor with plain JVM collaborators. */
     @Inject
     internal constructor(
         @ApplicationContext context: Context,
-        private val accountManager: AccountManager,
-        private val protonRepository: ProtonGalleryReader,
-        private val protonThumbnailScheduler: ProtonThumbnailScheduler,
-        private val accountSessionManager: ProtonAccountSessionManager,
-        private val navigationStore: GalleryNavigationStore,
-        private val savedStateHandle: SavedStateHandle,
-        private val clock: LenswaveClock,
-    ) : ViewModel() {
-        private val uiStateFactory = GalleryUiStateFactory(AndroidGalleryText(context.resources))
+        accountManager: AccountManager,
+        protonRepository: ProtonGalleryReader,
+        protonThumbnailScheduler: ProtonThumbnailScheduler,
+        accountSessionManager: ProtonAccountSessionManager,
+        navigationStore: GalleryNavigationStore,
+        deletionExecutor: PhotoDeletionExecutor,
+        savedStateHandle: SavedStateHandle,
+        clock: LenswaveClock,
+        dispatchers: LenswaveDispatchers,
+    ) : this(
+        galleryText = AndroidGalleryText(context.resources),
+        accountManager = accountManager,
+        protonRepository = protonRepository,
+        protonThumbnailScheduler = protonThumbnailScheduler,
+        accountSession = accountSessionManager.state,
+        navigationStore = navigationStore,
+        deletionExecutor = deletionExecutor,
+        savedStateHandle = savedStateHandle,
+        clock = clock,
+        dispatchers = dispatchers,
+    )
 
-        // The stored destination is needed for the initial state, so it is read here on the main
-        // thread; GalleryPreferenceWarmUp starts the file load at process start, and this read
-        // waits only for whatever part of it is still outstanding.
-        private var destination =
-            restoreNavigation(savedStateHandle)
-                ?: navigationStore.read()
-                ?: GalleryDestination.Timeline
-        private var currentUserId: UserId? = null
-        private var sessionTransitioning = false
-        private var manualRefreshGeneration = 0
-        private var lastPeriodicCheckMillis: Long? = null
+    private val uiStateFactory = GalleryUiStateFactory(galleryText)
 
-        /**
-         * Everything the UI state depends on that is owned by this view model. It joins the
-         * repository flows below; a change to any of them recomputes the state once, off the
-         * main thread, and bursts of changes collapse into the latest one.
-         */
-        private val localInputs =
-            MutableStateFlow(
-                LocalInputs(
-                    destination = destination,
-                    currentUserId = null,
-                    accountStatus = accountStatus(ProtonAccountSessionState()),
-                    isRefreshing = false,
+    // The stored destination is needed for the initial state, so it is read here on the main
+    // thread; GalleryPreferenceWarmUp starts the file load at process start, and this read
+    // waits only for whatever part of it is still outstanding.
+    private var destination =
+        restoreNavigation(savedStateHandle)
+            ?: navigationStore.read()
+            ?: GalleryDestination.Timeline
+    private var currentUserId: UserId? = null
+    private var sessionTransitioning = false
+
+    /** Set by [disconnectProton], so the removal that follows is not reported as a lost session. */
+    private var explicitDisconnect = false
+    private var signedOut = false
+    private var manualRefreshGeneration = 0
+    private var lastPeriodicCheckMillis: Long? = null
+
+    /**
+     * Where each page was scrolled to. Owned here so a configuration change keeps every page's
+     * position; the current page's position is also written to the saved state, so a process
+     * death restores the page the user was looking at where they left it.
+     */
+    internal val scrollPositions = GalleryScrollPositionStore()
+
+    /**
+     * The stable ids of the selected photos. Owned here and written to the saved state, so a
+     * selection survives the activity's recreation; the activity re-applies it to the grid once
+     * the page's rows are on screen. A selection never outlives the page it was made on.
+     */
+    internal var selectedStableIds: Set<String> =
+        savedStateHandle.get<ArrayList<String>>(STATE_SELECTION)?.toSet().orEmpty()
+        private set
+
+    private var mutationInFlight = false
+
+    // A channel, not a shared flow: an outcome that arrives while no activity collects must wait
+    // for the next one rather than be dropped.
+    private val mutableMutationEvents =
+        Channel<GalleryMutationEvent>(capacity = MUTATION_EVENT_BUFFER, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+
+    /** Outcomes of the photo mutations run here, for the activity on screen to report once. */
+    internal val mutationEvents: Flow<GalleryMutationEvent> = mutableMutationEvents.receiveAsFlow()
+
+    /**
+     * Everything the UI state depends on that is owned by this view model. It joins the
+     * repository flows below; a change to any of them recomputes the state once, off the
+     * main thread, and bursts of changes collapse into the latest one.
+     */
+    private val localInputs =
+        MutableStateFlow(
+            LocalInputs(
+                destination = destination,
+                currentUserId = null,
+                accountStatus = accountStatus(ProtonAccountSessionState()),
+                isRefreshing = false,
+            ),
+        )
+
+    /**
+     * The initial value is a skeleton because it is built on whichever thread first touches
+     * this property (the main thread in the activity's onCreate); mapping and sorting a warm
+     * repository's timeline there would delay the first frame. The full state follows from
+     * the Default dispatcher. Sharing stops shortly after the last collector leaves, so the
+     * join does not recompute states while the gallery is off screen.
+     */
+    val uiState: StateFlow<GalleryUiState> =
+        combine(
+            protonRepository.state,
+            protonRepository.albumsState,
+            protonRepository.albumPhotosState,
+            localInputs,
+            ::uiInputs,
+        ).conflate()
+            .map(uiStateFactory::create)
+            .flowOn(dispatchers.default)
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(stopTimeoutMillis = UI_STATE_STOP_TIMEOUT_MILLIS),
+                initialValue =
+                    uiStateFactory.skeleton(
+                        uiInputs(
+                            protonRepository.state.value,
+                            protonRepository.albumsState.value,
+                            protonRepository.albumPhotosState.value,
+                            localInputs.value,
+                        ),
+                    ),
+            )
+
+    init {
+        restoreScrollPosition(savedStateHandle)?.let { position -> scrollPositions.save(destination, position) }
+        observeAccountSession()
+    }
+
+    /** Records where [pageDestination] is scrolled to; the current page's position also goes to the saved state. */
+    internal fun saveScrollPosition(
+        pageDestination: GalleryDestination,
+        position: GalleryScrollPosition,
+    ) {
+        scrollPositions.save(pageDestination, position)
+        if (pageDestination == destination) persistScrollPosition()
+    }
+
+    fun selectDestination(newDestination: GalleryDestination) {
+        if (destination == newDestination) return
+        destination = newDestination
+        saveDestination()
+        publishUiState()
+        requestRefresh(manual = false)
+    }
+
+    fun navigateUp() {
+        GalleryNavigationPolicy.parent(destination)?.let(::selectDestination)
+    }
+
+    /**
+     * The cached album is loaded before the destination is published, so the screen goes
+     * straight from the album list to the album's photos in one render instead of showing an
+     * empty page first and rendering again when the cache arrives.
+     */
+    fun openAlbum(album: ProtonAlbum) {
+        val albumReference = album.reference()
+        destination = GalleryDestination.AlbumPhotos(albumReference)
+        saveDestination()
+        viewModelScope.launch {
+            val userId = currentUserId
+            try {
+                if (userId != null) {
+                    withContext(dispatchers.io) { protonRepository.loadCachedAlbum(userId, albumReference) }
+                }
+            } finally {
+                // Whatever the cache said, the navigation must land; a later change wins.
+                publishUiState()
+            }
+            if (userId != null) protonThumbnailScheduler.enqueue(userId)
+            requestRefresh(manual = false)
+        }
+    }
+
+    internal fun setSelection(stableIds: Set<String>) {
+        if (selectedStableIds == stableIds) return
+        selectedStableIds = stableIds
+        savedStateHandle[STATE_SELECTION] = ArrayList(stableIds)
+    }
+
+    /**
+     * Moves the photos to Proton Trash. Runs in this scope, so the call is neither cancelled nor
+     * left unreported when the activity is recreated while it is in flight; the outcome reaches
+     * whichever activity collects [mutationEvents] next.
+     */
+    fun trashPhotos(nodeUids: List<String>) {
+        if (mutationInFlight || nodeUids.isEmpty()) return
+        val userId = currentUserId ?: return
+        mutationInFlight = true
+        viewModelScope.launch {
+            try {
+                val result = deletionExecutor.trashProton(userId, nodeUids)
+                setSelection(emptySet())
+                mutableMutationEvents.trySend(GalleryMutationEvent.Trashed(result.successfulCount, result.failedCount))
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Throwable) {
+                mutableMutationEvents.trySend(GalleryMutationEvent.TrashFailed)
+            } finally {
+                mutationInFlight = false
+            }
+        }
+    }
+
+    fun requestRefresh(manual: Boolean = true) {
+        val selectedDestination = destination
+        val generation = if (manual) ++manualRefreshGeneration else manualRefreshGeneration
+        if (manual) {
+            setRefreshing(true)
+            // The user asked for it: a pause set from the download notification is lifted.
+            currentUserId?.let(protonThumbnailScheduler::clearPaused)
+        }
+        viewModelScope.launch {
+            try {
+                refresh(selectedDestination, forceRemote = manual)
+            } finally {
+                if (manual) {
+                    if (generation == manualRefreshGeneration) setRefreshing(false)
+                }
+            }
+        }
+    }
+
+    fun refreshAfterMutation() {
+        requestRefresh(manual = false)
+    }
+
+    /**
+     * Keeps the visible section current while the gallery is on screen. The caller scopes it
+     * to the started lifecycle, so it pauses in the background and resumes with an immediate
+     * check when the last one is overdue. Each check is a quiet, non-forced refresh: the
+     * repository re-enumerates only once the cached listing is older than its freshness limit.
+     */
+    suspend fun runPeriodicSync() {
+        while (true) {
+            delay(GalleryPeriodicSyncPolicy.delayUntilNextCheckMillis(lastPeriodicCheckMillis, clock.nowMillis()))
+            lastPeriodicCheckMillis = clock.nowMillis()
+            if (currentUserId != null && !sessionTransitioning) requestRefresh(manual = false)
+        }
+    }
+
+    fun resumeThumbnailDownloads() {
+        val userId = currentUserId ?: return
+        viewModelScope.launch(dispatchers.io) {
+            protonThumbnailScheduler.resume(userId)
+        }
+    }
+
+    fun disconnectProton() {
+        val userId = currentUserId ?: return
+        explicitDisconnect = true
+        viewModelScope.launch {
+            accountManager.removeAccount(userId)
+            destination = GalleryNavigationPolicy.withoutAccount(destination)
+            saveDestination()
+            publishUiState()
+        }
+    }
+
+    private fun observeAccountSession() {
+        viewModelScope.launch {
+            accountSession.collectLatest(::handleAccountSession)
+        }
+    }
+
+    private suspend fun handleAccountSession(state: ProtonAccountSessionState) {
+        val accountStatus = accountStatus(state)
+        sessionTransitioning = state.transitioning
+        if (!state.initialized) {
+            publishUiState(accountStatus)
+            return
+        }
+        val readyAccount = state.account?.takeIf(Account::isReady)
+        val previousUserId = currentUserId
+        val nextUserId = state.activeUserId
+        val userChanged = previousUserId != nextUserId
+        if (userChanged) currentUserId = nextUserId
+        if (state.transitioning) {
+            publishUiState(accountStatus)
+            return
+        }
+        if (nextUserId != null) {
+            // Back with an account: the notice has done its job, and a later removal is a new event.
+            explicitDisconnect = false
+            signedOut = false
+        } else if (userChanged && !explicitDisconnect) {
+            // The account was removed underneath the app (an expired session); say so rather than
+            // fall back to the first-launch invitation as if the user had never connected.
+            signedOut = true
+        }
+        if (readyAccount == null) {
+            val fallback = GalleryNavigationPolicy.withoutAccount(destination)
+            if (fallback != destination) {
+                destination = fallback
+                saveDestination()
+            }
+        }
+        publishUiState(accountStatus)
+        if (userChanged && nextUserId != null) {
+            if (requestMissingProtonMetadata(nextUserId)) return
+            protonThumbnailScheduler.restart(nextUserId)
+        }
+        requestRefresh(manual = false)
+    }
+
+    private fun requestMissingProtonMetadata(userId: UserId): Boolean {
+        val timeline = protonRepository.state.value
+        val albums = protonRepository.albumsState.value
+        val loadTimeline = timeline.userId != userId.id || !timeline.hasLoaded
+        val loadAlbums = albums.userId != userId.id || !albums.hasLoaded
+        if (!loadTimeline && !loadAlbums) return false
+
+        viewModelScope.launch {
+            coroutineScope {
+                if (loadTimeline) {
+                    launch(dispatchers.io) {
+                        protonRepository.syncTimelineMetadata(userId)
+                    }
+                }
+                if (loadAlbums) {
+                    launch(dispatchers.io) {
+                        protonRepository.syncAlbumsMetadata(userId)
+                    }
+                }
+            }
+            // The page the user is on needs its own listing too, or a restore into it stays blank.
+            val selected = destination
+            if (selected is GalleryDestination.Tag) {
+                withContext(dispatchers.io) {
+                    protonRepository.syncTagMetadata(userId, selected.tag)
+                }
+            }
+            if (selected is GalleryDestination.AlbumPhotos) {
+                withContext(dispatchers.io) {
+                    ensureCachedAlbumLoaded(userId, selected.album)
+                    protonRepository.syncAlbumPhotoMetadata(userId, selected.album)
+                }
+            }
+            if (currentUserId == userId) {
+                protonThumbnailScheduler.restart(userId)
+            }
+        }
+        return true
+    }
+
+    private suspend fun refresh(
+        selectedDestination: GalleryDestination,
+        forceRemote: Boolean,
+    ) {
+        val userId = currentUserId ?: return
+        when (selectedDestination) {
+            GalleryDestination.Timeline -> {
+                withContext(dispatchers.io) {
+                    refreshProtonSection(userId) {
+                        protonRepository.syncTimelineMetadata(userId, forceRemote)
+                    }
+                }
+            }
+
+            is GalleryDestination.Tag -> {
+                withContext(dispatchers.io) {
+                    refreshProtonSection(userId) {
+                        if (!protonRepository.state.value.hasLoaded) {
+                            protonRepository.syncTimelineMetadata(userId, forceRemote)
+                        }
+                        protonRepository.syncTagMetadata(userId, selectedDestination.tag, forceRemote)
+                    }
+                }
+            }
+
+            GalleryDestination.Library -> {
+                withContext(dispatchers.io) {
+                    refreshProtonSection(userId) {
+                        protonRepository.syncAlbumsMetadata(userId, forceRemote)
+                    }
+                }
+            }
+
+            is GalleryDestination.AlbumPhotos -> {
+                withContext(dispatchers.io) {
+                    ensureCachedAlbumLoaded(userId, selectedDestination.album)
+                    protonRepository.syncAlbumPhotoMetadata(
+                        userId,
+                        selectedDestination.album,
+                        forceRemote,
+                    )
+                }
+                protonThumbnailScheduler.enqueue(userId)
+            }
+        }
+    }
+
+    /**
+     * Puts the album's cached photos on screen before its sync runs. [openAlbum] does this on
+     * the way in; a restored album destination (a recreation, or a cold start into it) has no
+     * such step and would show an empty page until the sync settled.
+     */
+    private suspend fun ensureCachedAlbumLoaded(
+        userId: UserId,
+        album: ProtonAlbumReference,
+    ) {
+        val current = protonRepository.albumPhotosState.value
+        if (current.userId == userId.id && current.albumUid == album.nodeUid && current.hasLoaded) return
+        protonRepository.loadCachedAlbum(userId, album)
+    }
+
+    private suspend fun refreshProtonSection(
+        userId: UserId,
+        sync: suspend () -> Unit,
+    ) {
+        sync()
+        protonThumbnailScheduler.enqueue(userId)
+    }
+
+    /** Pushes the current destination and user (and, when given, account status) into the state flow. */
+    private fun publishUiState(accountStatus: ProtonAccountStatus? = null) {
+        localInputs.update { inputs ->
+            inputs.copy(
+                destination = destination,
+                currentUserId = currentUserId,
+                accountStatus = accountStatus ?: inputs.accountStatus,
+                signedOut = signedOut,
+            )
+        }
+    }
+
+    private fun setRefreshing(refreshing: Boolean) {
+        localInputs.update { inputs -> inputs.copy(isRefreshing = refreshing) }
+    }
+
+    private data class LocalInputs(
+        val destination: GalleryDestination,
+        val currentUserId: UserId?,
+        val accountStatus: ProtonAccountStatus,
+        val isRefreshing: Boolean,
+        val signedOut: Boolean = false,
+    )
+
+    private fun saveDestination() {
+        val stored = GalleryNavigationCodec.encode(destination)
+        savedStateHandle[STATE_DESTINATION] = stored.destination
+        savedStateHandle[STATE_ALBUM_UID] = stored.albumUid
+        savedStateHandle[STATE_ALBUM_NAME] = stored.albumName
+        savedStateHandle[STATE_TAG] = stored.tag
+        persistScrollPosition()
+        setSelection(emptySet())
+        // A cold start reopens the tab root, never a deep collection or album.
+        navigationStore.write(GalleryNavigationPolicy.root(destination))
+    }
+
+    /** The saved state carries the position of the current page only; it follows the destination. */
+    private fun persistScrollPosition() {
+        val position = scrollPositions.positionFor(destination)
+        if (position == null) {
+            savedStateHandle.remove<Int>(STATE_SCROLL_FIRST_VISIBLE)
+            savedStateHandle.remove<Int>(STATE_SCROLL_TOP_OFFSET)
+        } else {
+            savedStateHandle[STATE_SCROLL_FIRST_VISIBLE] = position.firstVisiblePosition
+            savedStateHandle[STATE_SCROLL_TOP_OFFSET] = position.topOffset
+        }
+    }
+
+    private companion object {
+        const val STATE_DESTINATION = "gallery.destination"
+        const val STATE_ALBUM_UID = "gallery.album-uid"
+        const val STATE_ALBUM_NAME = "gallery.album-name"
+        const val STATE_TAG = "gallery.proton-tag"
+        const val STATE_SCROLL_FIRST_VISIBLE = "gallery.scroll-first-visible"
+        const val STATE_SCROLL_TOP_OFFSET = "gallery.scroll-top-offset"
+        const val STATE_SELECTION = "gallery.selection"
+        const val MUTATION_EVENT_BUFFER = 16
+        const val UI_STATE_STOP_TIMEOUT_MILLIS = 5_000L
+
+        private fun accountStatus(state: ProtonAccountSessionState): ProtonAccountStatus =
+            ProtonAccountStatus.resolve(
+                initialized = state.initialized,
+                transitioning = state.transitioning,
+                hasAccount = state.account != null,
+                accountIsReady = state.account?.isReady() == true,
+            )
+
+        private fun uiInputs(
+            gallery: ProtonGalleryState,
+            albums: ProtonAlbumsState,
+            albumPhotos: ProtonAlbumPhotosState,
+            local: LocalInputs,
+        ) = GalleryUiInputs(
+            destination = local.destination,
+            protonGallery = gallery,
+            protonAlbums = albums,
+            protonAlbumPhotos = albumPhotos,
+            currentUserId = local.currentUserId,
+            protonAccountStatus = local.accountStatus,
+            isRefreshing = local.isRefreshing,
+            signedOut = local.signedOut,
+        )
+
+        fun restoreNavigation(state: SavedStateHandle): GalleryDestination? =
+            GalleryNavigationCodec.decode(
+                StoredGalleryNavigation(
+                    destination = state[STATE_DESTINATION],
+                    albumUid = state[STATE_ALBUM_UID],
+                    albumName = state[STATE_ALBUM_NAME],
+                    tag = state[STATE_TAG],
                 ),
             )
 
-        /**
-         * The initial value is a skeleton because it is built on whichever thread first touches
-         * this property (the main thread in the activity's onCreate); mapping and sorting a warm
-         * repository's timeline there would delay the first frame. The full state follows from
-         * the Default dispatcher. Sharing stops shortly after the last collector leaves, so the
-         * join does not recompute states while the gallery is off screen.
-         */
-        val uiState: StateFlow<GalleryUiState> =
-            combine(
-                protonRepository.state,
-                protonRepository.albumsState,
-                protonRepository.albumPhotosState,
-                localInputs,
-                ::uiInputs,
-            ).conflate()
-                .map(uiStateFactory::create)
-                .flowOn(Dispatchers.Default)
-                .stateIn(
-                    scope = viewModelScope,
-                    started = SharingStarted.WhileSubscribed(stopTimeoutMillis = UI_STATE_STOP_TIMEOUT_MILLIS),
-                    initialValue =
-                        uiStateFactory.skeleton(
-                            uiInputs(
-                                protonRepository.state.value,
-                                protonRepository.albumsState.value,
-                                protonRepository.albumPhotosState.value,
-                                localInputs.value,
-                            ),
-                        ),
-                )
-
-        init {
-            observeAccountSession()
-        }
-
-        fun selectDestination(newDestination: GalleryDestination) {
-            if (destination == newDestination) return
-            destination = newDestination
-            saveDestination()
-            publishUiState()
-            requestRefresh(manual = false)
-        }
-
-        fun navigateUp() {
-            GalleryNavigationPolicy.parent(destination)?.let(::selectDestination)
-        }
-
-        /**
-         * The cached album is loaded before the destination is published, so the screen goes
-         * straight from the album list to the album's photos in one render instead of showing an
-         * empty page first and rendering again when the cache arrives.
-         */
-        fun openAlbum(album: ProtonAlbum) {
-            val albumReference = album.reference()
-            destination = GalleryDestination.AlbumPhotos(albumReference)
-            saveDestination()
-            viewModelScope.launch {
-                val userId = currentUserId
-                try {
-                    if (userId != null) {
-                        withContext(Dispatchers.IO) { protonRepository.loadCachedAlbum(userId, albumReference) }
-                    }
-                } finally {
-                    // Whatever the cache said, the navigation must land; a later change wins.
-                    publishUiState()
-                }
-                if (userId != null) protonThumbnailScheduler.enqueue(userId)
-                requestRefresh(manual = false)
-            }
-        }
-
-        fun requestRefresh(manual: Boolean = true) {
-            val selectedDestination = destination
-            val generation = if (manual) ++manualRefreshGeneration else manualRefreshGeneration
-            if (manual) setRefreshing(true)
-            viewModelScope.launch {
-                try {
-                    refresh(selectedDestination, forceRemote = manual)
-                } finally {
-                    if (manual) {
-                        if (generation == manualRefreshGeneration) setRefreshing(false)
-                    }
-                }
-            }
-        }
-
-        fun refreshAfterMutation() {
-            requestRefresh(manual = false)
-        }
-
-        /**
-         * Keeps the visible section current while the gallery is on screen. The caller scopes it
-         * to the started lifecycle, so it pauses in the background and resumes with an immediate
-         * check when the last one is overdue. Each check is a quiet, non-forced refresh: the
-         * repository re-enumerates only once the cached listing is older than its freshness limit.
-         */
-        suspend fun runPeriodicSync() {
-            while (true) {
-                delay(GalleryPeriodicSyncPolicy.delayUntilNextCheckMillis(lastPeriodicCheckMillis, clock.nowMillis()))
-                lastPeriodicCheckMillis = clock.nowMillis()
-                if (currentUserId != null && !sessionTransitioning) requestRefresh(manual = false)
-            }
-        }
-
-        fun resumeThumbnailDownloads() {
-            val userId = currentUserId ?: return
-            viewModelScope.launch(Dispatchers.IO) {
-                protonThumbnailScheduler.resume(userId)
-            }
-        }
-
-        fun disconnectProton() {
-            val userId = currentUserId ?: return
-            viewModelScope.launch {
-                accountManager.removeAccount(userId)
-                destination = GalleryNavigationPolicy.withoutAccount(destination)
-                saveDestination()
-                publishUiState()
-            }
-        }
-
-        private fun observeAccountSession() {
-            viewModelScope.launch {
-                accountSessionManager.state.collectLatest(::handleAccountSession)
-            }
-        }
-
-        private suspend fun handleAccountSession(state: ProtonAccountSessionState) {
-            val accountStatus = accountStatus(state)
-            sessionTransitioning = state.transitioning
-            if (!state.initialized) {
-                publishUiState(accountStatus)
-                return
-            }
-            val readyAccount = state.account?.takeIf(Account::isReady)
-            val previousUserId = currentUserId
-            val nextUserId = state.activeUserId
-            val userChanged = previousUserId != nextUserId
-            if (userChanged) currentUserId = nextUserId
-            if (state.transitioning) {
-                publishUiState(accountStatus)
-                return
-            }
-            if (readyAccount == null) {
-                val fallback = GalleryNavigationPolicy.withoutAccount(destination)
-                if (fallback != destination) {
-                    destination = fallback
-                    saveDestination()
-                }
-            }
-            publishUiState(accountStatus)
-            if (userChanged && nextUserId != null) {
-                if (requestMissingProtonMetadata(nextUserId)) return
-                protonThumbnailScheduler.restart(nextUserId)
-            }
-            requestRefresh(manual = false)
-        }
-
-        private fun requestMissingProtonMetadata(userId: UserId): Boolean {
-            val timeline = protonRepository.state.value
-            val albums = protonRepository.albumsState.value
-            val loadTimeline = timeline.userId != userId.id || !timeline.hasLoaded
-            val loadAlbums = albums.userId != userId.id || !albums.hasLoaded
-            if (!loadTimeline && !loadAlbums) return false
-
-            viewModelScope.launch {
-                coroutineScope {
-                    if (loadTimeline) {
-                        launch(Dispatchers.IO) {
-                            protonRepository.syncTimelineMetadata(userId)
-                        }
-                    }
-                    if (loadAlbums) {
-                        launch(Dispatchers.IO) {
-                            protonRepository.syncAlbumsMetadata(userId)
-                        }
-                    }
-                }
-                (destination as? GalleryDestination.Tag)?.let { selected ->
-                    withContext(Dispatchers.IO) {
-                        protonRepository.syncTagMetadata(userId, selected.tag)
-                    }
-                }
-                if (currentUserId == userId) {
-                    protonThumbnailScheduler.restart(userId)
-                }
-            }
-            return true
-        }
-
-        private suspend fun refresh(
-            selectedDestination: GalleryDestination,
-            forceRemote: Boolean,
-        ) {
-            val userId = currentUserId ?: return
-            when (selectedDestination) {
-                GalleryDestination.Timeline -> {
-                    withContext(Dispatchers.IO) {
-                        refreshProtonSection(userId) {
-                            protonRepository.syncTimelineMetadata(userId, forceRemote)
-                        }
-                    }
-                }
-
-                is GalleryDestination.Tag -> {
-                    withContext(Dispatchers.IO) {
-                        refreshProtonSection(userId) {
-                            if (!protonRepository.state.value.hasLoaded) {
-                                protonRepository.syncTimelineMetadata(userId, forceRemote)
-                            }
-                            protonRepository.syncTagMetadata(userId, selectedDestination.tag, forceRemote)
-                        }
-                    }
-                }
-
-                GalleryDestination.Library -> {
-                    withContext(Dispatchers.IO) {
-                        refreshProtonSection(userId) {
-                            protonRepository.syncAlbumsMetadata(userId, forceRemote)
-                        }
-                    }
-                }
-
-                is GalleryDestination.AlbumPhotos -> {
-                    withContext(Dispatchers.IO) {
-                        protonRepository.syncAlbumPhotoMetadata(
-                            userId,
-                            selectedDestination.album,
-                            forceRemote,
-                        )
-                    }
-                    protonThumbnailScheduler.enqueue(userId)
-                }
-            }
-        }
-
-        private suspend fun refreshProtonSection(
-            userId: UserId,
-            sync: suspend () -> Unit,
-        ) {
-            sync()
-            protonThumbnailScheduler.enqueue(userId)
-        }
-
-        /** Pushes the current destination and user (and, when given, account status) into the state flow. */
-        private fun publishUiState(accountStatus: ProtonAccountStatus? = null) {
-            localInputs.update { inputs ->
-                inputs.copy(
-                    destination = destination,
-                    currentUserId = currentUserId,
-                    accountStatus = accountStatus ?: inputs.accountStatus,
-                )
-            }
-        }
-
-        private fun setRefreshing(refreshing: Boolean) {
-            localInputs.update { inputs -> inputs.copy(isRefreshing = refreshing) }
-        }
-
-        private data class LocalInputs(
-            val destination: GalleryDestination,
-            val currentUserId: UserId?,
-            val accountStatus: ProtonAccountStatus,
-            val isRefreshing: Boolean,
-        )
-
-        private fun saveDestination() {
-            val stored = GalleryNavigationCodec.encode(destination)
-            savedStateHandle[STATE_DESTINATION] = stored.destination
-            savedStateHandle[STATE_ALBUM_UID] = stored.albumUid
-            savedStateHandle[STATE_ALBUM_NAME] = stored.albumName
-            savedStateHandle[STATE_TAG] = stored.tag
-            // A cold start reopens the tab root, never a deep collection or album.
-            navigationStore.write(GalleryNavigationPolicy.root(destination))
-        }
-
-        private companion object {
-            const val STATE_DESTINATION = "gallery.destination"
-            const val STATE_ALBUM_UID = "gallery.album-uid"
-            const val STATE_ALBUM_NAME = "gallery.album-name"
-            const val STATE_TAG = "gallery.proton-tag"
-            const val UI_STATE_STOP_TIMEOUT_MILLIS = 5_000L
-
-            private fun accountStatus(state: ProtonAccountSessionState): ProtonAccountStatus =
-                ProtonAccountStatus.resolve(
-                    initialized = state.initialized,
-                    transitioning = state.transitioning,
-                    hasAccount = state.account != null,
-                    accountIsReady = state.account?.isReady() == true,
-                )
-
-            private fun uiInputs(
-                gallery: ProtonGalleryState,
-                albums: ProtonAlbumsState,
-                albumPhotos: ProtonAlbumPhotosState,
-                local: LocalInputs,
-            ) = GalleryUiInputs(
-                destination = local.destination,
-                protonGallery = gallery,
-                protonAlbums = albums,
-                protonAlbumPhotos = albumPhotos,
-                currentUserId = local.currentUserId,
-                protonAccountStatus = local.accountStatus,
-                isRefreshing = local.isRefreshing,
-            )
-
-            fun restoreNavigation(state: SavedStateHandle): GalleryDestination? =
-                GalleryNavigationCodec.decode(
-                    StoredGalleryNavigation(
-                        destination = state[STATE_DESTINATION],
-                        albumUid = state[STATE_ALBUM_UID],
-                        albumName = state[STATE_ALBUM_NAME],
-                        tag = state[STATE_TAG],
-                    ),
-                )
+        fun restoreScrollPosition(state: SavedStateHandle): GalleryScrollPosition? {
+            val firstVisible = state.get<Int>(STATE_SCROLL_FIRST_VISIBLE) ?: return null
+            val topOffset = state.get<Int>(STATE_SCROLL_TOP_OFFSET) ?: return null
+            return GalleryScrollPosition(firstVisiblePosition = firstVisible, topOffset = topOffset)
         }
     }
+}

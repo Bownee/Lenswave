@@ -40,6 +40,9 @@ internal class ProtonPhotoCache
          */
         private val renditions = ConcurrentHashMap<String, ProtonStoredRenditions>()
 
+        /** Queues whose file could not be read for a transient reason; see [readQueue] and [writeQueue]. */
+        private val unreadQueues: MutableSet<Pair<String, ProtonQueueName>> = ConcurrentHashMap.newKeySet()
+
         /** Metadata hydration only needs availability; authenticated contents are validated when read. */
         override fun thumbnailExists(
             userId: String,
@@ -237,51 +240,67 @@ internal class ProtonPhotoCache
             )
         }
 
+        /**
+         * The queue hydrates as empty when its file cannot be read right now, since the store
+         * contract has no "unknown"; the queue is remembered in [unreadQueues] so the next
+         * [writeQueue] merges rather than replaces the file, which still holds the good copy.
+         */
         override fun readQueue(
             userId: String,
             queue: ProtonQueueName,
-        ): List<ProtonThumbnailQueueEntry> =
-            readSnapshot(userId, queueFile(userId, queue)) { text ->
-                val array = JSONArray(text)
-                buildList {
-                    for (position in 0 until array.length()) {
-                        val value = array.getJSONObject(position)
-                        val sourceCaptureTimes =
-                            value.optJSONObject("sourceCaptureTimes")?.let { stored ->
-                                buildMap {
-                                    val sources = stored.keys()
-                                    while (sources.hasNext()) {
-                                        val source = sources.next()
-                                        put(source, stored.getLong(source))
-                                    }
-                                }
-                            } ?: run {
-                                val legacySources = value.getJSONArray("sources")
-                                buildMap {
-                                    for (sourcePosition in 0 until legacySources.length()) {
-                                        put(legacySources.getString(sourcePosition), Long.MIN_VALUE)
-                                    }
+        ): List<ProtonThumbnailQueueEntry> {
+            val key = userId to queue
+            unreadQueues -= key
+            return readSnapshot(userId, queueFile(userId, queue), ::parseQueue) { error ->
+                LenswaveDiagnostics.reportFailure(LenswaveOperation.CACHE_SNAPSHOT_READ, error)
+                unreadQueues += key
+                null
+            }.orEmpty()
+        }
+
+        private fun parseQueue(text: String): List<ProtonThumbnailQueueEntry> {
+            val array = JSONArray(text)
+            return buildList {
+                for (position in 0 until array.length()) {
+                    val value = array.getJSONObject(position)
+                    val sourceCaptureTimes =
+                        value.optJSONObject("sourceCaptureTimes")?.let { stored ->
+                            buildMap {
+                                val sources = stored.keys()
+                                while (sources.hasNext()) {
+                                    val source = sources.next()
+                                    put(source, stored.getLong(source))
                                 }
                             }
-                        add(
-                            ProtonThumbnailQueueEntry(
-                                nodeUid = value.getString("nodeUid"),
-                                sourceCaptureTimes = sourceCaptureTimes,
-                                retryCount = value.optInt("retryCount"),
-                                retryAtMillis = value.optLong("retryAtMillis"),
-                            ),
-                        )
-                    }
+                        } ?: run {
+                            val legacySources = value.getJSONArray("sources")
+                            buildMap {
+                                for (sourcePosition in 0 until legacySources.length()) {
+                                    put(legacySources.getString(sourcePosition), Long.MIN_VALUE)
+                                }
+                            }
+                        }
+                    add(
+                        ProtonThumbnailQueueEntry(
+                            nodeUid = value.getString("nodeUid"),
+                            sourceCaptureTimes = sourceCaptureTimes,
+                            retryCount = value.optInt("retryCount"),
+                            retryAtMillis = value.optLong("retryAtMillis"),
+                        ),
+                    )
                 }
-            }.orEmpty()
+            }
+        }
 
         override fun writeQueue(
             userId: String,
             queue: ProtonQueueName,
             entries: List<ProtonThumbnailQueueEntry>,
         ) {
+            val key = userId to queue
+            val written = if (key in unreadQueues) mergeWithStoredQueue(userId, queue, entries) else entries
             val array = JSONArray()
-            entries.forEach { entry ->
+            written.forEach { entry ->
                 val sourceCaptureTimes = JSONObject()
                 entry.sourceCaptureTimes.toSortedMap().forEach { (source, captureTime) ->
                     sourceCaptureTimes.put(source, captureTime)
@@ -300,6 +319,27 @@ internal class ProtonPhotoCache
                 array.toString(),
                 "Could not commit Proton download queue",
             )
+            unreadQueues -= key
+        }
+
+        /**
+         * The in-memory queue started empty because its file could not be read (see
+         * [readQueue]), so writing it as it is would throw away every entry the file still
+         * holds. The file is read again here: its entries that memory does not know are kept
+         * and memory wins for the rest. A file that still cannot be read refuses the write;
+         * the queue reports that and retries the flush with backoff, by which time the
+         * Keystore or the disk has usually recovered.
+         */
+        private fun mergeWithStoredQueue(
+            userId: String,
+            queue: ProtonQueueName,
+            entries: List<ProtonThumbnailQueueEntry>,
+        ): List<ProtonThumbnailQueueEntry> {
+            val stored =
+                readSnapshot(userId, queueFile(userId, queue), ::parseQueue) { error ->
+                    throw IllegalStateException("Could not read the Proton download queue before writing it", error)
+                }.orEmpty()
+            return ProtonQueueMergePolicy.merge(entries, stored)
         }
 
         override fun reconcileAlbums(
@@ -347,7 +387,24 @@ internal class ProtonPhotoCache
             thumbnails.maintain(userId)
             previews.maintain(userId)
             originals.maintain(userId)
+            sweepStaleWriteTemporaries(userId)
             forgetRenditions(userId)
+        }
+
+        /**
+         * An atomic write leaves its `.part` file beside the target when the process dies between
+         * the write and the rename, and nothing else ever removes it. Only the directories the
+         * listings, the tag files, the sync stamps and the queues are written to are swept (the
+         * album-photo indexes are swept by [reconcileAlbums]), and only files past the stale TTL,
+         * so a write in progress on another thread is left alone.
+         */
+        private fun sweepStaleWriteTemporaries(userId: String) {
+            val user = userDirectory(userId)
+            listOf(user, File(user, TAGS_DIRECTORY), File(user, SYNC_DIRECTORY)).forEach { directory ->
+                directory.listFiles()?.forEach { file ->
+                    if (file.isFile && isStalePartial(file)) file.delete()
+                }
+            }
         }
 
         override fun reconcilePhotos(
@@ -386,12 +443,10 @@ internal class ProtonPhotoCache
             nodeUids: Collection<String>,
         ) {
             val removed = nodeUids.toSet()
-            removed.forEach { nodeUid ->
-                thumbnails.remove(userId, nodeUid)
-                previews.remove(userId, nodeUid)
-                originals.remove(userId, nodeUid)
-            }
-            forgetRenditions(userId)
+            // The listings are rewritten before any rendition is deleted, so a crash in between
+            // leaves stray files for the next reconcile rather than listings that still name
+            // the photos. Only the node uids are persisted, so the rendition availability the
+            // listings are hydrated with does not matter here.
             val availability = storedRenditions(userId)
             // A listing that did not contain any of the photos is left as it is; rewriting it
             // would encrypt and commit the same contents again under the sync mutex.
@@ -428,6 +483,12 @@ internal class ProtonPhotoCache
                     )
                 }
             }
+            removed.forEach { nodeUid ->
+                thumbnails.remove(userId, nodeUid)
+                previews.remove(userId, nodeUid)
+                originals.remove(userId, nodeUid)
+            }
+            forgetRenditions(userId)
         }
 
         /**
@@ -441,6 +502,7 @@ internal class ProtonPhotoCache
             thumbnails.clearMemory(userId)
             previews.forget(userId)
             forgetRenditions(userId)
+            unreadQueues.removeAll { (owner, _) -> owner == userId }
             val indexDeleted = userDirectory(userId).deleteRecursively()
             val originalsDeleted = originals.clear(userId)
             if (!indexDeleted || !originalsDeleted) {
@@ -452,15 +514,29 @@ internal class ProtonPhotoCache
             secureFiles.deleteKey(scope(userId))
         }
 
+        /**
+         * Directory names are hashed user ids and key files are hashed scopes, so an orphaned
+         * directory cannot name its key; the alias marker each directory carries does. A directory
+         * from before the marker existed leaves its key behind: a wrapped key nothing reads.
+         */
         override fun retainOnlyUser(userId: String?) {
             val retainedName = userId?.let(::safeName)
             root.listFiles()?.filter { it.name != retainedName }?.forEach { directory ->
+                val keyAlias = File(directory, KEY_ALIAS_FILE).takeIf(File::isFile)?.readText()
                 check(directory.deleteRecursively()) { "Could not remove orphaned Proton cache" }
+                keyAlias?.let { alias ->
+                    try {
+                        secureFiles.deleteKeyAlias(alias)
+                    } catch (error: IllegalArgumentException) {
+                        LenswaveDiagnostics.reportFailure(LenswaveOperation.CACHE_CLEAR, error)
+                    }
+                }
             }
             originals.retainOnly(userId)
             thumbnails.retainMemoryFor(userId)
             previews.retainCountsFor(userId)
             renditions.keys.removeAll { key -> key != userId }
+            unreadQueues.removeAll { (owner, _) -> owner != userId }
         }
 
         private fun indexFile(userId: String): File = File(userDirectory(userId), "index.json")
@@ -468,7 +544,7 @@ internal class ProtonPhotoCache
         private fun tagIndexFile(
             userId: String,
             tag: ProtonMediaTag,
-        ): File = File(File(userDirectory(userId), "tags"), "${tag.name.lowercase()}.json")
+        ): File = File(File(userDirectory(userId), TAGS_DIRECTORY), "${tag.name.lowercase()}.json")
 
         private fun albumsIndexFile(userId: String): File = File(userDirectory(userId), "albums.json")
 
@@ -482,7 +558,7 @@ internal class ProtonPhotoCache
         private fun syncMetadataFile(
             userId: String,
             source: String,
-        ): File = File(File(userDirectory(userId), "sync"), "${safeName(source)}.timestamp")
+        ): File = File(File(userDirectory(userId), SYNC_DIRECTORY), "${safeName(source)}.timestamp")
 
         private fun queueFile(
             userId: String,
@@ -527,6 +603,18 @@ internal class ProtonPhotoCache
             userId: String,
             file: File,
             parse: (String) -> T,
+        ): T? =
+            readSnapshot(userId, file, parse) { error ->
+                LenswaveDiagnostics.reportFailure(LenswaveOperation.CACHE_SNAPSHOT_READ, error)
+                null
+            }
+
+        /** [readSnapshot] with the transient case in the caller's hands: [onTransientFailure] decides what it reads as. */
+        private inline fun <T> readSnapshot(
+            userId: String,
+            file: File,
+            parse: (String) -> T,
+            onTransientFailure: (Exception) -> T?,
         ): T? {
             if (!file.isFile) return null
             return try {
@@ -534,10 +622,10 @@ internal class ProtonPhotoCache
             } catch (error: Exception) {
                 if (ProtonSnapshotCorruptionPolicy.isCorrupt(error)) {
                     file.delete()
+                    null
                 } else {
-                    LenswaveDiagnostics.reportFailure(LenswaveOperation.CACHE_SNAPSHOT_READ, error)
+                    onTransientFailure(error)
                 }
-                null
             }
         }
 
@@ -573,7 +661,15 @@ internal class ProtonPhotoCache
             contents: String,
             failureMessage: String,
         ) {
+            recordKeyAlias(userId)
             secureFiles.writeText(scope(userId), target, contents, failureMessage)
+        }
+
+        /** Leaves the data-key alias beside the user's metadata so [retainOnlyUser] can delete the key. */
+        private fun recordKeyAlias(userId: String) {
+            val marker = File(userDirectory(userId), KEY_ALIAS_FILE)
+            if (marker.isFile) return
+            AtomicFileStore.write(marker, secureFiles.keyAlias(scope(userId)), "Could not record the cache key alias")
         }
 
         private fun readText(
@@ -596,4 +692,10 @@ internal class ProtonPhotoCache
         ): Boolean = file.lastModified() <= 0L || clock.nowMillis() - file.lastModified() > ttlMillis
 
         private fun safeName(value: String): String = AtomicFileStore.safeName(value)
+
+        private companion object {
+            const val KEY_ALIAS_FILE = "key-alias"
+            const val TAGS_DIRECTORY = "tags"
+            const val SYNC_DIRECTORY = "sync"
+        }
     }

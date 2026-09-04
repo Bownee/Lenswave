@@ -80,10 +80,13 @@ jobs:
           languages: java-kotlin
           build-mode: manual
 
+      # CodeQL only sees code the compiler processes in this job. Pull request builds save the
+      # Gradle build cache, so without this the compile tasks would be restored from it and the
+      # database would end up empty.
       - name: Build analyzed sources
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug --stacktrace
+          ./gradlew assembleDebug --no-build-cache --stacktrace
 
       - name: Analyze
         uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
