@@ -93,6 +93,12 @@ internal interface ProtonAlbumCache {
 }
 
 interface ProtonMediaCache {
+    /** A cheap file stat; use it to skip work, never as proof that the bytes decode. */
+    fun thumbnailExists(
+        userId: String,
+        nodeUid: String,
+    ): Boolean
+
     fun loadThumbnail(
         userId: String,
         nodeUid: String,

@@ -47,7 +47,8 @@ internal class ProtonRenditionDownloads
             val requested = nodeUids.distinct()
             val successful =
                 requested.filterTo(mutableSetOf()) { nodeUid ->
-                    cache.loadThumbnail(userId.id, nodeUid) != null
+                    // A file stat only: decoding here would evict the gallery's own bitmaps.
+                    cache.thumbnailExists(userId.id, nodeUid)
                 }
             if (successful.isNotEmpty()) {
                 onProgress(ThumbnailBatchResult(successful.toSet(), emptyMap()))
