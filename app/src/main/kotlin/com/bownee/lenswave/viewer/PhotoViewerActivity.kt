@@ -34,6 +34,7 @@ import com.bownee.lenswave.gallery.PhotoDeletionPolicy
 import com.bownee.lenswave.gallery.ProtonOriginalMediaSource
 import com.bownee.lenswave.gallery.ProtonPhotoMutations
 import com.bownee.lenswave.gallery.ProtonThumbnailImageSource
+import com.bownee.lenswave.metadata.PhotoMetadataHints
 import com.bownee.lenswave.metadata.PhotoMetadataReader
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CancellationException
@@ -217,6 +218,8 @@ class PhotoViewerActivity : FragmentActivity() {
                         override val gesturesBlocked: Boolean get() = photoTransitioning || dismissing
 
                         override fun fittedMediaBottom(): Float? = this@PhotoViewerActivity.fittedMediaBottom()
+
+                        override fun metadataHints(uri: Uri): PhotoMetadataHints? = photoView.metadataHints(uri)
 
                         override fun handlePhotoDismissDrag(
                             distance: Float,

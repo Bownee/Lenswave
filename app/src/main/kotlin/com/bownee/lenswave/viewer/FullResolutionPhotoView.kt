@@ -15,6 +15,7 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelFileDescriptor
+import android.system.Os
 import android.util.AttributeSet
 import android.view.GestureDetector
 import android.view.MotionEvent
@@ -26,6 +27,8 @@ import androidx.core.view.ViewCompat
 import androidx.exifinterface.media.ExifInterface
 import com.bownee.lenswave.ExifOrientation
 import com.bownee.lenswave.R
+import com.bownee.lenswave.metadata.ImageMimeSniffer
+import com.bownee.lenswave.metadata.PhotoMetadataHints
 import java.io.Closeable
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
@@ -67,6 +70,8 @@ class FullResolutionPhotoView
         private var imageHeight = 0
         private var rotationDegrees = 0
         private var exifOrientation = ExifInterface.ORIENTATION_NORMAL
+        private var loadedUri: Uri? = null
+        private var mimeType: String? = null
         private var baseBitmap: Bitmap? = null
 
         /** True while [baseBitmap] is a borrowed preview rather than a decoded original. */
@@ -161,6 +166,7 @@ class FullResolutionPhotoView
                             val orientation =
                                 ExifInterface(openedDescriptor.fileDescriptor)
                                     .getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+                            val mime = sniffMimeType(openedDescriptor)
                             openedDecoder = requireNotNull(createRegionDecoder(openedDescriptor))
                             val sample = calculateBaseSample(openedDecoder.width, openedDecoder.height)
                             val rawBase =
@@ -174,7 +180,7 @@ class FullResolutionPhotoView
                                     ),
                                 )
                             openedBitmap = ExifOrientation.apply(rawBase, orientation, true)
-                            LoadedPhoto(openedDescriptor, openedDecoder, openedBitmap, sample, orientation).also {
+                            LoadedPhoto(openedDescriptor, openedDecoder, openedBitmap, sample, orientation, mime).also {
                                 openedDescriptor = null
                                 openedDecoder = null
                                 openedBitmap = null
@@ -196,6 +202,8 @@ class FullResolutionPhotoView
                             rawHeight = loaded.decoder.height
                             rotationDegrees = ExifOrientation.degrees(loaded.orientation)
                             exifOrientation = loaded.orientation
+                            loadedUri = uri
+                            mimeType = loaded.mimeType
                             // A placeholder may already be zoomed; the original takes over the same
                             // rendered geometry so the picture does not jump when it arrives.
                             val keepGeometry = basePlaceholder && imageWidth > 0 && width > 0 && height > 0
@@ -240,6 +248,8 @@ class FullResolutionPhotoView
             rawHeight = bitmap.height
             rotationDegrees = 0
             exifOrientation = ExifInterface.ORIENTATION_NORMAL
+            loadedUri = null
+            mimeType = null
             imageWidth = bitmap.width
             imageHeight = bitmap.height
             resetTransform()
@@ -263,6 +273,8 @@ class FullResolutionPhotoView
             imageWidth = 0
             imageHeight = 0
             exifOrientation = ExifInterface.ORIENTATION_NORMAL
+            loadedUri = null
+            mimeType = null
             rotationDegrees = 0
             minScale = 1f
             scale = 1f
@@ -329,6 +341,15 @@ class FullResolutionPhotoView
         }
 
         fun isAtFitScale(): Boolean = scale <= minScale * 1.15f
+
+        /**
+         * What this view already knows about the decoded original at [uri]: its stored size, EXIF
+         * rotation and container format. Null while a placeholder or a different file is showing.
+         */
+        fun metadataHints(uri: Uri): PhotoMetadataHints? {
+            if (decoder == null || basePlaceholder || loadedUri != uri) return null
+            return PhotoMetadataHints(rawWidth, rawHeight, rotationDegrees, mimeType)
+        }
 
         fun zoomIn() = setZoom((scale * 1.5f).coerceAtMost(maximumScale()))
 
@@ -549,6 +570,14 @@ class FullResolutionPhotoView
             return sample
         }
 
+        /** Reads the container signature with a positional read so the descriptor's offset is untouched. */
+        private fun sniffMimeType(descriptor: ParcelFileDescriptor): String? =
+            runCatching {
+                val header = ByteArray(ImageMimeSniffer.HEADER_LENGTH)
+                val read = Os.pread(descriptor.fileDescriptor, header, 0, header.size, 0L)
+                ImageMimeSniffer.sniff(header.copyOf(read.coerceAtLeast(0)))
+            }.getOrNull()
+
         @Suppress("DEPRECATION")
         private fun createRegionDecoder(descriptor: ParcelFileDescriptor): BitmapRegionDecoder =
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
@@ -615,6 +644,7 @@ class FullResolutionPhotoView
             val bitmap: Bitmap,
             val sampleSize: Int,
             val orientation: Int,
+            val mimeType: String?,
         ) : Closeable {
             override fun close() {
                 bitmap.recycle()

@@ -9,6 +9,7 @@ import android.widget.Toast
 import androidx.core.net.toUri
 import com.bownee.lenswave.R
 import com.bownee.lenswave.metadata.PhotoMetadataAction
+import com.bownee.lenswave.metadata.PhotoMetadataHints
 import com.bownee.lenswave.metadata.PhotoMetadataItem
 import com.bownee.lenswave.metadata.PhotoMetadataReader
 import kotlinx.coroutines.CoroutineScope
@@ -38,6 +39,9 @@ internal class ViewerDetailsSheetController(
 
         /** Bottom edge of the fitted media inside the media frame, if it is known yet. */
         fun fittedMediaBottom(): Float?
+
+        /** What the photo view already decoded from [uri], so the reader need not open it again. */
+        fun metadataHints(uri: Uri): PhotoMetadataHints?
 
         fun handlePhotoDismissDrag(
             distance: Float,
@@ -238,6 +242,7 @@ internal class ViewerDetailsSheetController(
         if (metadataLoaded) return
         metadataLoaded = true
         val metadataRequest = host.request
+        val hints = host.metadataHints(uri)
         scope.launch {
             val result =
                 withContext(Dispatchers.IO) {
@@ -247,6 +252,7 @@ internal class ViewerDetailsSheetController(
                             uri,
                             metadataRequest.displayName,
                             metadataRequest.capturedAt,
+                            hints,
                         )
                     }
                 }
