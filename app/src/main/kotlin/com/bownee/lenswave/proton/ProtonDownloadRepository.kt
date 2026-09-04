@@ -7,7 +7,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.produceIn
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
@@ -15,6 +15,7 @@ import me.proton.core.domain.entity.UserId
 import me.proton.drive.sdk.ProtonDriveSdkException
 import me.proton.drive.sdk.ProtonPhotosClient
 import me.proton.drive.sdk.ProtonSdkError
+import me.proton.drive.sdk.entity.FileThumbnail
 import me.proton.drive.sdk.entity.NodeUid
 import me.proton.drive.sdk.entity.ThumbnailType
 import java.io.File
@@ -230,7 +231,8 @@ internal class ProtonDownloadRepository
 
             val photosClient = clientProvider.get(userId)
             val failures = mutableMapOf<String, ThumbnailFailureKind>()
-            downloadChunks(pending) { chunk ->
+
+            suspend fun previewPass(chunk: List<String>): ThumbnailBatchResult =
                 downloadThumbnailPass(
                     photosClient,
                     userId,
@@ -239,23 +241,32 @@ internal class ProtonDownloadRepository
                     onProgress,
                     timeoutMillis = ProtonThumbnailDownloadPolicy.PREVIEW_PASS_TIMEOUT_MILLIS,
                     store = { nodeUid, bytes -> cache.writePreview(userId.id, nodeUid, bytes) },
-                ).also { result ->
-                    if (result.failures.isNotEmpty()) onProgress(ThumbnailBatchResult(emptySet(), result.failures))
-                }
-            }.forEach { result ->
+                )
+            downloadChunks(pending, downloadChunk = ::previewPass).forEach { result ->
                 successful += result.successfulNodeUids
                 failures += result.failures
             }
-            return ThumbnailBatchResult(successful, failures)
+            // Nodes the SDK skipped in a batch usually answer when asked on their own; asking now
+            // keeps them out of the retry backoff.
+            val unanswered = failures.filterValues { kind -> kind == ThumbnailFailureKind.UNANSWERED }.keys.toList()
+            downloadChunks(unanswered, batchSize = 1, downloadChunk = ::previewPass).forEach { result ->
+                successful += result.successfulNodeUids
+                result.successfulNodeUids.forEach(failures::remove)
+                failures += result.failures
+            }
+            val finalFailures = failures.filterKeys { nodeUid -> nodeUid !in successful }
+            if (finalFailures.isNotEmpty()) onProgress(ThumbnailBatchResult(emptySet(), finalFailures))
+            return ThumbnailBatchResult(successful, finalFailures)
         }
 
         private suspend fun downloadChunks(
             nodeUids: List<String>,
+            batchSize: Int = ProtonThumbnailDownloadPolicy.SDK_BATCH_SIZE,
             downloadChunk: suspend (List<String>) -> ThumbnailBatchResult,
         ): List<ThumbnailBatchResult> =
             coroutineScope {
                 val results = mutableListOf<ThumbnailBatchResult>()
-                ProtonThumbnailDownloadPolicy.concurrentWindows(nodeUids).forEach { concurrentChunks ->
+                ProtonThumbnailDownloadPolicy.concurrentWindows(nodeUids, batchSize).forEach { concurrentChunks ->
                     results +=
                         concurrentChunks
                             .map { chunk ->
@@ -339,74 +350,100 @@ internal class ProtonDownloadRepository
                 unreportedSuccessful.clear()
             }
 
+            /** Records one SDK answer; true once every requested node has one. */
+            suspend fun handle(thumbnail: FileThumbnail): Boolean {
+                val nodeUid = thumbnail.uid.value
+                if (nodeUid !in requested) return false
+                thumbnail.result.fold(
+                    onSuccess = { bytes ->
+                        if (runCatching { store(nodeUid, bytes) }.isSuccess) {
+                            successful += nodeUid
+                            unreportedSuccessful += nodeUid
+                            failures.remove(nodeUid)
+                            if (unreportedSuccessful.size >= ProtonThumbnailDownloadPolicy.PROGRESS_BATCH_SIZE) {
+                                publishSuccessful()
+                            }
+                        } else {
+                            failures.record(nodeUid, ThumbnailFailureKind.STORAGE)
+                        }
+                    },
+                    onFailure = { error ->
+                        val kind = ThumbnailFailureClassifier.classify(error)
+                        // One sample per failure kind and pass keeps the log readable
+                        // while still showing why each rendition is refused.
+                        if (type == ThumbnailType.PREVIEW && reportedKinds.add(kind)) {
+                            LenswaveDiagnostics.reportFailure(LenswaveOperation.PREVIEW_DOWNLOAD, error)
+                        }
+                        failures.record(nodeUid, kind)
+                    },
+                )
+                return ThumbnailPassCompletionPolicy.hasResponseForEveryNode(requested, successful, failures.keys)
+            }
+
+            val idleMillis = ProtonThumbnailDownloadPolicy.idleTimeoutMillis(type)
+            var wentQuiet = false
             val completed =
                 withTimeoutOrNull(timeoutMillis) {
-                    try {
-                        photosClient.enumerateThumbnails(nodeUids.map(::NodeUid), type).collect { thumbnail ->
-                            val nodeUid = thumbnail.uid.value
-                            if (nodeUid !in requested) return@collect
-                            thumbnail.result.fold(
-                                onSuccess = { bytes ->
-                                    if (runCatching { store(nodeUid, bytes) }.isSuccess) {
-                                        successful += nodeUid
-                                        unreportedSuccessful += nodeUid
-                                        failures.remove(nodeUid)
-                                        if (unreportedSuccessful.size >=
-                                            ProtonThumbnailDownloadPolicy.PROGRESS_BATCH_SIZE
-                                        ) {
-                                            publishSuccessful()
-                                        }
-                                    } else {
-                                        failures.record(nodeUid, ThumbnailFailureKind.STORAGE)
+                    coroutineScope {
+                        val answers = photosClient.enumerateThumbnails(nodeUids.map(::NodeUid), type).produceIn(this)
+                        try {
+                            while (true) {
+                                // The SDK sometimes answers only part of a batch and then stays
+                                // silent; a quiet flow ends the pass well before the deadline.
+                                val next = withTimeoutOrNull(idleMillis) { answers.receiveCatching() }
+                                if (next == null) {
+                                    wentQuiet = true
+                                    break
+                                }
+                                val thumbnail = next.getOrNull()
+                                if (thumbnail == null) {
+                                    next.exceptionOrNull()?.let { error ->
+                                        if (error !is CancellationException) throw error
                                     }
-                                },
-                                onFailure = { error ->
-                                    val kind = ThumbnailFailureClassifier.classify(error)
-                                    // One sample per failure kind and pass keeps the log readable
-                                    // while still showing why each rendition is refused.
-                                    if (type == ThumbnailType.PREVIEW && reportedKinds.add(kind)) {
-                                        LenswaveDiagnostics.reportFailure(LenswaveOperation.PREVIEW_DOWNLOAD, error)
-                                    }
-                                    failures.record(nodeUid, kind)
-                                },
-                            )
-                            if (ThumbnailPassCompletionPolicy.hasResponseForEveryNode(
-                                    requested,
-                                    successful,
-                                    failures.keys,
-                                )
-                            ) {
-                                throw ThumbnailPassCompleteException()
+                                    break
+                                }
+                                if (handle(thumbnail)) break
                             }
+                        } catch (error: CancellationException) {
+                            throw error
+                        } catch (error: Throwable) {
+                            LenswaveDiagnostics.reportFailure(LenswaveOperation.THUMBNAIL_DOWNLOAD, error)
+                            val kind = ThumbnailFailureClassifier.classify(error)
+                            requested
+                                .filterNot(successful::contains)
+                                .forEach { nodeUid -> failures.record(nodeUid, kind) }
+                        } finally {
+                            answers.cancel()
                         }
-                    } catch (_: ThumbnailPassCompleteException) {
-                        // The SDK flow can remain open after delivering every result; no timeout is needed.
-                    } catch (error: CancellationException) {
-                        throw error
-                    } catch (error: Throwable) {
-                        LenswaveDiagnostics.reportFailure(LenswaveOperation.THUMBNAIL_DOWNLOAD, error)
-                        val kind = ThumbnailFailureClassifier.classify(error)
-                        requested
-                            .filterNot(successful::contains)
-                            .forEach { nodeUid -> failures.record(nodeUid, kind) }
                     }
                     true
                 }
             publishSuccessful()
-            if (completed == null) {
-                val unanswered = requested.filterNot { nodeUid -> nodeUid in successful || nodeUid in failures }
-                // A pass the SDK never finishes is otherwise invisible in the log.
-                LenswaveDiagnostics.reportFailure(
+            val unanswered = requested.filter { nodeUid -> nodeUid !in successful && nodeUid !in failures }
+            if (unanswered.isNotEmpty()) {
+                val operation =
                     if (type ==
                         ThumbnailType.PREVIEW
                     ) {
                         LenswaveOperation.PREVIEW_DOWNLOAD
                     } else {
                         LenswaveOperation.THUMBNAIL_DOWNLOAD
-                    },
-                    ThumbnailPassTimeoutException(unanswered.size, requested.size),
+                    }
+                val reason =
+                    if (completed == null) {
+                        "deadline"
+                    } else if (wentQuiet) {
+                        "quiet"
+                    } else {
+                        "closed"
+                    }
+                LenswaveDiagnostics.reportState(
+                    operation,
+                    "unanswered-${unanswered.size}-of-${requested.size}-$reason",
+                    1,
+                    1,
                 )
-                unanswered.forEach { nodeUid -> failures.record(nodeUid, ThumbnailFailureKind.NETWORK) }
+                unanswered.forEach { nodeUid -> failures.record(nodeUid, ThumbnailFailureKind.UNANSWERED) }
             }
             return ThumbnailBatchResult(successful, failures.filterKeys { nodeUid -> nodeUid !in successful })
         }
@@ -450,8 +487,20 @@ internal object ProtonThumbnailDownloadPolicy {
     /** Previews are a few hundred kilobytes each, so one pass of [SDK_BATCH_SIZE] gets longer. */
     const val PREVIEW_PASS_TIMEOUT_MILLIS = 90_000L
 
-    fun <T> concurrentWindows(values: List<T>): List<List<List<T>>> =
-        values.chunked(SDK_BATCH_SIZE).chunked(MAX_CONCURRENT_BATCHES)
+    /** A pass ends once the SDK has said nothing for this long; the deadlines above are the cap. */
+    const val SDK_IDLE_TIMEOUT_MILLIS = 6_000L
+    const val PREVIEW_IDLE_TIMEOUT_MILLIS = 15_000L
+
+    fun idleTimeoutMillis(type: ThumbnailType): Long =
+        if (type == ThumbnailType.PREVIEW) PREVIEW_IDLE_TIMEOUT_MILLIS else SDK_IDLE_TIMEOUT_MILLIS
+
+    fun <T> concurrentWindows(
+        values: List<T>,
+        batchSize: Int = SDK_BATCH_SIZE,
+    ): List<List<List<T>>> {
+        require(batchSize > 0) { "The batch size must be positive" }
+        return values.chunked(batchSize).chunked(MAX_CONCURRENT_BATCHES)
+    }
 }
 
 internal object ThumbnailPassCompletionPolicy {
@@ -465,22 +514,17 @@ internal object ThumbnailPassCompletionPolicy {
         }
 }
 
-private class ThumbnailPassCompleteException : CancellationException()
-
-/** The SDK delivered no result for [unanswered] of [requested] nodes before the pass timed out. */
-internal class ThumbnailPassTimeoutException(
-    val unanswered: Int,
-    val requested: Int,
-) : RuntimeException("Thumbnail pass timed out with $unanswered of $requested nodes unanswered")
-
 internal enum class ThumbnailFailureKind(
     val priority: Int,
 ) {
     UNKNOWN(0),
-    NETWORK(1),
-    NOT_FOUND(2),
-    AUTHENTICATION(3),
-    STORAGE(4),
+
+    /** The SDK gave no answer for the node before the pass ended; asked again on its own first. */
+    UNANSWERED(1),
+    NETWORK(2),
+    NOT_FOUND(3),
+    AUTHENTICATION(4),
+    STORAGE(5),
 }
 
 internal object ThumbnailFailureClassifier {

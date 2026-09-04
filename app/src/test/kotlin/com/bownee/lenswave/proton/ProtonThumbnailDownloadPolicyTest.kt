@@ -1,5 +1,6 @@
 package com.bownee.lenswave.proton
 
+import me.proton.drive.sdk.entity.ThumbnailType
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -52,5 +53,27 @@ class ProtonThumbnailDownloadPolicyTest {
                 failedNodeUids = emptySet(),
             ),
         )
+    }
+
+    @Test
+    fun singleNodeBatchesRetryUnansweredNodesOneAtATime() {
+        val windows = ProtonThumbnailDownloadPolicy.concurrentWindows(listOf("a", "b", "c"), batchSize = 1)
+
+        assertEquals(listOf(listOf(listOf("a"), listOf("b")), listOf(listOf("c"))), windows)
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun batchSizeMustBePositive() {
+        ProtonThumbnailDownloadPolicy.concurrentWindows(listOf("a"), batchSize = 0)
+    }
+
+    @Test
+    fun idleTimeoutIsLongerForPreviewsButBelowEachDeadline() {
+        val previewIdle = ProtonThumbnailDownloadPolicy.idleTimeoutMillis(ThumbnailType.PREVIEW)
+        val thumbnailIdle = ProtonThumbnailDownloadPolicy.idleTimeoutMillis(ThumbnailType.THUMBNAIL)
+
+        assertTrue(previewIdle > thumbnailIdle)
+        assertTrue(previewIdle < ProtonThumbnailDownloadPolicy.PREVIEW_PASS_TIMEOUT_MILLIS)
+        assertTrue(thumbnailIdle < ProtonThumbnailDownloadPolicy.SDK_PASS_TIMEOUT_MILLIS)
     }
 }
