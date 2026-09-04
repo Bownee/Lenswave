@@ -1,5 +1,9 @@
 package com.bownee.lenswave.proton
 
+import dagger.Binds
+import dagger.Module
+import dagger.hilt.InstallIn
+import dagger.hilt.components.SingletonComponent
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -26,13 +30,21 @@ internal interface ProtonTagApi : BaseRetrofitApi {
 }
 
 /** Reads Proton's authoritative tag index without fetching media bodies or thumbnails. */
+internal interface ProtonTagListingClient {
+    suspend fun list(
+        userId: UserId,
+        volumeId: String,
+        tag: ProtonMediaTag,
+    ): List<ProtonGalleryPhoto>
+}
+
 @Singleton
-internal class ProtonTagListingClient
+internal class ProtonTagListingApiClient
     @Inject
     constructor(
         private val apiProvider: ApiProvider,
-    ) {
-        suspend fun list(
+    ) : ProtonTagListingClient {
+        override suspend fun list(
             userId: UserId,
             volumeId: String,
             tag: ProtonMediaTag,
@@ -79,3 +91,9 @@ internal class ProtonTagListingClient
             const val PAGE_SIZE = 500
         }
     }
+
+@Module
+@InstallIn(SingletonComponent::class)
+internal abstract class ProtonTagListingModule {
+    @Binds abstract fun bindTagListingClient(implementation: ProtonTagListingApiClient): ProtonTagListingClient
+}

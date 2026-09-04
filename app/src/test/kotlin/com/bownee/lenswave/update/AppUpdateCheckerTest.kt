@@ -29,6 +29,17 @@ class AppUpdateCheckerTest {
             }
         }
 
+    @Test fun malformedReleaseIsNeverPersistedAndKeepsTheCachedOne() =
+        runBlocking {
+            val fixture = Fixture(LatestReleaseResult.Modified("not-a-version", "bad-etag"))
+            fixture.store.state = AppUpdateState(latestVersionName = "0.20.0", etag = "good-etag")
+
+            assertEquals("0.20.0", fixture.checker.findAvailableUpdate("0.19.4")?.versionName)
+            assertEquals("0.20.0", fixture.store.state.latestVersionName)
+            assertEquals("good-etag", fixture.store.state.etag)
+            assertEquals(1, fixture.client.calls)
+        }
+
     @Test fun notModifiedResponseUsesCachedReleaseAndItsEtag() =
         runBlocking {
             val fixture = Fixture(LatestReleaseResult.NotModified)
@@ -117,5 +128,6 @@ class AppUpdateCheckerTest {
 
     private object DirectDispatchers : LenswaveDispatchers {
         override val io = Dispatchers.Unconfined
+        override val default = Dispatchers.Unconfined
     }
 }

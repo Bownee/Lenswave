@@ -438,6 +438,12 @@ class FullResolutionPhotoView
 
         fun resetZoom() = setZoom(minScale)
 
+        /** How far the picture is zoomed past its fit: 1 at fit scale, up to the maximum; 1 while nothing is shown. */
+        fun zoomFactor(): Float = if (imageWidth <= 0 || minScale <= 0f) 1f else scale / minScale
+
+        /** Re-applies a [zoomFactor] to the loaded picture, about its centre; the exact pan is not kept. */
+        fun restoreZoomFactor(factor: Float) = setZoom(minScale * factor)
+
         private fun setZoom(targetScale: Float) {
             if (imageWidth <= 0 || imageHeight <= 0 || width <= 0 || height <= 0) return
             zoomAnimator?.cancel()

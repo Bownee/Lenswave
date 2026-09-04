@@ -38,6 +38,16 @@ internal object ProtonQueueFlushPolicy {
         batchesSinceForcedFlush >= BATCHES_PER_FORCED_FLUSH
 
     /**
+     * How many times a failed write is tried again before the chain gives up. The chain used to
+     * re-arm every five minutes for as long as the process lived, waking it for a disk that had
+     * refused the same bytes a hundred times; after [MAX_WRITE_RETRIES] the queue stays dirty in
+     * memory until the next change, which starts a fresh, equally bounded chain.
+     */
+    const val MAX_WRITE_RETRIES = 5
+
+    fun shouldRetryAfterFailedWrite(consecutiveFailures: Int): Boolean = consecutiveFailures <= MAX_WRITE_RETRIES
+
+    /**
      * A write that threw leaves the queue dirty; without a retry nothing would write it until the
      * next change. Retries back off from [FLUSH_DELAY_MILLIS] up to [MAX_WRITE_RETRY_DELAY_MILLIS].
      */

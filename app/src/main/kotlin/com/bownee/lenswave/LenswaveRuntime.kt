@@ -15,6 +15,9 @@ interface LenswaveClock {
 
 interface LenswaveDispatchers {
     val io: CoroutineDispatcher
+
+    /** CPU-bound work such as mapping a repository listing into a screen state. */
+    val default: CoroutineDispatcher
 }
 
 @Singleton
@@ -29,6 +32,7 @@ internal class DefaultLenswaveDispatchers
     @Inject
     constructor() : LenswaveDispatchers {
         override val io: CoroutineDispatcher = Dispatchers.IO
+        override val default: CoroutineDispatcher = Dispatchers.Default
     }
 
 @Module

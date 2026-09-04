@@ -2,6 +2,7 @@ package com.bownee.lenswave.storage
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertThrows
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -74,5 +75,27 @@ class AtomicFileStoreTest {
 
         assertEquals(200, results.size)
         assertEquals(setOf(expected), results.toSet())
+    }
+
+    @Test
+    fun `a refused commit gate leaves the target untouched and no temporary file`() {
+        val target = File(temporaryFolder.root, "index.json")
+        AtomicFileStore.write(target, "first", "write failed")
+
+        val error =
+            assertThrows(IllegalStateException::class.java) {
+                AtomicFileStore.write(target, "second".toByteArray(), "write failed") { _ ->
+                    throw IllegalStateException("gate refused")
+                }
+            }
+
+        assertEquals("gate refused", error.message)
+        assertEquals("first", target.readText())
+        assertFalse(
+            temporaryFolder.root
+                .listFiles()
+                .orEmpty()
+                .any { it.name.endsWith(".part") },
+        )
     }
 }
