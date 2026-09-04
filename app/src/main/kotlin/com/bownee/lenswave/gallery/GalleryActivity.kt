@@ -125,6 +125,7 @@ class GalleryActivity :
                 groupingGeneration.update { generation -> generation + 1 }
             }
         }
+    private var timeChangeReceiverRegistered = false
     private var pendingScrollRestore: GalleryDestination? = null
     private var pendingSelectionRestore = false
     private var viewerLaunched = false
@@ -198,9 +199,9 @@ class GalleryActivity :
 
     override fun onDestroy() {
         if (this::screen.isInitialized) screen.dispose()
-        settingsPresenter.dispose()
-        unregisterReceiver(timeChangeReceiver)
-        authCoordinator.unregister()
+        if (this::settingsPresenter.isInitialized) settingsPresenter.dispose()
+        if (timeChangeReceiverRegistered) unregisterReceiver(timeChangeReceiver)
+        if (this::authCoordinator.isInitialized) authCoordinator.unregister()
         super.onDestroy()
     }
 
@@ -210,7 +211,11 @@ class GalleryActivity :
         if (viewerPrivacySettings.blockScreenshots) window.addFlags(secure) else window.clearFlags(secure)
     }
 
-    /** System broadcasts reach a non-exported receiver; the platform resets the default zone before sending. */
+    /**
+     * System broadcasts reach a non-exported receiver; the platform resets the default zone before
+     * sending. The flag keeps onDestroy from unregistering a receiver an onCreate that failed
+     * before this point never registered.
+     */
     private fun registerTimeChangeReceiver() {
         val filter =
             IntentFilter().apply {
@@ -218,6 +223,7 @@ class GalleryActivity :
                 addAction(Intent.ACTION_TIME_CHANGED)
             }
         ContextCompat.registerReceiver(this, timeChangeReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+        timeChangeReceiverRegistered = true
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -562,18 +568,17 @@ class GalleryActivity :
         )
     }
 
+    /**
+     * A page without rows is still loading unless its empty panel is up: restoring into it would
+     * clamp the saved position to the top and lose it. The guard rests on the adapter alone, not
+     * on the identity of the empty content instance the factory happens to publish.
+     */
     private fun restorePendingScrollPosition(state: GalleryUiState) {
         val destination = pendingScrollRestore ?: return
         if (destination != state.destination) return
-        val savedPosition = viewModel.scrollPositions.positionFor(destination)
-        if (savedPosition != null &&
-            savedPosition.firstVisiblePosition > 0 &&
-            adapter.count == 0 &&
-            state.emptyState == null
-        ) {
-            return
-        }
+        if (adapter.count == 0 && state.emptyState == null) return
 
+        val savedPosition = viewModel.scrollPositions.positionFor(destination)
         pendingScrollRestore = null
         screen.restoreScrollPosition(
             savedPosition ?: GalleryScrollPosition(firstVisiblePosition = 0, topOffset = 0),
