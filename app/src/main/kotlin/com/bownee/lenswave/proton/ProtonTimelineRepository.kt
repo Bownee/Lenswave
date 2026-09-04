@@ -28,29 +28,46 @@ internal class ProtonTimelineRepository
         val state: StateFlow<ProtonGalleryState> = mutableState.asStateFlow()
 
         /**
-         * Publishes the cached timeline as soon as it is parsed so the grid can draw, then the
-         * cached tag listings; a cold start waits on nothing else.
+         * Publishes the cached timeline and tag listings. A library up to
+         * [TAGS_WITH_FIRST_PUBLISH_LIMIT] photos hydrates its tags first and publishes once, so
+         * re-activating never blanks the Videos and Favorites tabs; the tag files are a fraction
+         * of the timeline there. A larger library publishes the grid as soon as the timeline is
+         * parsed and fills the tabs right after, keeping whatever this user had published in the
+         * meantime rather than an empty map.
          */
         fun loadCached(userId: UserId) {
             val availability = cache.storedRenditions(userId.id)
             val timeline = cache.readTimelineSnapshot(userId.id, availability)
+            val photos = timeline.orEmpty()
+            val tagsFirst = photos.size <= TAGS_WITH_FIRST_PUBLISH_LIMIT
             emit(
                 userId = userId,
-                photos = timeline.orEmpty(),
+                photos = photos,
                 hasLoaded = timeline != null,
                 syncing = false,
-                tags = emptyMap(),
+                tags = if (tagsFirst) readTagStates(userId, availability) else previousTags(userId),
             )
-            val tagStates =
-                ProtonMediaTag.entries
-                    .mapNotNull { tag ->
-                        cache.readTagSnapshot(userId.id, tag, availability)?.let { photos ->
-                            tag to ProtonTagState(photos = photos, hasLoaded = true)
-                        }
-                    }.toMap()
-            if (tagStates.isEmpty()) return
+            if (tagsFirst) return
+            val tagStates = readTagStates(userId, availability)
             mutableState.update { state -> if (state.userId == userId.id) state.copy(tags = tagStates) else state }
         }
+
+        private fun readTagStates(
+            userId: UserId,
+            availability: ProtonStoredRenditions,
+        ): Map<ProtonMediaTag, ProtonTagState> =
+            ProtonMediaTag.entries
+                .mapNotNull { tag ->
+                    cache.readTagSnapshot(userId.id, tag, availability)?.let { photos ->
+                        tag to ProtonTagState(photos = photos, hasLoaded = true)
+                    }
+                }.toMap()
+
+        private fun previousTags(userId: UserId): Map<ProtonMediaTag, ProtonTagState> =
+            mutableState.value
+                .takeIf { state -> state.userId == userId.id }
+                ?.tags
+                .orEmpty()
 
         suspend fun syncMetadata(
             userId: UserId,
@@ -351,4 +368,9 @@ internal class ProtonTimelineRepository
                 ?.nodeUid
                 ?.substringBefore('~')
                 ?.takeIf(String::isNotBlank)
+
+        private companion object {
+            /** Below this the tag files parse in a few milliseconds, so the first publish can wait for them. */
+            const val TAGS_WITH_FIRST_PUBLISH_LIMIT = 5_000
+        }
     }
