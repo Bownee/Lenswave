@@ -25,6 +25,46 @@ class GalleryPullToRefreshPolicyTest {
     }
 
     @Test
+    fun `pull does not start in the gap below the filter chips`() {
+        assertFalse(
+            GalleryPullToRefreshPolicy.startsPull(
+                touchY = 261f,
+                headerBottom = 200,
+                filterRow = 200..260,
+                gapBelowFilterRow = 40,
+            ),
+        )
+        assertFalse(
+            GalleryPullToRefreshPolicy.startsPull(
+                touchY = 300f,
+                headerBottom = 200,
+                filterRow = 200..260,
+                gapBelowFilterRow = 40,
+            ),
+        )
+        assertTrue(
+            GalleryPullToRefreshPolicy.startsPull(
+                touchY = 301f,
+                headerBottom = 200,
+                filterRow = 200..260,
+                gapBelowFilterRow = 40,
+            ),
+        )
+    }
+
+    @Test
+    fun `gap without a filter row does not block the pull`() {
+        assertTrue(
+            GalleryPullToRefreshPolicy.startsPull(
+                touchY = 210f,
+                headerBottom = 200,
+                filterRow = null,
+                gapBelowFilterRow = 40,
+            ),
+        )
+    }
+
+    @Test
     fun `filter chips scrolled under the header stay covered by the header rule`() {
         assertFalse(GalleryPullToRefreshPolicy.startsPull(touchY = 150f, headerBottom = 200, filterRow = 120..180))
     }

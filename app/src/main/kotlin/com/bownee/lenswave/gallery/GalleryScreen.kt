@@ -303,7 +303,7 @@ internal class GalleryScreen(
         if (refreshLayout.isRefreshing != refreshing) refreshLayout.isRefreshing = refreshing
     }
 
-    /** Only the thumbnail area pulls to refresh; the pinned header and filter chips do not. */
+    /** Only the thumbnail area pulls to refresh; the pinned header, filter chips and a gap below them do not. */
     private fun startsPull(touchY: Float): Boolean {
         val filterRowBounds =
             if (filterRow.isShown) {
@@ -312,7 +312,12 @@ internal class GalleryScreen(
             } else {
                 null
             }
-        return GalleryPullToRefreshPolicy.startsPull(touchY, stickyHeader.height, filterRowBounds)
+        return GalleryPullToRefreshPolicy.startsPull(
+            touchY,
+            stickyHeader.height,
+            filterRowBounds,
+            gapBelowFilterRow = activity.dp(PULL_GAP_BELOW_CHIPS_DP),
+        )
     }
 
     private fun layoutBelowHeader() {
@@ -713,6 +718,9 @@ internal class GalleryScreen(
         private const val TITLE_ROW_HEIGHT_DP = 40
         private const val CHIP_HEIGHT_DP = 38
         private const val REFRESH_SPINNER_END_DP = 56
+
+        /** Pulls that begin this close under the filter chips do not refresh. */
+        private const val PULL_GAP_BELOW_CHIPS_DP = 24
         private const val SCROLL_TO_TOP_JUMP_ROWS = 12
     }
 }
