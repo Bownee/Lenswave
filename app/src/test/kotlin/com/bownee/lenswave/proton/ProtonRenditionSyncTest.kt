@@ -128,6 +128,20 @@ class ProtonRenditionSyncTest {
             )
         }
 
+    @Test
+    fun `a preview stored in place of a missing thumbnail leaves the preview queue`() =
+        runBlocking {
+            thumbnails.replaceSource(USER.id, ProtonSyncKeys.QueueSource.TIMELINE, candidates("a"))
+            previews.replaceSource(USER.id, ProtonSyncKeys.QueueSource.TIMELINE_PREVIEWS, candidates("a", "b"))
+            source.thumbnailResult = ThumbnailBatchResult(setOf("a"), emptyMap(), previewsStored = setOf("a"))
+
+            sync.downloadNextBatch(USER, allowPreviews = false) {}
+
+            assertEquals(0, thumbnails.pendingCount(USER.id))
+            assertEquals(1, previews.pendingCount(USER.id))
+            assertEquals(listOf(setOf("a")), availability.previewsAvailable)
+        }
+
     private fun candidates(vararg nodeUids: String) =
         nodeUids.mapIndexed { index, nodeUid -> ProtonThumbnailCandidate(nodeUid, index.toLong()) }
 

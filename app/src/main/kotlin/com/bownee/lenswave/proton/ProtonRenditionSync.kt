@@ -209,6 +209,12 @@ internal class ProtonRenditionSync
                 if (ProtonSyncKeys.QueueSource.ALBUM_COVERS in entry.sources) marks.albumCovers += entry.nodeUid
                 if (entry.sources.any(ProtonSyncKeys.QueueSource::isAlbumPhotos)) marks.albumPhotos += entry.nodeUid
             }
+            // A preview fetched in place of a missing thumbnail is a preview already; the preview
+            // queue must not download it a second time.
+            if (result.previewsStored.isNotEmpty()) {
+                previewQueue.settle(userId.id, result.previewsStored, emptySet())
+                marks.previews += result.previewsStored
+            }
         }
 
         /**
