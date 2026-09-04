@@ -27,7 +27,7 @@ internal class ViewerMediaTransform(
         playerView.translationX = translationX
         thumbnailPreview.translationX = translationX
         loadingPanel.translationX = translationX
-        mediaTitle.translationX = translationX
+        // The date stays put while photos slide: it is a caption for the viewer, not part of the picture.
     }
 
     fun animateMediaTranslationX(
@@ -50,11 +50,6 @@ internal class ViewerMediaTransform(
             .setDuration(duration)
             .start()
         loadingPanel
-            .animate()
-            .translationX(translationX)
-            .setDuration(duration)
-            .start()
-        mediaTitle
             .animate()
             .translationX(translationX)
             .setDuration(duration)

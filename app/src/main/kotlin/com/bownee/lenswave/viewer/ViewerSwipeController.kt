@@ -210,11 +210,6 @@ internal class ViewerSwipeController(
             .translationX(-offset * peekDistance())
             .setDuration(SWIPE_SETTLE_MILLIS)
             .start()
-        mediaTitle
-            .animate()
-            .translationX(-offset * peekDistance())
-            .setDuration(SWIPE_SETTLE_MILLIS)
-            .start()
     }
 
     fun adjacentTo(
