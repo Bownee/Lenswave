@@ -444,19 +444,29 @@ class FullResolutionPhotoView
         private fun scheduleDetailDecode() {
             val activeDecoder = decoder ?: return
             if (width == 0 || height == 0) return
-            var sample = 1
-            while (sample * 2 < baseSampleSize && scale * sample * 2 <= 1f) sample *= 2
-            if (sample >= baseSampleSize) {
+            val visible = visibleImageRect()
+            val plan =
+                PhotoDetailDecodePolicy.plan(
+                    scale = scale,
+                    baseSampleSize = baseSampleSize,
+                    visible = PhotoDetailDecodePolicy.Region(visible.left, visible.top, visible.right, visible.bottom),
+                    imageWidth = imageWidth,
+                    imageHeight = imageHeight,
+                )
+            if (plan == null) {
                 recycleDetail()
                 invalidate()
                 return
             }
-            val visible = visibleImageRect()
-            val marginX = visible.width() / 4
-            val marginY = visible.height() / 4
-            visible.inset(-marginX, -marginY)
-            if (!visible.intersect(0, 0, imageWidth, imageHeight)) return
-            val rawRect = alignRect(orientedToRaw(visible), sample, rawWidth, rawHeight)
+            val sample = plan.sampleSize
+            val region = plan.region
+            val rawRect =
+                alignRect(
+                    orientedToRaw(Rect(region.left, region.top, region.right, region.bottom)),
+                    sample,
+                    rawWidth,
+                    rawHeight,
+                )
             val orientedRect = rawToOriented(rawRect)
             val key = "${generation.get()}:$sample:${rawRect.flattenToString()}"
             if (key == requestedDetailKey) return
