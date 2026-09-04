@@ -50,19 +50,18 @@ class GalleryListAdapter(
             (view as EntryCell).entry?.let { onLibraryAction(it.action) }
         }
 
-    /** Shows finished rows (see [GalleryGrouping]); a selection survives only for photos still listed. */
+    /**
+     * Shows finished rows (see [GalleryGrouping]); a selection survives only for photos still
+     * listed. Listeners hear about the selection only when it actually shrank, so a publish that
+     * merely refreshed the rows does not re-render the header and selection bar.
+     */
     fun submitRows(rowSet: GalleryRowSet) {
         rows = rowSet.rows
         dateLabels = rowSet.dateLabels
-        if (selected.isNotEmpty()) {
-            val stableIds = HashSet<String>()
-            rows.forEach { row ->
-                if (row is GalleryRow.Photos) row.items.forEach { stableIds.add(it.stableId) }
-            }
-            selected.keys.retainAll(stableIds)
-        }
+        val missing = GallerySelectionPolicy.missingSelection(rows, selected.keys)
+        if (missing.isNotEmpty()) selected.keys.removeAll(missing)
         notifyDataSetChanged()
-        notifySelectionChanged()
+        if (missing.isNotEmpty()) notifySelectionChanged()
     }
 
     fun clearSelection() {
