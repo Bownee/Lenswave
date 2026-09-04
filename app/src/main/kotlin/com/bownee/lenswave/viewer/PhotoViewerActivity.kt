@@ -16,6 +16,7 @@ import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.core.graphics.Insets
+import androidx.core.os.BundleCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.isVisible
@@ -94,9 +95,19 @@ class PhotoViewerActivity : FragmentActivity() {
     private lateinit var request: PhotoRequest
     private var navigationRequests: MutableList<PhotoRequest> = mutableListOf()
 
-    /** The gallery's full list and where [navigationRequests] sits in it; null after a process death. */
+    /** Index of the first entry of [navigationRequests] in the gallery's list; -1 when unknown. */
+    private var navigationStart = -1
+
+    /** The gallery's full list, when it is still in the process and lines up with [navigationRequests]. */
     private var navigationSource: PhotoNavigationSources.Source? = null
-    private var navigationWindow: PhotoNavigationWindowPolicy.Window? = null
+    private val navigationWindow: PhotoNavigationWindowPolicy.Window?
+        get() =
+            navigationStart.takeIf { it >= 0 }?.let {
+                PhotoNavigationWindowPolicy.Window(
+                    it,
+                    it + navigationRequests.size,
+                )
+            }
     private var resolvedUri: Uri? = null
     private var photoTransitioning = false
     private var dismissing = false
@@ -121,8 +132,7 @@ class PhotoViewerActivity : FragmentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        request = PhotoRequest.from(intent)
-        navigationRequests = PhotoRequest.navigationFrom(intent).ifEmpty { listOf(request) }.toMutableList()
+        restoreNavigation(savedInstanceState)
         restoreNavigationSource()
         restoreResult(savedInstanceState)
         configureEdgeToEdgeWindow()
@@ -137,9 +147,47 @@ class PhotoViewerActivity : FragmentActivity() {
         loadPhoto()
     }
 
+    /**
+     * The photo on screen and the navigation window around it go to the saved state, so a
+     * recreated viewer (a rotation, or a process death) reopens where the user was rather than
+     * where the gallery opened it. The window is cut down to the policy's radius around the
+     * current photo: a long swipe run can have grown it to hundreds of entries, and the state
+     * bundle has a hard size limit.
+     */
     override fun onSaveInstanceState(outState: Bundle) {
+        outState.putParcelable(STATE_REQUEST, request)
+        val local = navigationRequests.indexOfFirst { it.stableId == request.stableId }.coerceAtLeast(0)
+        val kept = PhotoNavigationWindowPolicy.initial(local, navigationRequests.size)
+        outState.putParcelableArrayList(STATE_NAVIGATION, ArrayList(navigationRequests.subList(kept.start, kept.end)))
+        outState.putInt(STATE_NAVIGATION_START, if (navigationStart < 0) -1 else navigationStart + kept.start)
         RESULT_EXTRAS.forEach { extra -> outState.putBoolean(extra, resultIntent.getBooleanExtra(extra, false)) }
         super.onSaveInstanceState(outState)
+    }
+
+    /** The saved state wins over the intent: the intent describes where the viewer was opened, not where it is. */
+    private fun restoreNavigation(savedInstanceState: Bundle?) {
+        val savedRequest =
+            savedInstanceState?.let {
+                BundleCompat.getParcelable(
+                    it,
+                    STATE_REQUEST,
+                    PhotoRequest::class.java,
+                )
+            }
+        if (savedInstanceState != null && savedRequest != null) {
+            request = savedRequest
+            navigationRequests =
+                BundleCompat
+                    .getParcelableArrayList(savedInstanceState, STATE_NAVIGATION, PhotoRequest::class.java)
+                    .orEmpty()
+                    .ifEmpty { listOf(request) }
+                    .toMutableList()
+            navigationStart = savedInstanceState.getInt(STATE_NAVIGATION_START, -1)
+        } else {
+            request = PhotoRequest.from(intent)
+            navigationRequests = PhotoRequest.navigationFrom(intent).ifEmpty { listOf(request) }.toMutableList()
+            navigationStart = intent.getIntExtra(EXTRA_NAVIGATION_START, -1)
+        }
     }
 
     private fun restoreResult(savedInstanceState: Bundle?) {
@@ -364,36 +412,31 @@ class PhotoViewerActivity : FragmentActivity() {
             )
     }
 
-    /** The single place the current request changes, so the intent never lags it. */
+    /** The single place the current request changes; [onSaveInstanceState] carries it across recreation. */
     private fun setCurrentRequest(value: PhotoRequest) {
         request = value
-        request.writeTo(intent)
     }
 
     /**
-     * Finds the in-process gallery list the intent's window was cut from. The window is trusted
-     * only if it still lines up with that list; after a process death there is no list and the
-     * viewer keeps the window the intent carried.
+     * Finds the in-process gallery list the window was cut from. The window is trusted only if
+     * it still lines up with that list; after a process death there is no list and the viewer
+     * keeps the window it was restored with.
      */
     private fun restoreNavigationSource() {
         val source = PhotoNavigationSources.find(intent.getLongExtra(EXTRA_NAVIGATION_TOKEN, -1L)) ?: return
-        val start = intent.getIntExtra(EXTRA_NAVIGATION_START, -1)
-        val window = PhotoNavigationWindowPolicy.Window(start, start + navigationRequests.size)
+        val window = navigationWindow ?: return
         val linesUp =
-            start >= 0 &&
-                window.end <= source.assets.size &&
-                source.assets[start].stableId == navigationRequests.first().stableId &&
+            window.end <= source.assets.size &&
+                source.assets[window.start].stableId == navigationRequests.first().stableId &&
                 source.assets[window.end - 1].stableId == navigationRequests.last().stableId
         if (!linesUp) return
         navigationSource = source
-        navigationWindow = window
     }
 
     /**
      * Grows the navigation window from the gallery list while the user swipes towards an edge.
      * Existing entries are kept (they may carry a resolved name or a changed favourite); the
-     * list is replaced rather than mutated so the swipe controller rebuilds its index, and the
-     * intent's window follows so a recreated Activity starts from where the user is.
+     * list is replaced rather than mutated so the swipe controller rebuilds its index.
      */
     private fun extendNavigationWindow() {
         val source = navigationSource ?: return
@@ -406,9 +449,7 @@ class PhotoViewerActivity : FragmentActivity() {
         extended.addAll(navigationRequests)
         source.assets.subList(window.end, grown.end).mapTo(extended) { PhotoRequest.from(it, source.userId) }
         navigationRequests = extended
-        navigationWindow = grown
-        intent.putParcelableArrayListExtra(EXTRA_NAVIGATION, ArrayList(extended))
-        intent.putExtra(EXTRA_NAVIGATION_START, grown.start)
+        navigationStart = grown.start
     }
 
     /**
@@ -1070,6 +1111,9 @@ class PhotoViewerActivity : FragmentActivity() {
         const val EXTRA_NAVIGATION_START = "com.bownee.lenswave.extra.NAVIGATION_START"
         const val EXTRA_NAVIGATION_TOKEN = "com.bownee.lenswave.extra.NAVIGATION_TOKEN"
         private val RESULT_EXTRAS = listOf(EXTRA_PHOTO_DELETED, EXTRA_FAVORITE_CHANGED)
+        private const val STATE_REQUEST = "viewer.request"
+        private const val STATE_NAVIGATION = "viewer.navigation"
+        private const val STATE_NAVIGATION_START = "viewer.navigation-start"
         private const val DETAILS_MINIMUM_HEIGHT_FRACTION = 0.55f
         private const val MEDIA_ACTION_GAP_DP = 8
         private const val VIDEO_CONTROLS_HEIGHT_DP = 80
