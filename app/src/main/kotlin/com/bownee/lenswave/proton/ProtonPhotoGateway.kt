@@ -76,6 +76,11 @@ class ProtonPhotoGateway
                 sessionGuard.activate(userId) { previousUserId ->
                     previousUserId?.let { previous ->
                         clientProvider.disconnect(previous)
+                        // As in disconnect: the queues drop their pending writes first, or a
+                        // debounced flush could land after the clear and recreate the previous
+                        // user's directory and data key.
+                        thumbnailQueue.forget(previous.id)
+                        previewQueue.forget(previous.id)
                         cache.clearUser(previous.id)
                         originals.forgetUser(previous)
                     }
