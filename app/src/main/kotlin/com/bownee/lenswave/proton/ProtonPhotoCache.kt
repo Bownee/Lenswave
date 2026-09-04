@@ -198,7 +198,13 @@ internal class ProtonPhotoCache
         override fun readLastSuccessfulSync(
             userId: String,
             source: String,
-        ): Long = runCatching { readText(userId, syncMetadataFile(userId, source)).toLong() }.getOrDefault(0L)
+        ): Long {
+            // Freshness is checked on every sync; a missing file is the common case on a new
+            // account and is not worth an exception.
+            val file = syncMetadataFile(userId, source)
+            if (!file.isFile) return 0L
+            return runCatching { readText(userId, file).toLong() }.getOrDefault(0L)
+        }
 
         override fun writeLastSuccessfulSync(
             userId: String,
@@ -350,10 +356,14 @@ internal class ProtonPhotoCache
                 previews.remove(userId, nodeUid)
                 originals.remove(userId, nodeUid)
             }
-            val referencedNodeUids = remoteNodeUids + retainedNodeUids
-            thumbnails.removeUnreferenced(userId, referencedNodeUids)
-            previews.removeUnreferenced(userId, referencedNodeUids)
-            originals.removeUnreferenced(userId, referencedNodeUids)
+            // The three stores judge their files against one shared set of retained file names
+            // rather than each hashing every referenced node uid on its own.
+            val referencedNames = HashSet<String>((remoteNodeUids.size + retainedNodeUids.size) * 4 / 3 + 1)
+            remoteNodeUids.mapTo(referencedNames, ::safeName)
+            retainedNodeUids.mapTo(referencedNames, ::safeName)
+            thumbnails.removeUnreferenced(userId, referencedNames)
+            previews.removeUnreferenced(userId, referencedNames)
+            originals.removeUnreferenced(userId, referencedNames)
         }
 
         override fun removePhotos(
@@ -367,12 +377,16 @@ internal class ProtonPhotoCache
                 originals.remove(userId, nodeUid)
             }
             val availability = storedRenditions(userId)
+            // A listing that did not contain any of the photos is left as it is; rewriting it
+            // would encrypt and commit the same contents again under the sync mutex.
             readTimelineSnapshot(userId, availability)?.let { photos ->
-                writeIndex(userId, photos.filterNot { it.nodeUid in removed })
+                val remaining = photos.filterNot { it.nodeUid in removed }
+                if (remaining.size != photos.size) writeIndex(userId, remaining)
             }
             ProtonMediaTag.entries.forEach { tag ->
                 readTagSnapshot(userId, tag, availability)?.let { photos ->
-                    writeTag(userId, tag, photos.filterNot { it.nodeUid in removed })
+                    val remaining = photos.filterNot { it.nodeUid in removed }
+                    if (remaining.size != photos.size) writeTag(userId, tag, remaining)
                 }
             }
             // Only albums that actually lost a photo are rewritten; the rest keep their counts.
