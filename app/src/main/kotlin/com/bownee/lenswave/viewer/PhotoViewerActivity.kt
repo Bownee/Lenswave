@@ -519,6 +519,8 @@ class PhotoViewerActivity :
                             loadingPanel.visibility = View.VISIBLE
                         }
 
+                        override fun hideLoadingPanel() = this@PhotoViewerActivity.hideLoadingPanel()
+
                         override fun onVideoReady(requestedStableId: String) {
                             navigationFallback = null
                             photoReady = true
