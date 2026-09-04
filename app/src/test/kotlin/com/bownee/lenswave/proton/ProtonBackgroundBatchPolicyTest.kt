@@ -55,4 +55,31 @@ class ProtonBackgroundBatchPolicyTest {
 
     private fun entries(vararg nodeUids: String) =
         nodeUids.map { nodeUid -> ProtonThumbnailQueueEntry(nodeUid, mapOf("timeline" to 1L)) }
+
+    @Test
+    fun `idle runs wait for soon-due retries and end otherwise`() {
+        val idle =
+            ProtonBackgroundBatchPolicy.idle(
+                thumbnailsPending = false,
+                previewsPending = true,
+                thumbnailRetryDelayMillis = null,
+                previewRetryDelayMillis = 90_000L,
+            )
+        assertEquals(90_000L, idle.retryAfterMillis)
+        assertEquals(90_000L, ProtonBackgroundBatchPolicy.idleWaitMillis(idle, maxWaitMillis = 120_000L))
+        assertNull(ProtonBackgroundBatchPolicy.idleWaitMillis(idle, maxWaitMillis = 60_000L))
+        assertNull(
+            ProtonBackgroundBatchPolicy.idleWaitMillis(ProtonThumbnailQueueStep.Idle(hasPending = false), 120_000L),
+        )
+        assertEquals(
+            5L,
+            ProtonBackgroundBatchPolicy
+                .idle(
+                    true,
+                    true,
+                    thumbnailRetryDelayMillis = 5L,
+                    previewRetryDelayMillis = 9L,
+                ).retryAfterMillis,
+        )
+    }
 }

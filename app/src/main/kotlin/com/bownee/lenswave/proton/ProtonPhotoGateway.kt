@@ -309,6 +309,8 @@ class ProtonPhotoGateway
                                 ProtonBackgroundBatchPolicy.idle(
                                     thumbnailsPending = thumbnailQueue.hasPending(userId.id),
                                     previewsPending = previewQueue.hasPending(userId.id),
+                                    thumbnailRetryDelayMillis = thumbnailQueue.retryDelayMillis(userId.id),
+                                    previewRetryDelayMillis = previewQueue.retryDelayMillis(userId.id),
                                 )
                             }
                         }
@@ -390,6 +392,8 @@ class ProtonPhotoGateway
                 return ProtonBackgroundBatchPolicy.idle(
                     thumbnailsPending = thumbnailQueue.hasPending(userId.id),
                     previewsPending = previewQueue.hasPending(userId.id),
+                    thumbnailRetryDelayMillis = thumbnailQueue.retryDelayMillis(userId.id),
+                    previewRetryDelayMillis = previewQueue.retryDelayMillis(userId.id),
                 )
             }
             val nodeUids = entries.map(ProtonThumbnailQueueEntry::nodeUid)

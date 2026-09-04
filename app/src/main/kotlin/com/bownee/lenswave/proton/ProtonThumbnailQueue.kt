@@ -69,8 +69,10 @@ internal sealed interface ProtonThumbnailQueueStep {
 
     data object Failed : ProtonThumbnailQueueStep
 
+    /** [retryAfterMillis] is how long until a backed-off entry is claimable again, when any is pending. */
     data class Idle(
         val hasPending: Boolean,
+        val retryAfterMillis: Long? = null,
     ) : ProtonThumbnailQueueStep
 }
 
@@ -249,6 +251,13 @@ internal class ProtonThumbnailQueue(
     suspend fun pendingCount(userId: String): Int =
         mutex.withLock {
             entries(userId).size
+        }
+
+    /** How long until the soonest backed-off entry is claimable again (0 if now), or null when empty. */
+    suspend fun retryDelayMillis(userId: String): Long? =
+        mutex.withLock {
+            entries(userId).values.minOfOrNull(ProtonThumbnailQueueEntry::retryAtMillis)
+                ?.let { retryAt -> (retryAt - clock.nowMillis()).coerceAtLeast(0L) }
         }
 
     suspend fun forget(userId: String) {

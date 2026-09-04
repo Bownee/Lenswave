@@ -16,6 +16,7 @@ import dagger.hilt.InstallIn
 import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.components.SingletonComponent
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
 import me.proton.core.domain.entity.UserId
@@ -92,6 +93,14 @@ class ProtonThumbnailWorker(
                             }
 
                             is ProtonThumbnailQueueStep.Idle -> {
+                                val wait = ProtonBackgroundBatchPolicy.idleWaitMillis(step, MAX_IDLE_WAIT_MILLIS)
+                                if (wait != null) {
+                                    // Backed-off entries come due soon: sleeping here keeps the run
+                                    // (and its foreground service) alive instead of relying on a
+                                    // WorkManager retry that cannot start from the background.
+                                    delay(wait + IDLE_WAIT_SLACK_MILLIS)
+                                    continue
+                                }
                                 completedWithinTime = true
                                 runIssue =
                                     when {
@@ -183,6 +192,8 @@ class ProtonThumbnailWorker(
         const val KEY_USER_ID = "user-id"
         private const val SESSION_READY_TIMEOUT_MILLIS = 30_000L
         private const val NETWORK_READY_TIMEOUT_MILLIS = 5_000L
+        private const val MAX_IDLE_WAIT_MILLIS = 16L * 60L * 1_000L
+        private const val IDLE_WAIT_SLACK_MILLIS = 1_000L
 
         fun request(userId: UserId): OneTimeWorkRequest =
             OneTimeWorkRequestBuilder<ProtonThumbnailWorker>()
