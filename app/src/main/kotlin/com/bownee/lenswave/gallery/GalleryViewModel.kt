@@ -187,6 +187,7 @@ class GalleryViewModel internal constructor(
     init {
         restoreScrollPosition(savedStateHandle)?.let { position -> scrollPositions.save(destination, position) }
         observeAccountSession()
+        observeAlbums()
     }
 
     /** Records where [pageDestination] is scrolled to; the current page's position also goes to the saved state. */
@@ -336,6 +337,26 @@ class GalleryViewModel internal constructor(
         }
     }
 
+    private fun observeAlbums() {
+        viewModelScope.launch {
+            protonRepository.albumsState.collect(::leaveMissingAlbum)
+        }
+    }
+
+    /**
+     * A restored album page whose album the loaded list no longer has (deleted on another
+     * device) returns to the album list instead of showing "album is empty" under a stale name.
+     */
+    private fun leaveMissingAlbum(albums: ProtonAlbumsState) {
+        val userId = currentUserId ?: return
+        if (albums.userId != userId.id) return
+        val fallback =
+            GalleryNavigationPolicy.withoutAlbum(destination, albums.hasLoaded) { nodeUid ->
+                albums.albums.any { album -> album.nodeUid == nodeUid }
+            } ?: return
+        selectDestination(fallback)
+    }
+
     private suspend fun handleAccountSession(state: ProtonAccountSessionState) {
         val accountStatus = accountStatus(state)
         sessionTransitioning = state.transitioning
@@ -370,6 +391,8 @@ class GalleryViewModel internal constructor(
         }
         publishUiState(accountStatus)
         if (userChanged && nextUserId != null) {
+            // The album list may already be loaded for this user; the collector saw it before the user was known.
+            leaveMissingAlbum(protonRepository.albumsState.value)
             if (requestMissingProtonMetadata(nextUserId)) return
             protonThumbnailScheduler.restart(nextUserId)
         }

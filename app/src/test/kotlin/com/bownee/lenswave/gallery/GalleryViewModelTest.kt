@@ -475,7 +475,8 @@ class GalleryViewModelTest {
             // With the metadata loaded (a recreation): the startup refresh loads the cached album first.
             events.clear()
             reader.state.value = loadedTimeline("p1")
-            reader.albumsState.value = ProtonAlbumsState(userId = USER.id, hasLoaded = true)
+            reader.albumsState.value =
+                ProtonAlbumsState(userId = USER.id, albums = listOf(album("al")), hasLoaded = true)
             reader.albumPhotosState.value = ProtonAlbumPhotosState()
             val recreated = viewModel()
             backgroundScope.launch { recreated.uiState.collect {} }
@@ -492,6 +493,36 @@ class GalleryViewModelTest {
             runCurrent()
 
             assertEquals(listOf("syncAlbumPhotos:al:false", "enqueue:u"), events)
+        }
+
+    @Test
+    fun `a restored album that the loaded album list no longer has returns to the album list`() =
+        runTest(dispatcher) {
+            savedState["gallery.destination"] = "proton-album"
+            savedState["gallery.album-uid"] = "gone"
+            savedState["gallery.album-name"] = "Album gone"
+            reader.state.value = loadedTimeline("p1")
+            reader.albumsState.value =
+                ProtonAlbumsState(userId = USER.id, albums = listOf(album("al")), hasLoaded = true)
+            session.value = ProtonAccountSessionState(readyAccount(USER), USER, initialized = true)
+
+            val viewModel = viewModel()
+            backgroundScope.launch { viewModel.uiState.collect {} }
+            runCurrent()
+
+            assertEquals(GalleryDestination.Library, viewModel.uiState.value.destination)
+            assertEquals("library", savedState.get<String>("gallery.destination"))
+
+            // An album that is still listed stays, and stays while the list is merely reloading.
+            viewModel.openAlbum(album("al"))
+            runCurrent()
+            reader.albumsState.value = ProtonAlbumsState(userId = USER.id, albums = emptyList(), hasLoaded = false)
+            runCurrent()
+            assertEquals(GalleryDestination.AlbumPhotos(album("al").reference()), viewModel.uiState.value.destination)
+
+            reader.albumsState.value = ProtonAlbumsState(userId = USER.id, albums = emptyList(), hasLoaded = true)
+            runCurrent()
+            assertEquals(GalleryDestination.Library, viewModel.uiState.value.destination)
         }
 
     @Test
