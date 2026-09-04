@@ -171,7 +171,10 @@ class FullResolutionPhotoView
             onComplete: (Result<Unit>) -> Unit,
         ) {
             val loadGeneration = generation.incrementAndGet()
-            loadFuture?.cancel(true)
+            // Never interrupt: the decode cannot be, and an interrupt landing on the new task's
+            // openFileDescriptor or pread would fail a healthy load. The generation check below
+            // discards a stale result instead.
+            loadFuture?.cancel(false)
             detailFuture?.cancel(false)
             releaseDecoder()
             val metrics = resources.displayMetrics
@@ -721,7 +724,7 @@ class FullResolutionPhotoView
             if (!basePlaceholder) baseBitmap?.recycle()
             basePlaceholder = false
             baseBitmap = null
-            loadFuture?.cancel(true)
+            loadFuture?.cancel(false)
             detailFuture?.cancel(false)
             // The decoder is recycled on the detail thread, queued behind any tile still decoding:
             // decodeRegion cannot be interrupted and recycling underneath it crashes natively, so
