@@ -50,7 +50,11 @@ internal class ProtonRenditionDownloads
             val requested = nodeUids.distinct()
             val successful =
                 requested.filterTo(mutableSetOf()) { nodeUid ->
-                    // A file stat only: decoding here would evict the gallery's own bitmaps.
+                    // A file stat only, deliberately: decoding every stored thumbnail here would
+                    // evict the gallery's own bitmaps and cost far more than it saves. The
+                    // trade-off is that a corrupt stored file counts as available, fails to
+                    // decode in the grid, and is queued again from there (see the gateway's
+                    // invalidateThumbnail); that path is rare and self-correcting.
                     cache.thumbnailExists(userId.id, nodeUid)
                 }
             if (successful.isNotEmpty()) {
