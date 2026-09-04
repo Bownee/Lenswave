@@ -13,7 +13,9 @@ import me.proton.core.domain.entity.UserId
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -522,6 +524,29 @@ class GalleryUiStateFactoryTest {
         val albums = (state.content as GalleryContent.Library).sections.single { it.key == "albums" }
         assertEquals(listOf(LibraryItem.Album(album)), albums.items)
         assertNull(state.emptyState)
+    }
+
+    @Test
+    fun `library content keeps its instance across publishes that only change a flag`() {
+        val albums = listOf(ProtonAlbum("album", "Trip", 4, "cover", 1, 2, true, false))
+        val inputs =
+            GalleryUiInputs(
+                destination = GalleryDestination.Library,
+                protonAccountStatus = ProtonAccountStatus.CONNECTED,
+                protonAlbums = ProtonAlbumsState(albums = albums, hasLoaded = true),
+            )
+
+        val first = factory.create(inputs).content
+        val refreshing = factory.create(inputs.copy(isRefreshing = true)).content
+        val syncing = factory.create(inputs.copy(protonAlbums = inputs.protonAlbums.copy(syncing = true))).content
+
+        assertSame(first, refreshing)
+        assertSame(first, syncing)
+        assertNotSame(first, factory.create(inputs.copy(protonAccountStatus = ProtonAccountStatus.CONNECTING)).content)
+        assertNotSame(
+            first,
+            factory.create(inputs.copy(protonAlbums = ProtonAlbumsState(albums = albums.toList()))).content,
+        )
     }
 
     @Test
