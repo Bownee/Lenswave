@@ -101,6 +101,9 @@ internal class ProtonThumbnailQueue(
     private val clock: LenswaveClock,
     private val name: ProtonQueueName = ProtonQueueName.THUMBNAILS,
     private val flushScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+    private val onWriteFailure: (Throwable) -> Unit = { error ->
+        LenswaveDiagnostics.reportFailure(LenswaveOperation.DOWNLOAD_QUEUE_PERSIST, error)
+    },
 ) {
     private val mutex = Mutex()
     private val writeMutex = Mutex()
@@ -315,14 +318,38 @@ internal class ProtonThumbnailQueue(
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Throwable) {
-                // The queue stays dirty; the next change or forced flush tries again.
-                LenswaveDiagnostics.reportFailure(LenswaveOperation.DOWNLOAD_QUEUE_PERSIST, error)
+                // The queue stays dirty; a retry is scheduled so the state is not stuck on disk
+                // until the next change happens to come along.
+                scheduleRetryAfterFailedWrite(userId, error)
                 return
             }
             mutex.withLock {
                 if (state.writtenGeneration < snapshot.generation) state.writtenGeneration = snapshot.generation
+                state.consecutiveWriteFailures = 0
             }
         }
+    }
+
+    private suspend fun scheduleRetryAfterFailedWrite(
+        userId: String,
+        error: Throwable,
+    ) {
+        val report =
+            mutex.withLock {
+                // Forgotten meanwhile: the user's files are gone, and so is the reason to retry.
+                val state = persistence[userId] ?: return
+                state.consecutiveWriteFailures++
+                if (state.scheduledFlush == null) {
+                    val delayMillis = ProtonQueueFlushPolicy.retryDelayAfterFailedWrite(state.consecutiveWriteFailures)
+                    state.scheduledFlush =
+                        flushScope.launch {
+                            delay(delayMillis)
+                            flush(userId)
+                        }
+                }
+                ProtonQueueFlushPolicy.shouldReportWriteFailure(state.consecutiveWriteFailures)
+            }
+        if (report) onWriteFailure(error)
     }
 
     /** Records [changes] in-memory edits and schedules the write [ProtonQueueFlushPolicy] asks for. */
@@ -359,6 +386,7 @@ internal class ProtonThumbnailQueue(
         var generation = 0L
         var writtenGeneration = 0L
         var scheduledFlush: Job? = null
+        var consecutiveWriteFailures = 0
     }
 
     private class Snapshot(

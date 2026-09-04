@@ -227,6 +227,36 @@ class ProtonThumbnailQueueTest {
         }
 
     @Test
+    fun aFailedWriteIsRetriedAndReportedOnce() =
+        runTest {
+            val store = FakeStore()
+            val failures = mutableListOf<Throwable>()
+            val queue =
+                ProtonThumbnailQueue(store, FakeClock(), ProtonQueueName.THUMBNAILS, backgroundScope, failures::add)
+            queue.replaceSource(USER_ID, "timeline", candidates("a", "b"))
+            queue.claimReady(USER_ID, limit = 2)
+            store.failWrites = true
+            queue.settle(USER_ID, setOf("a"), emptySet())
+
+            advanceTimeBy(ProtonQueueFlushPolicy.FLUSH_DELAY_MILLIS)
+            runCurrent()
+            assertEquals(1, failures.size)
+            advanceTimeBy(ProtonQueueFlushPolicy.retryDelayAfterFailedWrite(1))
+            runCurrent()
+            assertEquals(1, failures.size)
+            assertEquals(listOf("a", "b"), store.entries.getValue(USER_ID).map { it.nodeUid })
+
+            store.failWrites = false
+            advanceTimeBy(ProtonQueueFlushPolicy.retryDelayAfterFailedWrite(2))
+            runCurrent()
+
+            assertEquals(listOf("b"), store.entries.getValue(USER_ID).map { it.nodeUid })
+            assertEquals(1, failures.size)
+            queue.flush(USER_ID)
+            assertEquals(1, failures.size)
+        }
+
+    @Test
     fun forgettingAUserDiscardsItsPendingWrite() =
         runTest {
             val store = FakeStore()
@@ -393,6 +423,7 @@ class ProtonThumbnailQueueTest {
         val entries = mutableMapOf<String, List<ProtonThumbnailQueueEntry>>()
         val previewEntries = mutableMapOf<String, List<ProtonThumbnailQueueEntry>>()
         var writeCount = 0
+        var failWrites = false
 
         override fun readQueue(
             userId: String,
@@ -404,6 +435,7 @@ class ProtonThumbnailQueueTest {
             queue: ProtonQueueName,
             entries: List<ProtonThumbnailQueueEntry>,
         ) {
+            if (failWrites) throw java.io.IOException("disk full")
             writeCount++
             entriesFor(queue)[userId] = entries.toList()
         }

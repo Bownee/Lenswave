@@ -34,6 +34,64 @@ class ProtonRenditionSyncTest {
         }
 
     @Test
+    fun `a processed batch leaves the write to the debounce`() =
+        runBlocking {
+            thumbnails.replaceSource(USER.id, ProtonSyncKeys.QueueSource.TIMELINE, candidates("a", "b"))
+            source.thumbnailResult = ThumbnailBatchResult(setOf("a", "b"), emptyMap())
+            val writesBefore = store.writeCount
+
+            sync.downloadNextBatch(USER, allowPreviews = true) {}
+
+            assertEquals(writesBefore, store.writeCount)
+            assertEquals(0, thumbnails.pendingCount(USER.id))
+        }
+
+    @Test
+    fun `every Nth batch and the idle step force a write`() =
+        runBlocking {
+            val writesBefore = store.writeCount
+
+            // One entry per batch; retryNow marks the queue changed without writing it.
+            suspend fun processOne(index: Int) {
+                val nodeUid = "photo-$index"
+                thumbnails.retryNow(
+                    USER.id,
+                    ProtonThumbnailCandidate(nodeUid, index.toLong()),
+                    setOf(ProtonSyncKeys.QueueSource.TIMELINE),
+                )
+                source.thumbnailResult = ThumbnailBatchResult(setOf(nodeUid), emptyMap())
+                assertEquals(ProtonThumbnailQueueStep.Processed, sync.downloadNextBatch(USER, allowPreviews = true) {})
+            }
+
+            repeat(ProtonQueueFlushPolicy.BATCHES_PER_FORCED_FLUSH - 1) { index -> processOne(index) }
+            assertEquals(writesBefore, store.writeCount)
+            processOne(ProtonQueueFlushPolicy.BATCHES_PER_FORCED_FLUSH)
+            assertEquals(writesBefore + 1, store.writeCount)
+
+            processOne(ProtonQueueFlushPolicy.BATCHES_PER_FORCED_FLUSH + 1)
+            assertEquals(writesBefore + 1, store.writeCount)
+            val idle = sync.downloadNextBatch(USER, allowPreviews = true) {}
+            assertEquals(ProtonThumbnailQueueStep.Idle(hasPending = false), idle)
+            assertEquals(writesBefore + 2, store.writeCount)
+        }
+
+    @Test
+    fun `a stopped run writes the queues and releases its claims`() =
+        runBlocking {
+            thumbnails.replaceSource(USER.id, ProtonSyncKeys.QueueSource.TIMELINE, candidates("a", "b"))
+            source.thumbnailProgress = listOf(ThumbnailBatchResult(setOf("a"), emptyMap()))
+            source.thumbnailFailure = kotlinx.coroutines.CancellationException("stopped")
+            val writesBefore = store.writeCount
+
+            val stopped = runCatching { sync.downloadNextBatch(USER, allowPreviews = true) {} }
+
+            assertTrue(stopped.exceptionOrNull() is kotlinx.coroutines.CancellationException)
+            assertEquals(writesBefore + 1, store.writeCount)
+            assertEquals(listOf("b"), store.readQueue(USER.id, ProtonQueueName.THUMBNAILS).map { it.nodeUid })
+            assertEquals(listOf("b"), thumbnails.claimReady(USER.id, limit = 2).map { it.nodeUid })
+        }
+
+    @Test
     fun `thumbnails come before previews and settle by their sources`() =
         runBlocking {
             thumbnails.replaceSource(USER.id, ProtonSyncKeys.QueueSource.TIMELINE, candidates("x"))
@@ -162,11 +220,11 @@ class ProtonRenditionSyncTest {
             nodeUids: Collection<String>,
             onProgress: suspend (ThumbnailBatchResult) -> Unit,
         ): ThumbnailBatchResult {
-            thumbnailFailure?.let { throw it }
             (thumbnailProgress ?: listOf(thumbnailResult)).forEach { result ->
                 beforeProgress()
                 onProgress(result)
             }
+            thumbnailFailure?.let { throw it }
             return thumbnailResult
         }
 
@@ -221,6 +279,7 @@ class ProtonRenditionSyncTest {
 
     private class FakeStore : ProtonThumbnailQueueStore {
         private val queues = mutableMapOf<Pair<String, ProtonQueueName>, List<ProtonThumbnailQueueEntry>>()
+        var writeCount = 0
 
         override fun readQueue(
             userId: String,
@@ -232,6 +291,7 @@ class ProtonRenditionSyncTest {
             queue: ProtonQueueName,
             entries: List<ProtonThumbnailQueueEntry>,
         ) {
+            writeCount++
             queues[userId to queue] = entries.toList()
         }
     }
