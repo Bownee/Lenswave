@@ -101,13 +101,13 @@ internal class ProtonTimelineRepository
                 },
                 commit = { photos ->
                     val remoteNodeUids = photos.map(ProtonGalleryPhoto::nodeUid)
-                    val remote = remoteNodeUids.toHashSet()
-                    val removedCount = existing.count { photo -> photo.nodeUid !in remote }
-                    // Thrown from the commit, the refusal is reported and published as a failed
-                    // refresh like any other, which is what offers the manual refresh.
-                    if (!ProtonReconcileSafetyPolicy.mayCommit(existing.size, removedCount, forceRemote)) {
-                        throw ProtonSuspiciousListingException(existing.size, removedCount)
-                    }
+                    ProtonReconcileSafetyPolicy.requireCommit(
+                        listing = "timeline",
+                        existing = existing,
+                        remoteNodeUids = remoteNodeUids.toHashSet(),
+                        forceRemote = forceRemote,
+                        nodeUid = ProtonGalleryPhoto::nodeUid,
+                    )
                     // The new listing lands before anything is deleted: a crash between the two
                     // then leaves stray renditions for the next reconcile, not a listing that
                     // points at renditions which are gone.
@@ -163,6 +163,13 @@ internal class ProtonTimelineRepository
                 },
                 enumerate = { listTag(userId, tag, existing) },
                 commit = { photos ->
+                    ProtonReconcileSafetyPolicy.requireCommit(
+                        listing = "tag-${tag.name.lowercase()}",
+                        existing = existing,
+                        remoteNodeUids = photos.mapTo(HashSet(), ProtonGalleryPhoto::nodeUid),
+                        forceRemote = forceRemote,
+                        nodeUid = ProtonGalleryPhoto::nodeUid,
+                    )
                     val retained = retainTimelinePhotos(userId, photos)
                     cache.writeTag(userId.id, tag, retained)
                     retained

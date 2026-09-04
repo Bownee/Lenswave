@@ -109,6 +109,13 @@ internal class ProtonAlbumRepository
                     }.sortedByDescending(ProtonAlbum::lastActivityEpochSeconds)
                 },
                 commit = { albums ->
+                    ProtonReconcileSafetyPolicy.requireCommit(
+                        listing = "albums",
+                        existing = existing,
+                        remoteNodeUids = albums.mapTo(HashSet(), ProtonAlbum::nodeUid),
+                        forceRemote = forceRemote,
+                        nodeUid = ProtonAlbum::nodeUid,
+                    )
                     // The listing lands before the vanished albums' photo indexes are deleted,
                     // so a crash in between leaves a stray index rather than a listing whose
                     // albums have no index.
@@ -155,6 +162,13 @@ internal class ProtonAlbumRepository
                         .sortedByDescending(ProtonGalleryPhoto::captureTimeEpochSeconds)
                 },
                 commit = { photos ->
+                    ProtonReconcileSafetyPolicy.requireCommit(
+                        listing = "album-photos",
+                        existing = existing,
+                        remoteNodeUids = photos.mapTo(HashSet(), ProtonGalleryPhoto::nodeUid),
+                        forceRemote = forceRemote,
+                        nodeUid = ProtonGalleryPhoto::nodeUid,
+                    )
                     // A photo trashed while the album was enumerating has left the published
                     // listing; the enumerated one must not bring it back.
                     val retained =

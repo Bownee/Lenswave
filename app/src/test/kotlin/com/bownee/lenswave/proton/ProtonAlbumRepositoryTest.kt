@@ -115,6 +115,52 @@ class ProtonAlbumRepositoryTest {
         }
 
     @Test
+    fun `an automatic albums refresh that drops most of the albums keeps the cache and fails`() =
+        runTest {
+            cache.albums[USER.id] = List(400) { index -> album("al$index", photoCount = 1L) }
+            repository.loadCached(USER)
+
+            repository.syncMetadata(USER, forceRemote = false)
+
+            assertEquals(400, repository.albumsState.value.albums.size)
+            assertTrue(repository.albumsState.value.refreshFailed)
+            assertTrue(cache.events.isEmpty())
+            assertTrue(failures.single().second is ProtonSuspiciousListingException)
+
+            repository.syncMetadata(USER, forceRemote = true)
+
+            assertTrue(
+                repository.albumsState.value.albums
+                    .isEmpty(),
+            )
+            assertEquals(listOf("writeAlbums:0", "reconcileAlbums:0"), cache.events)
+        }
+
+    @Test
+    fun `an automatic album-photo refresh that drops most of the photos keeps the cache and fails`() =
+        runTest {
+            val album = ProtonAlbumReference("al1", "Album")
+            cache.albumPhotos[USER.id to "al1"] = List(400) { index -> photo("p$index", index.toLong()) }
+            repository.loadCachedAlbum(USER, album)
+            clients.release.complete(Unit)
+
+            repository.syncAlbumPhotoMetadata(USER, album, forceRemote = false)
+
+            assertEquals(400, repository.albumPhotosState.value.photos.size)
+            assertTrue(repository.albumPhotosState.value.refreshFailed)
+            assertTrue(cache.events.isEmpty())
+            assertTrue(failures.single().second is ProtonSuspiciousListingException)
+
+            repository.syncAlbumPhotoMetadata(USER, album, forceRemote = true)
+
+            assertTrue(
+                repository.albumPhotosState.value.photos
+                    .isEmpty(),
+            )
+            assertEquals(listOf("writeAlbumPhotos:al1:0"), cache.events)
+        }
+
+    @Test
     fun `a sync writes the album listing before it deletes the indexes of vanished albums`() =
         runTest {
             cache.albums[USER.id] = listOf(album("al1", photoCount = 2L))

@@ -164,6 +164,37 @@ class ProtonTimelineRepositoryTest {
         }
 
     @Test
+    fun `an automatic tag refresh that drops most of the tag keeps the cache and fails`() =
+        runTest {
+            val cached = List(400) { index -> photo("v~p$index", index.toLong()) }
+            cache.timelines[USER.id] = cached
+            cache.tags[USER.id to ProtonMediaTag.VIDEOS] = cached
+            repository.loadCached(USER)
+            tagListings.listings[ProtonMediaTag.VIDEOS] = List(100) { index -> photo("v~p$index", index.toLong()) }
+            tagListings.release.complete(Unit)
+
+            repository.syncTagMetadata(USER, ProtonMediaTag.VIDEOS, forceRemote = false)
+
+            val videos =
+                repository.state.value.tags
+                    .getValue(ProtonMediaTag.VIDEOS)
+            assertEquals(400, videos.photos.size)
+            assertTrue(videos.refreshFailed)
+            assertEquals(400, cache.tags.getValue(USER.id to ProtonMediaTag.VIDEOS).size)
+            assertTrue(failures.single().second is ProtonSuspiciousListingException)
+
+            repository.syncTagMetadata(USER, ProtonMediaTag.VIDEOS, forceRemote = true)
+
+            assertEquals(
+                100,
+                repository.state.value.tags
+                    .getValue(ProtonMediaTag.VIDEOS)
+                    .photos.size,
+            )
+            assertEquals(100, cache.tags.getValue(USER.id to ProtonMediaTag.VIDEOS).size)
+        }
+
+    @Test
     fun `a tag listing is committed whole while the timeline has not loaded`() =
         runTest {
             cache.tags[USER.id to ProtonMediaTag.VIDEOS] = listOf(photo("v~old", 1L))
