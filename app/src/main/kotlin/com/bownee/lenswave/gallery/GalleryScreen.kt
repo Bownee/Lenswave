@@ -20,7 +20,6 @@ import androidx.core.graphics.Insets
 import androidx.core.graphics.drawable.toDrawable
 import androidx.core.view.ViewCompat
 import androidx.core.view.isNotEmpty
-import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.bownee.lenswave.R
 import com.bownee.lenswave.UiStyle
 import com.bownee.lenswave.dp
@@ -66,7 +65,7 @@ internal class GalleryScreen(
     private val emptyTitle: TextView
     private val emptyMessage: TextView
     private val emptyAction: Button
-    private val refreshLayout: SwipeRefreshLayout
+    private val refreshLayout: GalleryRefreshLayout
     private val stickyDate: TextView
     private val stickyDateController: GalleryStickyDateController
     private val selectionCount: TextView
@@ -128,10 +127,11 @@ internal class GalleryScreen(
                 adapter = this@GalleryScreen.adapter
             }
         refreshLayout =
-            SwipeRefreshLayout(activity).apply {
+            GalleryRefreshLayout(activity).apply {
                 setColorSchemeColors(UiStyle.accent)
                 setProgressBackgroundColorSchemeColor(UiStyle.surface)
                 setOnRefreshListener { actions.onRefresh() }
+                pullGate = ::startsPull
                 addView(list, UiStyle.matchParentFrame())
             }
         root.addView(refreshLayout, UiStyle.matchParentFrame())
@@ -301,6 +301,18 @@ internal class GalleryScreen(
     /** Mirrors the view model's manual refresh state; a finished refresh hides the spinner. */
     fun setRefreshing(refreshing: Boolean) {
         if (refreshLayout.isRefreshing != refreshing) refreshLayout.isRefreshing = refreshing
+    }
+
+    /** Only the thumbnail area pulls to refresh; the pinned header and filter chips do not. */
+    private fun startsPull(touchY: Float): Boolean {
+        val filterRowBounds =
+            if (filterRow.isShown) {
+                val top = galleryHeader.top + filterRow.top
+                top until top + filterRow.height
+            } else {
+                null
+            }
+        return GalleryPullToRefreshPolicy.startsPull(touchY, stickyHeader.height, filterRowBounds)
     }
 
     private fun layoutBelowHeader() {
