@@ -351,6 +351,9 @@ class ProtonPhotoGateway
                             onProgress(thumbnailWorkProgressInActiveSession(userId))
                         }
                     }
+                // Settling the final result as well guarantees no claimed entry is left behind,
+                // which would otherwise keep the run spinning on a queue it can never drain.
+                progressMutex.withLock { settlePreviewProgress(userId, result) }
                 // Photos without a preview on the server are dropped, not failures worth a retry.
                 if (result.failures.values.all(ProtonBackgroundBatchPolicy::isPermanent)) {
                     ProtonThumbnailQueueStep.Downloaded
