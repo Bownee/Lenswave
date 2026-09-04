@@ -30,6 +30,7 @@ internal class ProtonRenditionDownloads
         private val clientProvider: ProtonPhotosClientProvider,
         private val cache: ProtonMediaCache,
         private val transferCoordinator: ProtonTransferCoordinator,
+        private val previewAdmission: ProtonPreviewAdmission,
     ) : ProtonRenditionSource {
         fun loadThumbnail(
             userId: UserId,
@@ -124,7 +125,11 @@ internal class ProtonRenditionDownloads
                     timeoutMillis = ProtonThumbnailDownloadPolicy.PREVIEW_PASS_TIMEOUT_MILLIS,
                     store = { nodeUid, bytes -> cache.writePreview(userId.id, nodeUid, bytes) },
                 )
-            downloadChunks(pending, downloadChunk = ::previewPass).forEach { result ->
+            // A batch of previews is a gigabyte's worth of library over time, allowed by a
+            // charger or a screen that may be gone before the batch is; the chunks not yet
+            // started are dropped the moment it is.
+            val mayStart = previewAdmission::previewsAllowed
+            downloadChunks(pending, mayStart = mayStart, downloadChunk = ::previewPass).forEach { result ->
                 successful += result.successfulNodeUids
                 failures += result.failures
             }
@@ -135,6 +140,7 @@ internal class ProtonRenditionDownloads
                 unanswered,
                 batchSize = 1,
                 maxConcurrent = ProtonThumbnailDownloadPolicy.MAX_CONCURRENT_SINGLE_NODE_PASSES,
+                mayStart = mayStart,
                 downloadChunk = ::previewPass,
             ).forEach { result ->
                 successful += result.successfulNodeUids
@@ -168,19 +174,30 @@ internal class ProtonRenditionDownloads
          * soon as one pass ends, so a slow pass never holds the others back: the earlier windows
          * with a barrier per window left most of the concurrency idle whenever one node took
          * its whole deadline.
+         *
+         * [mayStart] is asked as each chunk gets its permit. A chunk it refuses is abandoned
+         * with neither successes nor failures: its nodes are not the ones at fault, so they
+         * take no backoff step, and stay claimed until the run that abandoned them is idle
+         * and the sync clears the claims a batch left behind.
          */
         private suspend fun downloadChunks(
             nodeUids: List<String>,
             batchSize: Int = ProtonThumbnailDownloadPolicy.SDK_BATCH_SIZE,
             maxConcurrent: Int = ProtonThumbnailDownloadPolicy.MAX_CONCURRENT_BATCHES,
+            mayStart: () -> Boolean = { true },
             downloadChunk: suspend (List<String>) -> ThumbnailBatchResult,
         ): List<ThumbnailBatchResult> =
             coroutineScope {
                 val permits = Semaphore(maxConcurrent)
                 ProtonThumbnailDownloadPolicy
                     .batches(nodeUids, batchSize)
-                    .map { chunk -> async { permits.withPermit { downloadChunk(chunk) } } }
-                    .awaitAll()
+                    .map { chunk ->
+                        async {
+                            permits.withPermit {
+                                if (mayStart()) downloadChunk(chunk) else ThumbnailBatchResult(emptySet(), emptyMap())
+                            }
+                        }
+                    }.awaitAll()
             }
 
         private suspend fun downloadChunk(

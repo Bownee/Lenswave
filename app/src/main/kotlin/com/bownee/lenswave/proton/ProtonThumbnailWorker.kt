@@ -52,6 +52,10 @@ class ProtonThumbnailWorker(
         // release of stale claims below the gateway only ever comes from the single active run.
         if (!runGuard.tryBegin()) return finish(ProtonThumbnailWorkOutcome.ALREADY_RUNNING)
         var networkMonitor: ProtonThumbnailNetworkMonitor? = null
+        val previewAdmission = entryPoint.previewAdmission()
+        // The downloader asks between the chunks of a preview batch whether previews are still
+        // allowed, so a batch a glance at the app authorised does not outlive the glance.
+        previewAdmission.bind(::previewsAllowed)
         return try {
             val requestedUserId = UserId(userId)
             val session =
@@ -147,6 +151,7 @@ class ProtonThumbnailWorker(
                 Result.failure()
             }
         } finally {
+            previewAdmission.unbind()
             networkMonitor?.close()
             runGuard.end()
         }
@@ -270,6 +275,8 @@ class ProtonThumbnailWorker(
         fun transferCoordinator(): ProtonTransferCoordinator
 
         fun pauseStore(): ProtonThumbnailPauseStore
+
+        fun previewAdmission(): ProtonPreviewAdmission
     }
 
     companion object {

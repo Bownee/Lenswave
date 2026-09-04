@@ -53,7 +53,7 @@ class ProtonPhotoGatewayTest {
     private val timeline = ProtonTimelineRepository(clients, cache, snapshotSync, tagListings)
     private val albums = ProtonAlbumRepository(clients, cache, snapshotSync)
     private val transfers = ProtonTransferCoordinator()
-    private val renditions = ProtonRenditionDownloads(clients, cache, transfers)
+    private val renditions = ProtonRenditionDownloads(clients, cache, transfers, ProtonPreviewAdmission())
     private val originals = ProtonOriginalDownloads(clients, cache, transfers)
     private val sessionGuard = ProtonSessionGuard()
 
