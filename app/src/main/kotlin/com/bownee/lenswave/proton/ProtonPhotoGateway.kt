@@ -361,17 +361,18 @@ class ProtonPhotoGateway
         /**
          * A stored thumbnail that no longer decodes is dropped, hidden from every listing, and
          * queued again at the front. The grid asks about one cell at a time while it scrolls, so
-         * the listing lookups are memoized per state snapshot and the queue write is left to the
+         * the listing lookups are memoized per state snapshot (and survive the new snapshot the
+         * marking below publishes, see [ProtonNodeUidIndex]) and the queue write is left to the
          * queue's own debounce rather than persisted per item.
          */
         private suspend fun invalidateThumbnailInActiveSession(
             userId: UserId,
             nodeUid: String,
         ) {
-            val timelinePhoto = timelinePhotoIndex.of(timeline.state.value.photos)[nodeUid]
+            val timelinePhoto = timelinePhotoIndex.find(timeline.state.value.photos, nodeUid)
             val albumPhotosState = albums.albumPhotosState.value
-            val albumPhoto = albumPhotoIndex.of(albumPhotosState.photos)[nodeUid]
-            val isAlbumCover = nodeUid in albumCoverIndex.of(albums.albumsState.value.albums)
+            val albumPhoto = albumPhotoIndex.find(albumPhotosState.photos, nodeUid)
+            val isAlbumCover = albumCoverIndex.contains(albums.albumsState.value.albums, nodeUid)
             val sources =
                 buildSet {
                     if (timelinePhoto != null) add(ProtonSyncKeys.QueueSource.TIMELINE)
