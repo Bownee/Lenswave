@@ -39,6 +39,7 @@ import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import me.proton.core.domain.entity.UserId
@@ -334,23 +335,29 @@ class PhotoViewerActivity : FragmentActivity() {
         setActionsEnabled(true)
         val requestedPhoto = request
         if (requestedPhoto.displayName.isBlank()) resolveDisplayName(requestedPhoto)
+        // A thumbnail already decoded in memory goes up in this very frame, before any coroutine.
+        val thumbnailShown = showCachedProtonThumbnail(requestedPhoto)
         photoLoadJob =
             lifecycleScope.launch {
-                showCachedProtonThumbnail(requestedPhoto)
+                val userId = UserId(requestedPhoto.userId)
+                val nodeUid = requestedPhoto.nodeUid
+                // A cached original goes straight up; the preview is only worth showing while
+                // a download is in flight, otherwise it would flash before the full picture.
+                // Preparing it starts at once so it overlaps the thumbnail read rather than
+                // waiting behind it. Failures are carried as a Result so they surface through the
+                // catch below instead of failing this whole job through structured concurrency.
+                val cachedOriginalPreparation =
+                    if (requestedPhoto.mediaKind == MediaKind.VIDEO) {
+                        null
+                    } else {
+                        async(Dispatchers.IO) { runCatching { originalMedia.prepareCachedOriginal(userId, nodeUid) } }
+                    }
+                if (!thumbnailShown) loadProtonThumbnail(requestedPhoto)
                 // Photos load the original quietly behind the preview; the spinner only appears
                 // when there is nothing at all to show. Videos keep their download progress.
                 if (requestedPhoto.mediaKind == MediaKind.VIDEO || !thumbnailPreview.isVisible) scheduleLoadingPanel()
                 try {
-                    val userId = UserId(requestedPhoto.userId)
-                    val nodeUid = requestedPhoto.nodeUid
-                    // A cached original goes straight up; the preview is only worth showing while
-                    // a download is in flight, otherwise it would flash before the full picture.
-                    val cachedOriginal =
-                        if (requestedPhoto.mediaKind == MediaKind.VIDEO) {
-                            null
-                        } else {
-                            withContext(Dispatchers.IO) { originalMedia.prepareCachedOriginal(userId, nodeUid) }
-                        }
+                    val cachedOriginal = cachedOriginalPreparation?.await()?.getOrThrow()
                     if (request.stableId != requestedPhoto.stableId) return@launch
                     if (cachedOriginal != null) {
                         showMedia(Uri.fromFile(cachedOriginal))
@@ -420,12 +427,24 @@ class PhotoViewerActivity : FragmentActivity() {
         }
     }
 
-    private suspend fun showCachedProtonThumbnail(requestedPhoto: PhotoRequest) {
+    /**
+     * Shows the thumbnail without leaving the main thread when it is already on screen from the
+     * swipe's peek or decoded in the thumbnail cache. Returns false when it must be read from
+     * disk through [loadProtonThumbnail].
+     */
+    private fun showCachedProtonThumbnail(requestedPhoto: PhotoRequest): Boolean {
         if (previewStableId == requestedPhoto.stableId && thumbnailPreview.isVisible) {
             // The peek that slid in during the swipe already shows this photo's thumbnail.
             photoView.alpha = 0f
-            return
+            return true
         }
+        val bitmap =
+            thumbnailSource.peekThumbnail(UserId(requestedPhoto.userId), requestedPhoto.nodeUid) ?: return false
+        installThumbnailPreview(requestedPhoto, bitmap)
+        return true
+    }
+
+    private suspend fun loadProtonThumbnail(requestedPhoto: PhotoRequest) {
         val bitmap =
             thumbnailSource.loadThumbnail(
                 UserId(requestedPhoto.userId),
@@ -439,7 +458,13 @@ class PhotoViewerActivity : FragmentActivity() {
         ) {
             return
         }
+        installThumbnailPreview(requestedPhoto, requireNotNull(bitmap))
+    }
 
+    private fun installThumbnailPreview(
+        requestedPhoto: PhotoRequest,
+        bitmap: Bitmap,
+    ) {
         clearThumbnailPreview()
         // A preview is a picture to look at, so any spinner scheduled for an empty screen goes.
         hideLoadingPanel()
