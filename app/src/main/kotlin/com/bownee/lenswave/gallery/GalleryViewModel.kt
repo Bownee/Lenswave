@@ -13,6 +13,7 @@ import com.bownee.lenswave.proton.ProtonAlbumPhotosState
 import com.bownee.lenswave.proton.ProtonAlbumReference
 import com.bownee.lenswave.proton.ProtonAlbumsState
 import com.bownee.lenswave.proton.ProtonGalleryState
+import com.bownee.lenswave.proton.ProtonSessionChangedException
 import com.bownee.lenswave.proton.ProtonThumbnailScheduler
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -250,6 +251,10 @@ class GalleryViewModel internal constructor(
                 val result = deletionExecutor.trashProton(userId, nodeUids)
                 setSelection(emptySet())
                 mutableMutationEvents.trySend(GalleryMutationEvent.Trashed(result.successfulCount, result.failedCount))
+            } catch (_: ProtonSessionChangedException) {
+                // A CancellationException subtype the session guard throws when the account changes
+                // mid-call: the photos were not trashed, and the selection bar must hear that.
+                mutableMutationEvents.trySend(GalleryMutationEvent.TrashFailed)
             } catch (error: CancellationException) {
                 throw error
             } catch (_: Throwable) {

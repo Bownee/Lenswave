@@ -12,6 +12,7 @@ import com.bownee.lenswave.proton.ProtonAlbumsState
 import com.bownee.lenswave.proton.ProtonGalleryPhoto
 import com.bownee.lenswave.proton.ProtonGalleryState
 import com.bownee.lenswave.proton.ProtonMediaTag
+import com.bownee.lenswave.proton.ProtonSessionChangedException
 import com.bownee.lenswave.proton.ProtonTagState
 import com.bownee.lenswave.proton.ProtonThumbnailScheduler
 import kotlinx.coroutines.CompletableDeferred
@@ -268,6 +269,34 @@ class GalleryViewModelTest {
             runCurrent()
 
             assertEquals(GalleryMutationEvent.TrashFailed, received.last())
+        }
+
+    @Test
+    fun `a trash cancelled by an account change is reported as failed and frees the next trash`() =
+        runTest(dispatcher) {
+            val viewModel = connectedViewModel()
+            val received = mutableListOf<GalleryMutationEvent>()
+            backgroundScope.launch { viewModel.mutationEvents.collect { received += it } }
+            viewModel.setSelection(setOf("p1"))
+            deletionExecutor.failure = ProtonSessionChangedException()
+
+            viewModel.trashPhotos(listOf("p1"))
+            runCurrent()
+            deletionExecutor.held.single().complete(Unit)
+            runCurrent()
+
+            assertEquals(listOf<GalleryMutationEvent>(GalleryMutationEvent.TrashFailed), received)
+            assertEquals(
+                "the photos were not trashed, so the selection stands",
+                setOf("p1"),
+                viewModel.selectedStableIds,
+            )
+
+            deletionExecutor.failure = null
+            viewModel.trashPhotos(listOf("p1"))
+            runCurrent()
+
+            assertEquals("the in-flight guard was released", listOf("trash:u:p1", "trash:u:p1"), events)
         }
 
     @Test
