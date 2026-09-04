@@ -24,8 +24,8 @@ work = "2.10.0"
 sqlcipher = "4.6.1"
 
 # Proton
-proton-core = "36.7.0"
-proton-drive-sdk = "0.24.0-rust"
+proton-core = "36.8.0"
+proton-drive-sdk = "0.25.0-rust"
 
 # Testing
 androidx-test-core = "1.7.0"
