@@ -20,7 +20,8 @@ import kotlin.math.roundToInt
 class GalleryListAdapter(
     private val context: Context,
     private val thumbnailLoader: GalleryThumbnailLoader,
-    private val onPhotoClicked: (GalleryAsset) -> Unit,
+    /** The tapped photo and its index in the page's flat asset list. */
+    private val onPhotoClicked: (GalleryAsset, Int) -> Unit,
     private val onAlbumClicked: (ProtonAlbum) -> Unit,
     private val onLibraryAction: (LibraryAction) -> Unit,
     private val onSelectionChanged: (List<GalleryAsset>) -> Unit,
@@ -37,8 +38,9 @@ class GalleryListAdapter(
     // One listener per role, bound once per cell; the cell carries the item it currently shows.
     private val photoClick =
         View.OnClickListener { view ->
-            val photo = (view as PhotoCell).asset ?: return@OnClickListener
-            if (selected.isEmpty()) onPhotoClicked(photo) else toggleSelection(photo)
+            val cell = view as PhotoCell
+            val photo = cell.asset ?: return@OnClickListener
+            if (selected.isEmpty()) onPhotoClicked(photo, cell.assetIndex) else toggleSelection(photo)
         }
     private val photoLongClick =
         View.OnLongClickListener { view ->
@@ -226,6 +228,7 @@ class GalleryListAdapter(
             val image = cell.image
             val photo = row.items.getOrNull(column)
             cell.asset = photo
+            cell.assetIndex = row.startIndex + column
             if (photo == null) {
                 cell.visibility = View.INVISIBLE
                 image.tag = null

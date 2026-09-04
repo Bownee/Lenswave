@@ -693,7 +693,7 @@ internal class GalleryScreen(
     }
 
     internal class Actions(
-        val onPhotoClicked: (GalleryAsset) -> Unit,
+        val onPhotoClicked: (photo: GalleryAsset, index: Int) -> Unit,
         val onAlbumClicked: (ProtonAlbum) -> Unit,
         val onLibraryAction: (LibraryAction) -> Unit,
         val onSelectionChanged: (List<GalleryAsset>) -> Unit,

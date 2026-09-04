@@ -25,6 +25,9 @@ internal class PhotoCell(
     /** The photo currently bound, read back by the shared click listeners and selection updates. */
     var asset: GalleryAsset? = null
 
+    /** Index of [asset] in the page's flat asset list; a tap hands it on so nobody searches the list. */
+    var assetIndex = -1
+
     /** Set at bind when the cell already shows this photo, so a cache miss does not blank it. */
     var keepsShownImage = false
     lateinit var thumbnailTarget: GalleryThumbnailTarget

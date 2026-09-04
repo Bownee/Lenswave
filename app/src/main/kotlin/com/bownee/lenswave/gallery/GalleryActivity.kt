@@ -489,19 +489,24 @@ class GalleryActivity :
         settingsPresenter.showMenu(screen.settingsButton)
     }
 
-    /** A second tap before the viewer is up must not open a second viewer; the guard lifts on resume. */
-    private fun openPhoto(photo: GalleryAsset) {
+    /**
+     * A second tap before the viewer is up must not open a second viewer; the guard lifts on resume.
+     * [index] is the tapped photo's position in [GalleryUiState.visibleAssets], known to the cell that
+     * was tapped; a page that changed under the tap is caught by checking the asset at that index.
+     */
+    private fun openPhoto(
+        photo: GalleryAsset,
+        index: Int,
+    ) {
         val userId = currentUiState.currentUserId ?: return
         if (viewerLaunched) return
         viewerLaunched = true
+        val assets = currentUiState.visibleAssets
+        // Verified here so createIntent can take the index instead of searching the list once its
+        // signature (viewer-owned) accepts one; until then it still locates the photo itself.
+        val tapped = assets.getOrNull(index)?.takeIf { it.stableId == photo.stableId } ?: photo
         viewerLauncher.launch(
-            PhotoViewerActivity.createIntent(
-                this,
-                photo,
-                userId,
-                currentUiState.visibleAssets,
-                currentUiState.destination,
-            ),
+            PhotoViewerActivity.createIntent(this, tapped, userId, assets, currentUiState.destination),
         )
     }
 
