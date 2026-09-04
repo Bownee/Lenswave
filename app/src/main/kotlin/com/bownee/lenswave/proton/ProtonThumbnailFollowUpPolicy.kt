@@ -62,10 +62,12 @@ internal object ProtonThumbnailFollowUpPolicy {
                 chargingRun(previewsDeferred)
             }
 
-            // Another run owns the queues, or the session is not there: the next app open, sync
-            // tick or the other run enqueues again. A follow-up would only find the same thing.
+            // Another run owns the queues, the session is not there, or the user said stop: the
+            // next app open, sync tick, manual refresh or the other run enqueues again. A
+            // follow-up would only find the same thing.
             ProtonThumbnailWorkOutcome.SESSION_UNAVAILABLE,
             ProtonThumbnailWorkOutcome.ALREADY_RUNNING,
+            ProtonThumbnailWorkOutcome.PAUSED,
             -> {
                 null
             }

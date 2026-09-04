@@ -74,6 +74,7 @@ class ProtonThumbnailFollowUpPolicyTest {
             followUp(ProtonThumbnailWorkOutcome.SESSION_UNAVAILABLE, workRemaining = true, previewsDeferred = true),
         )
         assertNull(followUp(ProtonThumbnailWorkOutcome.ALREADY_RUNNING, workRemaining = true, previewsDeferred = true))
+        assertNull(followUp(ProtonThumbnailWorkOutcome.PAUSED, workRemaining = true, previewsDeferred = true))
     }
 
     @Test(expected = IllegalArgumentException::class)

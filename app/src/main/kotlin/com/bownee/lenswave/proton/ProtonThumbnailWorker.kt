@@ -43,6 +43,9 @@ class ProtonThumbnailWorker(
                 applicationContext,
                 RepositoryEntryPoint::class.java,
             )
+        // The user paused downloads from the notification; a request that slipped past the
+        // scheduler's check (one already queued when the pause was set) ends here.
+        if (entryPoint.pauseStore().isPaused(UserId(userId))) return finish(ProtonThumbnailWorkOutcome.PAUSED)
         val runGuard = entryPoint.runGuard()
         // Unique work de-duplicates per name and per WorkManager instance; this is the
         // process-wide guarantee that two batch loops never share the queues, and so that the
@@ -75,7 +78,7 @@ class ProtonThumbnailWorker(
             if (!monitor.awaitValidatedUnmeteredNetwork(NETWORK_READY_TIMEOUT_MILLIS)) {
                 return run.end(ProtonThumbnailWorkOutcome.WAITING_FOR_NETWORK, initialProgress, lastIdle = null)
             }
-            val foregroundInfoFactory = ProtonThumbnailForegroundInfoFactory(applicationContext)
+            val foregroundInfoFactory = ProtonThumbnailForegroundInfoFactory(applicationContext, requestedUserId)
             publishForeground(foregroundInfoFactory, initialProgress.notificationProgress(), force = true)
             var lastIdle: ProtonThumbnailQueueStep.Idle? = null
             val outcome =
@@ -230,7 +233,7 @@ class ProtonThumbnailWorker(
         val now = SystemClock.elapsedRealtime()
         if (!ProtonThumbnailWorkPolicy.shouldPublishProgress(lastForegroundPublishMillis, now, force)) return
         try {
-            setForeground(factory.create(workerId = id, progress = progress))
+            setForeground(factory.create(progress))
             lastForegroundPublishMillis = now
         } catch (error: IllegalStateException) {
             if (!ProtonThumbnailWorkPolicy.isForegroundStartRefusal(error)) throw error
@@ -265,6 +268,8 @@ class ProtonThumbnailWorker(
         fun runGuard(): ProtonThumbnailRunGuard
 
         fun transferCoordinator(): ProtonTransferCoordinator
+
+        fun pauseStore(): ProtonThumbnailPauseStore
     }
 
     companion object {
@@ -313,6 +318,9 @@ internal enum class ProtonThumbnailWorkOutcome(
 
     /** Another run of this process holds the queues; it schedules whatever follow-up is due. */
     ALREADY_RUNNING("already-running"),
+
+    /** The user paused background downloads from the notification; a manual refresh lifts that. */
+    PAUSED("paused"),
 }
 
 internal object ProtonThumbnailWorkPolicy {

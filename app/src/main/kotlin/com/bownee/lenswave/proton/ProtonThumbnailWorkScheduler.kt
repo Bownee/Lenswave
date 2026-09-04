@@ -32,6 +32,12 @@ interface ProtonThumbnailScheduler {
     suspend fun restart(userId: UserId)
 
     suspend fun cancelAndAwait(userId: UserId)
+
+    /**
+     * Lifts the pause the user set from the worker's notification, so that the enqueue a manual
+     * refresh makes right after goes through. Schedulers without a pause (test doubles) ignore it.
+     */
+    fun clearPaused(userId: UserId) {}
 }
 
 /** The requests a running worker makes about itself; see [ProtonThumbnailFollowUpPolicy]. */
@@ -61,6 +67,7 @@ internal class ProtonThumbnailWorkScheduler
     @Inject
     constructor(
         private val workManager: WorkManager,
+        private val pauseStore: ProtonThumbnailPauseStore,
     ) : ProtonThumbnailScheduler,
         ProtonThumbnailFollowUpScheduler {
         private val legacyWorkCancelled = AtomicBoolean(false)
@@ -68,6 +75,7 @@ internal class ProtonThumbnailWorkScheduler
         private val observed = ConcurrentHashMap<String, Observation>()
 
         override fun enqueue(userId: UserId) {
+            if (pauseStore.isPaused(userId)) return
             cancelLegacyWork(userId)
             val workName = ProtonWorkNames.thumbnails(userId)
             val observation = observe(workName)
@@ -96,6 +104,7 @@ internal class ProtonThumbnailWorkScheduler
             userId: UserId,
             followUp: ProtonThumbnailFollowUp,
         ) {
+            if (pauseStore.isPaused(userId)) return
             cancelLegacyWork(userId)
             workManager.enqueueUniqueWork(
                 ProtonWorkNames.thumbnails(userId),
@@ -114,6 +123,7 @@ internal class ProtonThumbnailWorkScheduler
 
         override suspend fun restart(userId: UserId) {
             withContext(Dispatchers.IO) {
+                if (pauseStore.isPaused(userId)) return@withContext
                 val workName = ProtonWorkNames.thumbnails(userId)
                 observe(workName).lastEnqueuedAtMillis = SystemClock.elapsedRealtime()
                 workManager
@@ -131,6 +141,10 @@ internal class ProtonThumbnailWorkScheduler
                 workManager.cancelUniqueWork(ProtonWorkNames.legacyThumbnailsWhileCharging(userId)).result.get()
                 workManager.cancelUniqueWork(ProtonWorkNames.thumbnails(userId)).result.get()
             }
+        }
+
+        override fun clearPaused(userId: UserId) {
+            pauseStore.setPaused(userId, paused = false)
         }
 
         /**
