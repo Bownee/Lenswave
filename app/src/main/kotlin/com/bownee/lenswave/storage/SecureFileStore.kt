@@ -6,8 +6,6 @@ import android.security.keystore.KeyProperties
 import com.bownee.lenswave.LenswaveDiagnostics
 import com.bownee.lenswave.LenswaveOperation
 import dagger.hilt.android.qualifiers.ApplicationContext
-import java.io.BufferedInputStream
-import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -18,7 +16,6 @@ import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
 import javax.crypto.AEADBadTagException
 import javax.crypto.Cipher
-import javax.crypto.CipherInputStream
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
@@ -148,7 +145,7 @@ class SecureFileStore internal constructor(
      * Decrypts [encrypted] into [target] through a temporary file. [shouldContinue] is asked before
      * every segment; once it returns false the decrypt stops with a [CopyInterruptedException],
      * nothing is committed and the partial plaintext is removed. A file in a whole-file legacy
-     * format is asked once, before it starts: its provider decrypts it in one piece.
+     * format is asked once, before it starts: it is decrypted in one piece, see [decryptLegacyFile].
      */
     fun decryptFile(
         scope: String,
@@ -166,18 +163,44 @@ class SecureFileStore internal constructor(
                         SegmentedEnvelope.decrypt(dataKey(scope), rawInput, output, shouldContinue)
                     } else {
                         if (!shouldContinue()) throw CopyInterruptedException()
-                        val cipher = readLegacyHeader(scope, version, rawInput)
-                        CipherInputStream(BufferedInputStream(rawInput), cipher).use { decryptedInput ->
-                            BufferedOutputStream(output).use { buffered -> decryptedInput.copyTo(buffered) }
-                        }
+                        decryptLegacyFile(scope, version, encrypted, rawInput, output)
                     }
                 }
             }
             AtomicFileStore.commit(temporary, target, "Could not materialize encrypted photo")
+        } catch (error: LegacyFileTooLargeException) {
+            // Deleted after the stream is closed: an open file cannot be removed on every platform.
+            encrypted.delete()
+            throw error
         } finally {
             temporary.delete()
         }
     }
+
+    /**
+     * A whole-file legacy record is one GCM record, so the provider must hold the entire
+     * ciphertext and plaintext in memory before it can verify the tag, and a cipher stream
+     * would let the platform implementation treat a failed tag at end of stream as an ordinary
+     * end of file and commit a truncated plaintext. The record is therefore read into a buffer
+     * and finished explicitly, so a bad tag throws, and only up to [LEGACY_FILE_LIMIT_BYTES]: a
+     * larger legacy original is discarded through [LegacyFileTooLargeException], an
+     * [IllegalArgumentException] its callers already treat as a corrupt file and fetch again.
+     */
+    private fun decryptLegacyFile(
+        scope: String,
+        version: Byte,
+        encrypted: File,
+        rawInput: InputStream,
+        output: FileOutputStream,
+    ) {
+        if (encrypted.length() > LEGACY_FILE_LIMIT_BYTES) throw LegacyFileTooLargeException()
+        val cipher = readLegacyHeader(scope, version, rawInput)
+        val ciphertext = rawInput.readBytes()
+        output.write(cipher.doFinal(ciphertext))
+    }
+
+    private class LegacyFileTooLargeException :
+        IllegalArgumentException("Legacy whole-file original is too large to decrypt in memory")
 
     /** The name under which [scope]'s wrapped key is stored; a hash, so safe to keep beside the data. */
     fun keyAlias(scope: String): String = alias(scope)
@@ -421,6 +444,9 @@ class SecureFileStore internal constructor(
         const val TRANSFORMATION = "AES/GCM/NoPadding"
         const val TAG_BITS = 128
         const val DATA_KEY_BYTES = 32
+
+        /** Whole-file legacy originals larger than this are not worth two copies of themselves in the heap. */
+        const val LEGACY_FILE_LIMIT_BYTES = 8L * 1024L * 1024L
         val MAGIC = byteArrayOf(0x4c, 0x57, 0x45, 0x46)
         const val LEGACY_VERSION: Byte = 1
         const val VERSION: Byte = 2

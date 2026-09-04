@@ -116,6 +116,68 @@ class SecureFileStoreTest {
         )
     }
 
+    @Test
+    fun `a small whole-file legacy record decrypts in one piece`() {
+        val store = store()
+        val legacy = File(temporaryFolder.root, "legacy")
+        val decrypted = File(temporaryFolder.root, "decrypted")
+        val bytes = ByteArray(50_000) { (it * 3).toByte() }
+        // A small payload is one whole-file GCM record: exactly the layout of a version 2 original.
+        store.write(scope, legacy, bytes, "write failed")
+
+        store.decryptFile(scope, legacy, decrypted)
+
+        assertArrayEquals(bytes, decrypted.readBytes())
+    }
+
+    @Test
+    fun `a flipped byte in a legacy record throws instead of committing a truncated plaintext`() {
+        val store = store()
+        val legacy = File(temporaryFolder.root, "legacy")
+        val decrypted = File(temporaryFolder.root, "decrypted")
+        store.write(scope, legacy, ByteArray(50_000) { (it * 3).toByte() }, "write failed")
+        val damaged = legacy.readBytes()
+        damaged[damaged.size / 2] = (damaged[damaged.size / 2].toInt() xor 0x10).toByte()
+        legacy.writeBytes(damaged)
+
+        assertThrows(AEADBadTagException::class.java) { store.decryptFile(scope, legacy, decrypted) }
+
+        assertFalse(decrypted.exists())
+        assertTrue(legacy.isFile)
+        assertTrue(
+            temporaryFolder.root
+                .listFiles()
+                .orEmpty()
+                .none { it.name.endsWith(".part") },
+        )
+    }
+
+    @Test
+    fun `an oversized legacy record is discarded as corrupt rather than decrypted in memory`() {
+        val store = store()
+        val legacy = File(temporaryFolder.root, "legacy")
+        val decrypted = File(temporaryFolder.root, "decrypted")
+        // The version 2 header followed by more than the limit: the size check runs before any
+        // ciphertext is read, so the body need not verify.
+        val header = byteArrayOf(0x4c, 0x57, 0x45, 0x46, 2, 12) + ByteArray(12)
+        legacy.outputStream().use { output ->
+            output.write(header)
+            val chunk = ByteArray(1 shl 20)
+            repeat(9) { output.write(chunk) }
+        }
+
+        assertThrows(IllegalArgumentException::class.java) { store.decryptFile(scope, legacy, decrypted) }
+
+        assertFalse(legacy.exists())
+        assertFalse(decrypted.exists())
+        assertTrue(
+            temporaryFolder.root
+                .listFiles()
+                .orEmpty()
+                .none { it.name.endsWith(".part") },
+        )
+    }
+
     class FakeWrappingKeys : WrappingKeys {
         private val keys = ConcurrentHashMap<String, SecretKey>()
         var failWith: Exception? = null
