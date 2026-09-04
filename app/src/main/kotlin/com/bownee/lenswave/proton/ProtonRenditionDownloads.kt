@@ -32,7 +32,8 @@ internal class ProtonRenditionDownloads
         fun loadThumbnail(
             userId: UserId,
             nodeUid: String,
-        ): Bitmap? = cache.loadThumbnail(userId.id, nodeUid)
+            isActive: () -> Boolean = { true },
+        ): Bitmap? = cache.loadThumbnail(userId.id, nodeUid, isActive)
 
         fun peekThumbnail(
             userId: UserId,

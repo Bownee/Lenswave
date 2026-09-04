@@ -11,8 +11,10 @@ import com.bownee.lenswave.gallery.ProtonThumbnailImageSource
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
@@ -214,8 +216,11 @@ class ProtonPhotoGateway
             nodeUid: String,
         ): Bitmap? =
             withContext(Dispatchers.IO) {
+                val job = currentCoroutineContext()[Job]
                 sessionGuard.withActiveSession(userId) {
-                    renditions.loadThumbnail(userId, nodeUid) ?: run {
+                    // A load the grid cancelled mid-flight throws instead of returning null, so
+                    // it is never mistaken for a corrupt thumbnail below.
+                    renditions.loadThumbnail(userId, nodeUid) { job?.isActive != false } ?: run {
                         invalidateThumbnailInActiveSession(userId, nodeUid)
                         null
                     }

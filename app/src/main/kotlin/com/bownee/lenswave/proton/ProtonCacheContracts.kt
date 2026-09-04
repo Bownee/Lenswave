@@ -99,9 +99,11 @@ interface ProtonMediaCache {
         nodeUid: String,
     ): Boolean
 
+    /** [isActive] false aborts the load with a CancellationException before the costly decode. */
     fun loadThumbnail(
         userId: String,
         nodeUid: String,
+        isActive: () -> Boolean = { true },
     ): Bitmap?
 
     /** In-memory thumbnail only; never reads disk, so it is safe on the main thread. */

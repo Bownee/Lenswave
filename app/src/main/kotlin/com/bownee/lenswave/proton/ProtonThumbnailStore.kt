@@ -9,6 +9,7 @@ import com.bownee.lenswave.LenswaveClock
 import com.bownee.lenswave.storage.AtomicFileStore
 import com.bownee.lenswave.storage.SecureFileStore
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
 import java.io.ByteArrayOutputStream
 import java.io.File
 import javax.inject.Inject
@@ -61,14 +62,21 @@ internal class ProtonThumbnailStore
             nodeUid: String,
         ): Bitmap? = bitmaps.get(ThumbnailKey(userId, nodeUid))?.takeUnless(Bitmap::isRecycled)
 
+        /**
+         * The decoded thumbnail, from memory or disk. [isActive] is consulted before the decrypt
+         * and again before the decode; when it turns false the load throws [CancellationException]
+         * instead of spending the decode on a cell that has scrolled away. Callers outside a
+         * coroutine leave it at its default.
+         */
         fun load(
             userId: String,
             nodeUid: String,
+            isActive: () -> Boolean = { true },
         ): Bitmap? {
             val key = ThumbnailKey(userId, nodeUid)
             peek(userId, nodeUid)?.let { return it }
             return synchronized(lock(key)) {
-                bitmaps.get(key)?.takeUnless(Bitmap::isRecycled) ?: loadFromDisk(key)
+                bitmaps.get(key)?.takeUnless(Bitmap::isRecycled) ?: loadFromDisk(key, isActive)
             }
         }
 
@@ -137,10 +145,7 @@ internal class ProtonThumbnailStore
         }
 
         fun maintain(userId: String) {
-            val directory = directory(userId)
-            directory.listFiles()?.filter(::isStalePartial)?.forEach(File::delete)
-            counts.remove(userId)
-            pruneMemoryCache(userId)
+            sweep(userId) { file -> isStalePartial(file) }
         }
 
         fun removeUnreferenced(
@@ -148,13 +153,33 @@ internal class ProtonThumbnailStore
             retainedNodeUids: Collection<String>,
         ) {
             val retainedNames = retainedNodeUids.mapTo(mutableSetOf(), AtomicFileStore::safeName)
-            directory(userId).listFiles()?.forEach { file ->
-                if (isStalePartial(file) || (file.extension != "part" && file.nameWithoutExtension !in retainedNames)) {
+            sweep(userId) { file ->
+                isStalePartial(file) || (file.extension != "part" && file.nameWithoutExtension !in retainedNames)
+            }
+        }
+
+        /**
+         * One directory listing serves the deletion, the refreshed count and the memory prune:
+         * listing a large thumbnail directory is the expensive part of housekeeping, and the
+         * previous code did it up to three times and then stat'ed every cached bitmap on top.
+         */
+        private fun sweep(
+            userId: String,
+            prunable: (File) -> Boolean,
+        ) {
+            val files = directory(userId).listFiles().orEmpty()
+            var remaining = 0
+            val remainingNames = HashSet<String>(files.size * 4 / 3 + 1)
+            files.forEach { file ->
+                if (prunable(file)) {
                     file.delete()
+                } else if (file.isFile && file.extension == "thumb" && file.length() > 0L) {
+                    remaining++
+                    remainingNames += file.nameWithoutExtension
                 }
             }
-            counts.remove(userId)
-            pruneMemoryCache(userId)
+            counts[userId] = remaining
+            pruneMemoryCache(userId, remainingNames)
         }
 
         fun clearMemory(userId: String) {
@@ -184,12 +209,16 @@ internal class ProtonThumbnailStore
             return runCatching { secureFiles.read(scope(userId), file) }.getOrNull()
         }
 
-        private fun loadFromDisk(key: ThumbnailKey): Bitmap? {
+        private fun loadFromDisk(
+            key: ThumbnailKey,
+            isActive: () -> Boolean,
+        ): Bitmap? {
             val file = file(key.userId, key.nodeUid)
             if (!file.isFile || file.length() <= 0L) {
                 file.delete()
                 return null
             }
+            if (!isActive()) throw CancellationException("Thumbnail load cancelled before decrypting")
             val bytes =
                 try {
                     secureFiles.read(scope(key.userId), file)
@@ -197,6 +226,8 @@ internal class ProtonThumbnailStore
                     file.delete()
                     return null
                 }
+            // A fling cancels loads faster than they decode; the decode is the part worth skipping.
+            if (!isActive()) throw CancellationException("Thumbnail load cancelled before decoding")
             val bitmap = ProtonThumbnailCodec.decode(bytes)
             if (bitmap == null) {
                 file.delete()
@@ -207,11 +238,15 @@ internal class ProtonThumbnailStore
             return bitmap
         }
 
-        private fun pruneMemoryCache(userId: String) {
+        /** Drops cached bitmaps whose file is gone, judged against one listing rather than a stat per key. */
+        private fun pruneMemoryCache(
+            userId: String,
+            storedNames: Set<String>,
+        ) {
             bitmaps
                 .snapshot()
                 .keys
-                .filter { key -> key.userId == userId && !exists(key.userId, key.nodeUid) }
+                .filter { key -> key.userId == userId && AtomicFileStore.safeName(key.nodeUid) !in storedNames }
                 .forEach(bitmaps::remove)
         }
 

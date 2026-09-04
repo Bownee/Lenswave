@@ -39,7 +39,8 @@ internal class ProtonPhotoCache
         override fun loadThumbnail(
             userId: String,
             nodeUid: String,
-        ) = thumbnails.load(userId, nodeUid)
+            isActive: () -> Boolean,
+        ) = thumbnails.load(userId, nodeUid, isActive)
 
         override fun peekThumbnail(
             userId: String,
