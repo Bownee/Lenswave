@@ -24,6 +24,7 @@ import com.bownee.lenswave.R
 import com.bownee.lenswave.applyBottomOverlayInsets
 import com.bownee.lenswave.configureEdgeToEdgeWindow
 import com.bownee.lenswave.dp
+import com.bownee.lenswave.gallery.GalleryAlbumTile
 import com.bownee.lenswave.gallery.GalleryAsset
 import com.bownee.lenswave.gallery.GalleryAuthCoordinator
 import com.bownee.lenswave.gallery.GalleryContent
@@ -392,7 +393,7 @@ class GalleryActivity :
     ): GalleryRowSet =
         when (content) {
             is GalleryContent.Library -> {
-                GalleryRowSet.of(GalleryGrouping.createLibraryRows(content.sections))
+                GalleryRowSet.of(GalleryGrouping.createLibraryRows(content.sections, describeAlbum = ::describeAlbum))
             }
 
             is GalleryContent.Photos -> {
@@ -410,6 +411,19 @@ class GalleryActivity :
                 }
             }
         }
+
+    /** The texts an album cell shows, resolved once per row build instead of on every bind. */
+    private fun describeAlbum(album: ProtonAlbum): GalleryAlbumTile {
+        val name = album.name.ifBlank { getString(R.string.untitled_album) }
+        val photoCount = resources.getQuantityString(R.plurals.photo_count, album.photoCount.toInt(), album.photoCount)
+        val details = if (album.isShared) getString(R.string.shared_album_details, photoCount) else photoCount
+        return GalleryAlbumTile(
+            album = album,
+            name = name,
+            details = details,
+            contentDescription = getString(R.string.album_accessibility, name, details),
+        )
+    }
 
     /** Day labels are cached across renders and dropped when the grouping generation moves on. */
     private fun dayLabelsFor(grouping: Int): GalleryGrouping.DayLabels {
@@ -584,7 +598,15 @@ class GalleryActivity :
 
     /** The handle travels between the pinned header and the navigation bar with the same gap at both ends. */
     private fun updateFastScrollTrack() {
-        val gap = resources.getDimensionPixelSize(R.dimen.gallery_fast_scroll_edge_margin)
-        list.setFastScrollEdgeInsets(top = screen.headerHeight + gap, bottom = safeBottom + gap)
+        list.setFastScrollEdgeInsets(
+            top = screen.headerHeight + fastScrollEdgeGap,
+            bottom =
+                safeBottom + fastScrollEdgeGap,
+        )
+    }
+
+    /** Resolved once: the header relayouts that call [updateFastScrollTrack] must not each hit the resources. */
+    private val fastScrollEdgeGap: Int by lazy(LazyThreadSafetyMode.NONE) {
+        resources.getDimensionPixelSize(R.dimen.gallery_fast_scroll_edge_margin)
     }
 }

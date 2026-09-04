@@ -253,8 +253,18 @@ class GalleryGroupingTest {
             )
 
         assertEquals(GalleryRow.SectionHeading("albums", "Albums"), rows[0])
-        assertEquals(listOf("album-1", "album-2"), (rows[1] as GalleryRow.Albums).items.map { it.nodeUid })
-        assertEquals(listOf("album-3"), (rows[2] as GalleryRow.Albums).items.map { it.nodeUid })
+        assertEquals(listOf("album-1", "album-2"), (rows[1] as GalleryRow.Albums).items.map { it.album.nodeUid })
+        assertEquals(listOf("album-3"), (rows[2] as GalleryRow.Albums).items.map { it.album.nodeUid })
+        assertEquals(listOf("album-1", "album-2"), (rows[1] as GalleryRow.Albums).items.map { it.name })
+
+        val described =
+            GalleryGrouping.createLibraryRows(listOf(LibrarySection("albums", "", albums.take(1)))) { album ->
+                GalleryAlbumTile(album, name = "Name", details = "Details", contentDescription = "Name, Details")
+            }
+        assertEquals(
+            GalleryAlbumTile(album("album-1"), "Name", "Details", "Name, Details"),
+            (described.single() as GalleryRow.Albums).items.single(),
+        )
         assertEquals(GalleryRow.SectionHeading("device", "Device"), rows[3])
         assertEquals(listOf("entry-1", "entry-2"), (rows[4] as GalleryRow.Entries).items.map { it.key })
         assertEquals(listOf("entry-3"), (rows[5] as GalleryRow.Entries).items.map { it.key })

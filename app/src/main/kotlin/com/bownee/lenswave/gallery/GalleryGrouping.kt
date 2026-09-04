@@ -27,13 +27,24 @@ sealed interface GalleryRow {
     ) : GalleryRow
 
     data class Albums(
-        val items: List<ProtonAlbum>,
+        val items: List<GalleryAlbumTile>,
     ) : GalleryRow
 
     data class Entries(
         val items: List<LibraryItem.Entry>,
     ) : GalleryRow
 }
+
+/**
+ * An album with the texts its cell shows, resolved once at row build rather than on every bind:
+ * three resource lookups and two formats per cell per scroll frame added up on the album grid.
+ */
+data class GalleryAlbumTile(
+    val album: ProtonAlbum,
+    val name: String,
+    val details: String,
+    val contentDescription: String,
+)
 
 /** Finished list rows plus the per-row sticky date label, built off the main thread for the adapter. */
 class GalleryRowSet(
@@ -178,10 +189,12 @@ object GalleryGrouping {
         }
     }
 
+    /** [describeAlbum] resolves each album's cell texts once; the default carries the bare name for tests. */
     fun createLibraryRows(
         sections: List<LibrarySection>,
         albumColumns: Int = 2,
         entryColumns: Int = 2,
+        describeAlbum: (ProtonAlbum) -> GalleryAlbumTile = ::plainAlbumTile,
     ): List<GalleryRow> {
         require(albumColumns > 0 && entryColumns > 0) { "Columns must be positive" }
         return buildList {
@@ -189,7 +202,7 @@ object GalleryGrouping {
                 if (section.title.isNotEmpty()) add(GalleryRow.SectionHeading(section.key, section.title))
                 section.items
                     .filterIsInstance<LibraryItem.Album>()
-                    .map(LibraryItem.Album::album)
+                    .map { describeAlbum(it.album) }
                     .chunked(albumColumns)
                     .forEach { add(GalleryRow.Albums(it)) }
                 section.items
@@ -235,6 +248,9 @@ object GalleryGrouping {
             windowEndMillis = rules.nextTransition(instant)?.instant?.toEpochMilli() ?: Long.MAX_VALUE
         }
     }
+
+    private fun plainAlbumTile(album: ProtonAlbum) =
+        GalleryAlbumTile(album, name = album.name, details = "", contentDescription = album.name)
 
     const val UNKNOWN_DAY = Long.MIN_VALUE
     private const val ROW_CAPACITY_HEADROOM = 16

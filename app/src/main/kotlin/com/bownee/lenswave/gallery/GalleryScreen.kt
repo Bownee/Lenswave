@@ -317,9 +317,12 @@ internal class GalleryScreen(
             touchY,
             stickyHeader.height,
             filterRowBounds,
-            gapBelowFilterRow = activity.dp(PULL_GAP_BELOW_CHIPS_DP),
+            gapBelowFilterRow = pullGapBelowChips,
         )
     }
+
+    /** Resolved once rather than on every touch-down. */
+    private val pullGapBelowChips = activity.dp(PULL_GAP_BELOW_CHIPS_DP)
 
     private fun layoutBelowHeader() {
         val headerHeight = stickyHeader.height
@@ -622,9 +625,16 @@ internal class GalleryScreen(
             setSelectedTab(false)
         }
 
+        // Both colours are built once; a render only re-applies them when the tab's state changes.
+        private val selectedColor = ColorStateList.valueOf(UiStyle.text)
+        private val plainColor = ColorStateList.valueOf(UiStyle.muted)
+        private var isSelectedTab: Boolean? = null
+
         fun setSelectedTab(selected: Boolean) {
+            if (isSelectedTab == selected) return
+            isSelectedTab = selected
             UiStyle.setSelectedState(this, selected)
-            labelView.setTextColor(if (selected) UiStyle.text else UiStyle.muted)
+            labelView.setTextColor(if (selected) selectedColor else plainColor)
         }
     }
 

@@ -16,15 +16,24 @@ internal class GalleryRefreshLayout(
     var pullGate: (touchY: Float) -> Boolean = { true }
     private var gestureIgnored = false
 
+    // The same ACTION_DOWN reaches onInterceptTouchEvent and then onTouchEvent; the gate is asked once per gesture.
+    private var gatedDownTime = Long.MIN_VALUE
+
     override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
-        if (ev.actionMasked == MotionEvent.ACTION_DOWN) gestureIgnored = !pullGate(ev.y)
+        gateGesture(ev)
         return !gestureIgnored && super.onInterceptTouchEvent(ev)
     }
 
     override fun onTouchEvent(ev: MotionEvent): Boolean {
-        if (ev.actionMasked == MotionEvent.ACTION_DOWN) gestureIgnored = !pullGate(ev.y)
+        gateGesture(ev)
         if (ev.actionMasked == MotionEvent.ACTION_UP && gestureIgnored) performClick()
         return !gestureIgnored && super.onTouchEvent(ev)
+    }
+
+    private fun gateGesture(ev: MotionEvent) {
+        if (ev.actionMasked != MotionEvent.ACTION_DOWN || ev.downTime == gatedDownTime) return
+        gatedDownTime = ev.downTime
+        gestureIgnored = !pullGate(ev.y)
     }
 
     /**
