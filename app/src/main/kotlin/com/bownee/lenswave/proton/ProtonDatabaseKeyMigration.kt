@@ -24,6 +24,10 @@ import java.io.File
  * probe on every later launch and leave Room failing permanently.
  */
 internal object ProtonDatabaseKeyMigration {
+    /**
+     * [passphrase] is only ever read here; every SQLCipher call below gets its own copy, so a
+     * library that clears the key array it was handed cannot touch the caller's.
+     */
     fun rekeyLegacyDatabase(
         databaseFile: File,
         passphrase: ByteArray,
@@ -57,11 +61,11 @@ internal object ProtonDatabaseKeyMigration {
             SQLiteDatabase
                 .openDatabase(
                     databaseFile.path,
-                    legacyPassphrase,
+                    legacyPassphrase.copyOf(),
                     null,
                     SQLiteDatabase.OPEN_READWRITE,
                     null,
-                ).use { database -> database.changePassword(passphrase) }
+                ).use { database -> database.changePassword(passphrase.copyOf()) }
         } catch (error: Throwable) {
             LenswaveDiagnostics.reportFailure(LenswaveOperation.SESSION_DATABASE_REKEY, error)
             return discard(databaseFile)
@@ -78,7 +82,7 @@ internal object ProtonDatabaseKeyMigration {
             SQLiteDatabase
                 .openDatabase(
                     databaseFile.path,
-                    passphrase,
+                    passphrase.copyOf(),
                     null,
                     SQLiteDatabase.OPEN_READONLY,
                     null,
