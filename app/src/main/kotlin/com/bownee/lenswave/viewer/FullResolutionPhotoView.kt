@@ -24,6 +24,7 @@ import android.view.ScaleGestureDetector
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.animation.PathInterpolator
+import androidx.core.graphics.withTranslation
 import androidx.core.view.ViewCompat
 import androidx.exifinterface.media.ExifInterface
 import com.bownee.lenswave.ExifOrientation
@@ -391,11 +392,10 @@ class FullResolutionPhotoView
             val halfWidth = (if (swapped) destination.height() else destination.width()) / 2f
             val halfHeight = (if (swapped) destination.width() else destination.height()) / 2f
             rawDestination.set(-halfWidth, -halfHeight, halfWidth, halfHeight)
-            canvas.save()
-            canvas.translate(destination.centerX(), destination.centerY())
-            canvas.concat(transform)
-            canvas.drawBitmap(bitmap, null, rawDestination, paint)
-            canvas.restore()
+            canvas.withTranslation(destination.centerX(), destination.centerY()) {
+                concat(transform)
+                drawBitmap(bitmap, null, rawDestination, paint)
+            }
         }
 
         override fun onTouchEvent(event: MotionEvent): Boolean {
