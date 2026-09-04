@@ -378,6 +378,26 @@ class ProtonThumbnailQueueTest {
         }
 
     @Test
+    fun aRenditionProtonDoesNotHaveIsDroppedAtOnce() =
+        runTest {
+            val store = FakeStore()
+            val queue = queue(store, FakeClock())
+            queue.replaceSource(USER_ID, "timeline", candidates("missing", "flaky", "fine"))
+            queue.claimReady(USER_ID, limit = 3)
+
+            queue.settle(
+                USER_ID,
+                setOf("fine"),
+                mapOf("missing" to ThumbnailFailureKind.NOT_FOUND, "flaky" to ThumbnailFailureKind.UNANSWERED),
+            )
+            queue.flush(USER_ID)
+
+            assertEquals(listOf("flaky"), store.entries.getValue(USER_ID).map { it.nodeUid })
+            assertEquals(1, entry(store, "flaky").retryCount)
+            assertEquals(emptyList<ProtonThumbnailQueueEntry>(), queue.claimReady(USER_ID, limit = 3))
+        }
+
+    @Test
     fun anEntryIsDroppedAfterTheLastAllowedRetry() =
         runTest {
             val store = FakeStore()

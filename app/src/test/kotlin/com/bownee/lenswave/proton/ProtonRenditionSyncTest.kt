@@ -34,6 +34,39 @@ class ProtonRenditionSyncTest {
         }
 
     @Test
+    fun `a preview failure reported in progress and in the result is one backoff step`() =
+        runBlocking {
+            previews.replaceSource(USER.id, ProtonSyncKeys.QueueSource.TIMELINE_PREVIEWS, candidates("a", "b"))
+            val failure = mapOf("b" to ThumbnailFailureKind.OTHER)
+            source.previewProgress = listOf(ThumbnailBatchResult(setOf("a"), failure))
+            source.previewResult = ThumbnailBatchResult(setOf("a"), failure)
+
+            sync.downloadNextBatch(USER, allowPreviews = true) {}
+            previews.flush(USER.id)
+
+            val entry = store.readQueue(USER.id, ProtonQueueName.PREVIEWS).single()
+            assertEquals("b", entry.nodeUid)
+            assertEquals(1, entry.retryCount)
+        }
+
+    @Test
+    fun `a preview Proton does not have leaves the queue for good`() =
+        runBlocking {
+            previews.replaceSource(USER.id, ProtonSyncKeys.QueueSource.TIMELINE_PREVIEWS, candidates("gone", "later"))
+            source.previewResult =
+                ThumbnailBatchResult(
+                    emptySet(),
+                    mapOf("gone" to ThumbnailFailureKind.NOT_FOUND, "later" to ThumbnailFailureKind.OTHER),
+                )
+
+            sync.downloadNextBatch(USER, allowPreviews = true) {}
+
+            assertEquals(1, previews.pendingCount(USER.id))
+            clock.value += 30_000L
+            assertEquals(listOf("later"), previews.claimReady(USER.id, limit = 2).map { it.nodeUid })
+        }
+
+    @Test
     fun `a processed batch leaves the write to the debounce`() =
         runBlocking {
             thumbnails.replaceSource(USER.id, ProtonSyncKeys.QueueSource.TIMELINE, candidates("a", "b"))

@@ -197,18 +197,21 @@ internal class ProtonRenditionSync
             val nodeUids = entries.map(ProtonThumbnailQueueEntry::nodeUid)
             val progressMutex = Mutex()
             val marks = PendingMarks()
+            val settledFailures = mutableSetOf<String>()
             try {
                 val result =
                     source.downloadPreviews(userId, nodeUids) { progress ->
                         progressMutex.withLock {
-                            settlePreviews(userId, progress, marks)
+                            settlePreviews(userId, progress, marks, settledFailures)
                             publishMarks(userId, marks, force = false)
                             onProgress(progress(userId))
                         }
                     }
                 // Settling the final result as well guarantees no claimed entry is left behind,
-                // which would otherwise keep the run spinning on a queue it can never drain.
-                progressMutex.withLock { settlePreviews(userId, result, marks) }
+                // which would otherwise keep the run spinning on a queue it can never drain. A
+                // failure already settled from a progress report is not settled again: every
+                // settle is a backoff step, and a pass is one failure.
+                progressMutex.withLock { settlePreviews(userId, result, marks, settledFailures) }
             } catch (error: CancellationException) {
                 withContext(NonCancellable) { previewQueue.release(userId.id, nodeUids) }
                 throw error
@@ -225,8 +228,10 @@ internal class ProtonRenditionSync
             userId: UserId,
             result: ThumbnailBatchResult,
             marks: PendingMarks,
+            settledFailures: MutableSet<String>,
         ) {
-            previewQueue.settle(userId.id, result.successfulNodeUids, result.failures.keys)
+            val failures = result.failures.filterKeys { nodeUid -> settledFailures.add(nodeUid) }
+            previewQueue.settle(userId.id, result.successfulNodeUids, failures)
             marks.previews += result.successfulNodeUids
         }
 
@@ -235,7 +240,7 @@ internal class ProtonRenditionSync
             result: ThumbnailBatchResult,
             marks: PendingMarks,
         ) {
-            val completed = thumbnailQueue.settle(userId.id, result.successfulNodeUids, result.failures.keys)
+            val completed = thumbnailQueue.settle(userId.id, result.successfulNodeUids, result.failures)
             val completedNodeUids = completed.mapTo(mutableSetOf(), ProtonThumbnailQueueEntry::nodeUid)
             // A thumbnail nothing asked for any more (its photo left every listing meanwhile)
             // would only take up space.

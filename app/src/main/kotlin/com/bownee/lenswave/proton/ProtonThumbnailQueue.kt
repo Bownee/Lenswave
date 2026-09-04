@@ -211,17 +211,28 @@ internal class ProtonThumbnailQueue(
                 .onEach { entry -> claimed += entry.nodeUid }
         }
 
-    /**
-     * Removes successful entries and reschedules failed ones with backoff. An entry that has
-     * failed [MAX_RETRY_COUNT] times is dropped until the next sync queues it afresh, so one bad
-     * photo cannot keep the worker retrying for days.
-     */
+    /** [settle] with every failure treated as transient. */
     suspend fun settle(
         userId: String,
         successfulNodeUids: Set<String>,
         failedNodeUids: Set<String>,
     ): List<ProtonThumbnailQueueEntry> =
+        settle(userId, successfulNodeUids, failedNodeUids.associateWith { ThumbnailFailureKind.OTHER })
+
+    /**
+     * Removes successful entries and reschedules failed ones with backoff. An entry that has
+     * failed [MAX_RETRY_COUNT] times is dropped until the next sync queues it afresh, so one bad
+     * photo cannot keep the worker retrying for days; one Proton has no such rendition for
+     * ([ThumbnailFailureKind.NOT_FOUND]) is dropped at once, since retrying cannot help and every
+     * retry is a full SDK enumeration.
+     */
+    suspend fun settle(
+        userId: String,
+        successfulNodeUids: Set<String>,
+        failures: Map<String, ThumbnailFailureKind>,
+    ): List<ProtonThumbnailQueueEntry> =
         mutex.withLock {
+            val failedNodeUids = failures.keys
             require(successfulNodeUids.intersect(failedNodeUids).isEmpty()) {
                 "A thumbnail cannot succeed and fail in the same batch"
             }
@@ -229,10 +240,10 @@ internal class ProtonThumbnailQueue(
             val completed = successfulNodeUids.mapNotNull(entries::remove)
             val now = clock.nowMillis()
             var dropped = 0
-            failedNodeUids.forEach { nodeUid ->
+            failures.forEach { (nodeUid, kind) ->
                 val entry = entries[nodeUid] ?: return@forEach
                 val retryCount = entry.retryCount + 1
-                if (retryCount >= MAX_RETRY_COUNT) {
+                if (kind == ThumbnailFailureKind.NOT_FOUND || retryCount >= MAX_RETRY_COUNT) {
                     entries.remove(nodeUid)
                     dropped++
                     return@forEach
