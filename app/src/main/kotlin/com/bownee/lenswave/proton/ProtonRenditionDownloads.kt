@@ -8,151 +8,27 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.produceIn
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import me.proton.core.domain.entity.UserId
-import me.proton.drive.sdk.ProtonDriveSdkException
 import me.proton.drive.sdk.ProtonPhotosClient
-import me.proton.drive.sdk.ProtonSdkError
 import me.proton.drive.sdk.entity.FileThumbnail
 import me.proton.drive.sdk.entity.NodeUid
 import me.proton.drive.sdk.entity.ThumbnailType
-import java.io.File
-import java.io.FileOutputStream
-import java.nio.ByteBuffer
-import java.nio.channels.WritableByteChannel
 import javax.inject.Inject
 import javax.inject.Singleton
 
+/**
+ * Downloads grid thumbnails and screen-sized previews through the SDK in bounded batches and
+ * stores them; the reads serve the gallery and the viewer straight from the encrypted stores.
+ */
 @Singleton
-internal class ProtonDownloadRepository
+internal class ProtonRenditionDownloads
     @Inject
     constructor(
         private val clientProvider: ProtonPhotosClientProvider,
         private val cache: ProtonMediaCache,
         private val transferCoordinator: ProtonTransferCoordinator,
-    ) {
-        private val originalFileNames = java.util.concurrent.ConcurrentHashMap<String, String>()
-        private val originalDownloadMutexes = Array(ORIGINAL_DOWNLOAD_MUTEX_COUNT) { Mutex() }
-
-        suspend fun downloadOriginal(
-            userId: UserId,
-            nodeUid: String,
-        ): File =
-            originalDownloadMutex(userId, nodeUid).withLock {
-                transferCoordinator.withForegroundTransfer {
-                    downloadOriginalInForeground(userId, nodeUid)
-                }
-            }
-
-        internal suspend fun downloadOriginalProgressively(
-            userId: UserId,
-            nodeUid: String,
-            onReady: suspend (ProtonOriginalStream) -> Unit,
-        ): File =
-            originalDownloadMutex(userId, nodeUid).withLock {
-                transferCoordinator.withForegroundTransfer {
-                    cache.readOriginal(userId.id, nodeUid)?.let { cached ->
-                        val stream = ProtonOriginalStream(cached).apply { complete() }
-                        onReady(stream)
-                        return@withForegroundTransfer cached
-                    }
-
-                    val (temporary, target) = cache.createOriginalTarget(userId.id, nodeUid)
-                    val stream = ProtonOriginalStream(temporary)
-                    try {
-                        onReady(stream)
-                        FileOutputStream(temporary).use { output ->
-                            val reportingOutput = ProgressWritableByteChannel(output.channel, stream::bytesWritten)
-                            clientProvider.downloadTo(userId, nodeUid, reportingOutput) { progress ->
-                                stream.updateProgress(progress.bytesCompleted, progress.bytesInTotal)
-                            }
-                        }
-                        stream.complete()
-                        runCatching {
-                            cache.commitOriginal(userId.id, nodeUid, temporary, target).also {
-                                cache.onOriginalStored(userId.id, target)
-                            }
-                        }.getOrElse { error ->
-                            LenswaveDiagnostics.reportFailure(LenswaveOperation.ORIGINAL_CACHE_STORE, error)
-                            temporary
-                        }
-                    } catch (error: CancellationException) {
-                        stream.fail(error)
-                        temporary.delete()
-                        throw error
-                    } catch (error: Throwable) {
-                        stream.fail(error)
-                        LenswaveDiagnostics.reportFailure(LenswaveOperation.ORIGINAL_DOWNLOAD, error)
-                        temporary.delete()
-                        throw error
-                    }
-                }
-            }
-
-        suspend fun prepareCachedOriginal(
-            userId: UserId,
-            nodeUid: String,
-        ): File? = originalDownloadMutex(userId, nodeUid).withLock { cache.readOriginal(userId.id, nodeUid) }
-
-        private suspend fun downloadOriginalInForeground(
-            userId: UserId,
-            nodeUid: String,
-        ): File {
-            cache.readOriginal(userId.id, nodeUid)?.let { return it }
-            val (temporary, target) = cache.createOriginalTarget(userId.id, nodeUid)
-            return try {
-                FileOutputStream(temporary).use { output ->
-                    clientProvider.downloadTo(userId, nodeUid, output.channel)
-                }
-                val materialized = cache.commitOriginal(userId.id, nodeUid, temporary, target)
-                cache.onOriginalStored(userId.id, target)
-                materialized
-            } catch (error: CancellationException) {
-                temporary.delete()
-                throw error
-            } catch (error: Throwable) {
-                LenswaveDiagnostics.reportFailure(LenswaveOperation.ORIGINAL_DOWNLOAD, error)
-                temporary.delete()
-                throw error
-            }
-        }
-
-        private fun originalDownloadMutex(
-            userId: UserId,
-            nodeUid: String,
-        ): Mutex {
-            val hash = 31 * userId.id.hashCode() + nodeUid.hashCode()
-            return originalDownloadMutexes[(hash and Int.MAX_VALUE) % originalDownloadMutexes.size]
-        }
-
-        /** Drops memoized file names so a disconnected account leaves nothing behind in memory. */
-        fun forgetUser(userId: UserId) {
-            val prefix = "${userId.id}:"
-            originalFileNames.keys.removeAll { key -> key.startsWith(prefix) }
-        }
-
-        suspend fun getOriginalFileName(
-            userId: UserId,
-            nodeUid: String,
-        ): String? {
-            val key = "${userId.id}:$nodeUid"
-            originalFileNames[key]?.let { return it }
-            return try {
-                clientProvider
-                    .get(userId)
-                    .getNode(NodeUid(nodeUid))
-                    ?.originalFileName()
-                    ?.also { name -> originalFileNames[key] = name }
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Throwable) {
-                LenswaveDiagnostics.reportFailure(LenswaveOperation.ORIGINAL_NAME_LOAD, error)
-                null
-            }
-        }
-
+    ) : ProtonRenditionSource {
         fun loadThumbnail(
             userId: UserId,
             nodeUid: String,
@@ -163,7 +39,7 @@ internal class ProtonDownloadRepository
             nodeUid: String,
         ): Bitmap? = cache.peekThumbnail(userId.id, nodeUid)
 
-        internal suspend fun downloadThumbnails(
+        override suspend fun downloadThumbnails(
             userId: UserId,
             nodeUids: Collection<String>,
             onProgress: suspend (ThumbnailBatchResult) -> Unit,
@@ -189,14 +65,14 @@ internal class ProtonDownloadRepository
             return ThumbnailBatchResult(successful, failures)
         }
 
-        internal fun removeThumbnail(
+        override fun removeThumbnail(
             userId: UserId,
             nodeUid: String,
         ) {
             cache.removeThumbnail(userId.id, nodeUid)
         }
 
-        internal fun storedThumbnailCount(userId: UserId): Int = cache.thumbnailCount(userId.id)
+        override fun storedThumbnailCount(userId: UserId): Int = cache.thumbnailCount(userId.id)
 
         fun loadPreview(
             userId: UserId,
@@ -204,14 +80,14 @@ internal class ProtonDownloadRepository
             targetLongEdge: Int,
         ): Bitmap? = cache.loadPreview(userId.id, nodeUid, targetLongEdge)
 
-        internal fun storedPreviewCount(userId: UserId): Int = cache.previewCount(userId.id)
+        override fun storedPreviewCount(userId: UserId): Int = cache.previewCount(userId.id)
 
         /**
          * Downloads Proton's screen-sized preview rendition into the preview store. A single pass:
          * a photo without a preview on the server fails with [ThumbnailFailureKind.NOT_FOUND] and
          * the caller settles it permanently.
          */
-        internal suspend fun downloadPreviews(
+        override suspend fun downloadPreviews(
             userId: UserId,
             nodeUids: Collection<String>,
             onProgress: suspend (ThumbnailBatchResult) -> Unit,
@@ -470,22 +346,7 @@ internal class ProtonDownloadRepository
             val previous = this[nodeUid]
             if (previous == null || kind.priority > previous.priority) this[nodeUid] = kind
         }
-
-        private companion object {
-            const val ORIGINAL_DOWNLOAD_MUTEX_COUNT = 32
-        }
     }
-
-private class ProgressWritableByteChannel(
-    private val delegate: WritableByteChannel,
-    private val onBytesWritten: (Int) -> Unit,
-) : WritableByteChannel {
-    override fun write(source: ByteBuffer): Int = delegate.write(source).also(onBytesWritten)
-
-    override fun isOpen(): Boolean = delegate.isOpen
-
-    override fun close() = delegate.close()
-}
 
 internal data class ThumbnailBatchResult(
     val successfulNodeUids: Set<String>,
@@ -527,78 +388,4 @@ internal object ThumbnailPassCompletionPolicy {
         requestedNodeUids.all { nodeUid ->
             nodeUid in successfulNodeUids || nodeUid in failedNodeUids
         }
-}
-
-/**
- * Only three failures change what happens next: a missing rendition gets the thumbnail as its
- * preview, an unanswered node is asked again on its own, and everything else backs off.
- */
-internal enum class ThumbnailFailureKind(
-    val priority: Int,
-) {
-    OTHER(0),
-
-    /** The SDK gave no answer for the node before the pass ended; asked again on its own first. */
-    UNANSWERED(1),
-
-    /** Proton has no such rendition for the photo; retrying cannot help. */
-    NOT_FOUND(2),
-}
-
-internal object ThumbnailFailureClassifier {
-    fun classify(error: Throwable): ThumbnailFailureKind {
-        if (error is ProtonDriveSdkException) {
-            error.error?.let { sdkError -> return classify(sdkError) }
-            // Without a structured error the message is all the SDK gives, for example
-            // "File thumbnail failure: This item has no image preview".
-            return classifyDescription(error.message.orEmpty().lowercase())
-        }
-        val type = error::class.java.simpleName.lowercase()
-        return if ("notfound" in type ||
-            "not_found" in type
-        ) {
-            ThumbnailFailureKind.NOT_FOUND
-        } else {
-            ThumbnailFailureKind.OTHER
-        }
-    }
-
-    /**
-     * SDK failures all arrive as one exception class, so a missing rendition has to be recognised
-     * from the structured error: typed data for missing nodes or renditions, HTTP 404, the API's
-     * "does not exist" code, or the wording. Nested errors are consulted when the outer one is
-     * undecided.
-     */
-    fun classify(sdkError: ProtonSdkError): ThumbnailFailureKind {
-        when (sdkError.additionalData) {
-            is ProtonSdkError.Data.NodeNotFound,
-            is ProtonSdkError.Data.ThumbnailCountMismatch,
-            is ProtonSdkError.Data.MissingContentBlock,
-            -> return ThumbnailFailureKind.NOT_FOUND
-
-            else -> Unit
-        }
-        if (sdkError.primaryCode == HTTP_NOT_FOUND || sdkError.secondaryCode == API_CODE_NOT_EXIST) {
-            return ThumbnailFailureKind.NOT_FOUND
-        }
-        val description = "${sdkError.type.orEmpty()} ${sdkError.message.orEmpty()}".lowercase()
-        if (classifyDescription(description) == ThumbnailFailureKind.NOT_FOUND) return ThumbnailFailureKind.NOT_FOUND
-        return sdkError.innerError?.let(::classify) ?: ThumbnailFailureKind.OTHER
-    }
-
-    private fun classifyDescription(description: String): ThumbnailFailureKind =
-        if (MISSING_RENDITION_PHRASES.any { phrase -> phrase in description }) {
-            ThumbnailFailureKind.NOT_FOUND
-        } else {
-            ThumbnailFailureKind.OTHER
-        }
-
-    /** Wordings Proton uses when a photo simply has no such rendition; retrying cannot help. */
-    private val MISSING_RENDITION_PHRASES =
-        listOf("no image preview", "no preview", "no thumbnail", "not found", "notfound", "does not exist")
-
-    private const val HTTP_NOT_FOUND = 404L
-
-    /** Proton API response code for "the requested resource does not exist". */
-    private const val API_CODE_NOT_EXIST = 2501L
 }

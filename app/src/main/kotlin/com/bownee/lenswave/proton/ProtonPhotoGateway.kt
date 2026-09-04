@@ -36,7 +36,9 @@ class ProtonPhotoGateway
     internal constructor(
         private val timeline: ProtonTimelineRepository,
         private val albums: ProtonAlbumRepository,
-        private val downloads: ProtonDownloadRepository,
+        private val originals: ProtonOriginalDownloads,
+        private val renditions: ProtonRenditionDownloads,
+        private val renditionSync: ProtonRenditionSync,
         @ThumbnailQueue private val thumbnailQueue: ProtonThumbnailQueue,
         @PreviewQueue private val previewQueue: ProtonThumbnailQueue,
         private val clientProvider: ProtonPhotosClientProvider,
@@ -60,7 +62,7 @@ class ProtonPhotoGateway
                     previousUserId?.let { previous ->
                         clientProvider.disconnect(previous)
                         cache.clearUser(previous.id)
-                        downloads.forgetUser(previous)
+                        originals.forgetUser(previous)
                     }
                     timeline.reset()
                     albums.reset()
@@ -141,7 +143,7 @@ class ProtonPhotoGateway
             nodeUid: String,
         ): File =
             withContext(Dispatchers.IO) {
-                sessionGuard.withActiveSession(userId) { downloads.downloadOriginal(userId, nodeUid) }
+                sessionGuard.withActiveSession(userId) { originals.downloadOriginal(userId, nodeUid) }
             }
 
         override suspend fun prepareCachedOriginal(
@@ -149,7 +151,7 @@ class ProtonPhotoGateway
             nodeUid: String,
         ): File? =
             withContext(Dispatchers.IO) {
-                sessionGuard.withActiveSession(userId) { downloads.prepareCachedOriginal(userId, nodeUid) }
+                sessionGuard.withActiveSession(userId) { originals.prepareCachedOriginal(userId, nodeUid) }
             }
 
         override suspend fun downloadOriginalProgressively(
@@ -159,7 +161,7 @@ class ProtonPhotoGateway
         ): File =
             withContext(Dispatchers.IO) {
                 sessionGuard.withActiveSession(userId) {
-                    downloads.downloadOriginalProgressively(userId, nodeUid, onReady)
+                    originals.downloadOriginalProgressively(userId, nodeUid, onReady)
                 }
             }
 
@@ -168,7 +170,7 @@ class ProtonPhotoGateway
             nodeUid: String,
         ): String? =
             withContext(Dispatchers.IO) {
-                sessionGuard.withActiveSession(userId) { downloads.getOriginalFileName(userId, nodeUid) }
+                sessionGuard.withActiveSession(userId) { originals.getOriginalFileName(userId, nodeUid) }
             }
 
         override suspend fun loadPreview(
@@ -177,7 +179,7 @@ class ProtonPhotoGateway
             targetLongEdge: Int,
         ): Bitmap? =
             withContext(Dispatchers.IO) {
-                sessionGuard.withActiveSession(userId) { downloads.loadPreview(userId, nodeUid, targetLongEdge) }
+                sessionGuard.withActiveSession(userId) { renditions.loadPreview(userId, nodeUid, targetLongEdge) }
             }
 
         override suspend fun loadThumbnail(
@@ -186,7 +188,7 @@ class ProtonPhotoGateway
         ): Bitmap? =
             withContext(Dispatchers.IO) {
                 sessionGuard.withActiveSession(userId) {
-                    downloads.loadThumbnail(userId, nodeUid) ?: run {
+                    renditions.loadThumbnail(userId, nodeUid) ?: run {
                         invalidateThumbnailInActiveSession(userId, nodeUid)
                         null
                     }
@@ -200,7 +202,7 @@ class ProtonPhotoGateway
             // Synchronous by design: the in-memory peek must not wait on the session guard, so an
             // inactive account simply reports no cached thumbnail.
             if (!sessionGuard.isActive(userId)) return null
-            return downloads.peekThumbnail(userId, nodeUid)
+            return renditions.peekThumbnail(userId, nodeUid)
         }
 
         override suspend fun trashPhotos(
@@ -267,7 +269,7 @@ class ProtonPhotoGateway
                     cache.clearUser(userId.id)
                     thumbnailQueue.forget(userId.id)
                     previewQueue.forget(userId.id)
-                    downloads.forgetUser(userId)
+                    originals.forgetUser(userId)
                     if (wasActive) {
                         timeline.reset()
                         albums.reset()
@@ -284,143 +286,14 @@ class ProtonPhotoGateway
             ): ProtonThumbnailQueueStep =
                 withContext(Dispatchers.IO) {
                     sessionGuard.withActiveSession(userId) {
-                        val batch =
-                            ProtonBackgroundBatchPolicy.choose(
-                                thumbnailBatch =
-                                    thumbnailQueue.claimReady(
-                                        userId.id,
-                                        ProtonThumbnailDownloadPolicy.BACKGROUND_CLAIM_SIZE,
-                                    ),
-                                allowPreviews = allowPreviews,
-                                claimPreviews = {
-                                    previewQueue.claimReady(
-                                        userId.id,
-                                        ProtonThumbnailDownloadPolicy.BACKGROUND_CLAIM_SIZE,
-                                    )
-                                },
-                            )
-                        when (batch?.queue) {
-                            ProtonQueueName.THUMBNAILS -> {
-                                processThumbnailBatch(userId, batch.entries, onProgress)
-                            }
-
-                            ProtonQueueName.PREVIEWS -> {
-                                processPreviewBatch(userId, batch.entries, onProgress)
-                            }
-
-                            null -> {
-                                ProtonBackgroundBatchPolicy.idle(
-                                    thumbnailsPending = thumbnailQueue.hasPending(userId.id),
-                                    previewsPending = previewQueue.hasPending(userId.id),
-                                    thumbnailRetryDelayMillis = thumbnailQueue.retryDelayMillis(userId.id),
-                                    previewRetryDelayMillis = previewQueue.retryDelayMillis(userId.id),
-                                    allowPreviews = allowPreviews,
-                                )
-                            }
-                        }
+                        renditionSync.downloadNextBatch(userId, allowPreviews, onProgress)
                     }
                 }
 
             override suspend fun thumbnailWorkProgress(userId: UserId): ProtonThumbnailWorkProgress =
                 withContext(Dispatchers.IO) {
-                    sessionGuard.withActiveSession(userId) { thumbnailWorkProgressInActiveSession(userId) }
+                    sessionGuard.withActiveSession(userId) { renditionSync.progress(userId) }
                 }
-        }
-
-        private suspend fun thumbnailWorkProgressInActiveSession(userId: UserId) =
-            ProtonThumbnailWorkProgress(
-                stored = downloads.storedThumbnailCount(userId),
-                pending = thumbnailQueue.pendingCount(userId.id),
-                previewsStored = downloads.storedPreviewCount(userId),
-                previewsPending = previewQueue.pendingCount(userId.id),
-            )
-
-        private suspend fun processPreviewBatch(
-            userId: UserId,
-            entries: List<ProtonThumbnailQueueEntry>,
-            onProgress: suspend (ProtonThumbnailWorkProgress) -> Unit,
-        ): ProtonThumbnailQueueStep {
-            val nodeUids = entries.map(ProtonThumbnailQueueEntry::nodeUid)
-            val progressMutex = Mutex()
-            return try {
-                val result =
-                    downloads.downloadPreviews(userId, nodeUids) { progress ->
-                        progressMutex.withLock {
-                            settlePreviewProgress(userId, progress)
-                            onProgress(thumbnailWorkProgressInActiveSession(userId))
-                        }
-                    }
-                // Settling the final result as well guarantees no claimed entry is left behind,
-                // which would otherwise keep the run spinning on a queue it can never drain.
-                progressMutex.withLock { settlePreviewProgress(userId, result) }
-                ProtonThumbnailQueueStep.Processed
-            } catch (error: CancellationException) {
-                previewQueue.release(userId.id, nodeUids)
-                throw error
-            } catch (_: Throwable) {
-                previewQueue.settle(userId.id, emptySet(), nodeUids.toSet())
-                onProgress(thumbnailWorkProgressInActiveSession(userId))
-                ProtonThumbnailQueueStep.Processed
-            }
-        }
-
-        private suspend fun settlePreviewProgress(
-            userId: UserId,
-            result: ThumbnailBatchResult,
-        ) {
-            previewQueue.settle(userId.id, result.successfulNodeUids, result.failures.keys)
-            timeline.markPreviewsAvailable(userId, result.successfulNodeUids)
-        }
-
-        private suspend fun processThumbnailBatch(
-            userId: UserId,
-            entries: List<ProtonThumbnailQueueEntry>,
-            onProgress: suspend (ProtonThumbnailWorkProgress) -> Unit = {},
-        ): ProtonThumbnailQueueStep {
-            if (entries.isEmpty()) {
-                return ProtonBackgroundBatchPolicy.idle(
-                    thumbnailsPending = thumbnailQueue.hasPending(userId.id),
-                    previewsPending = previewQueue.hasPending(userId.id),
-                    thumbnailRetryDelayMillis = thumbnailQueue.retryDelayMillis(userId.id),
-                    previewRetryDelayMillis = previewQueue.retryDelayMillis(userId.id),
-                )
-            }
-            val nodeUids = entries.map(ProtonThumbnailQueueEntry::nodeUid)
-            val progressMutex = Mutex()
-            return try {
-                val result =
-                    downloads.downloadThumbnails(userId, nodeUids) { progress ->
-                        progressMutex.withLock {
-                            settleThumbnailProgress(userId, progress)
-                            onProgress(thumbnailWorkProgressInActiveSession(userId))
-                        }
-                    }
-                ProtonThumbnailQueueStep.Processed
-            } catch (error: CancellationException) {
-                thumbnailQueue.release(userId.id, nodeUids)
-                throw error
-            } catch (_: Throwable) {
-                thumbnailQueue.settle(userId.id, emptySet(), nodeUids.toSet())
-                onProgress(thumbnailWorkProgressInActiveSession(userId))
-                ProtonThumbnailQueueStep.Processed
-            }
-        }
-
-        private suspend fun settleThumbnailProgress(
-            userId: UserId,
-            result: ThumbnailBatchResult,
-        ) {
-            val completed =
-                thumbnailQueue.settle(
-                    userId.id,
-                    result.successfulNodeUids,
-                    result.failures.keys,
-                )
-            val completedNodeUids = completed.mapTo(mutableSetOf(), ProtonThumbnailQueueEntry::nodeUid)
-            result.successfulNodeUids
-                .filterNot(completedNodeUids::contains)
-                .forEach { nodeUid -> downloads.removeThumbnail(userId, nodeUid) }
-            publishThumbnailAvailability(userId, completed)
         }
 
         private suspend fun invalidateThumbnailInActiveSession(
@@ -428,7 +301,7 @@ class ProtonPhotoGateway
             nodeUid: String,
         ) {
             val sources = thumbnailSources(nodeUid)
-            downloads.removeThumbnail(userId, nodeUid)
+            renditions.removeThumbnail(userId, nodeUid)
             val nodeUids = setOf(nodeUid)
             timeline.markThumbnailsUnavailable(userId, nodeUids)
             albums.markCoverThumbnailsUnavailable(userId, nodeUids)
@@ -438,26 +311,6 @@ class ProtonPhotoGateway
                 ProtonThumbnailCandidate(nodeUid, thumbnailCaptureTime(nodeUid)),
                 sources,
             )
-        }
-
-        private fun publishThumbnailAvailability(
-            userId: UserId,
-            entries: Collection<ProtonThumbnailQueueEntry>,
-        ) {
-            if (entries.isEmpty()) return
-            val timelineNodeUids = mutableSetOf<String>()
-            val albumCoverNodeUids = mutableSetOf<String>()
-            val albumPhotoNodeUids = mutableSetOf<String>()
-            entries.forEach { entry ->
-                if (ProtonSyncKeys.QueueSource.TIMELINE in entry.sources) timelineNodeUids += entry.nodeUid
-                if (ProtonSyncKeys.QueueSource.ALBUM_COVERS in entry.sources) albumCoverNodeUids += entry.nodeUid
-                if (entry.sources.any(ProtonSyncKeys.QueueSource::isAlbumPhotos)) {
-                    albumPhotoNodeUids += entry.nodeUid
-                }
-            }
-            timeline.markThumbnailsAvailable(userId, timelineNodeUids)
-            albums.markCoverThumbnailsAvailable(userId, albumCoverNodeUids)
-            albums.markAlbumPhotoThumbnailsAvailable(userId, albumPhotoNodeUids)
         }
 
         private suspend fun reconcileTimelineThumbnailQueue(userId: UserId) {

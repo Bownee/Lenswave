@@ -33,3 +33,6 @@ Thumbs.db
 
 # Codex PR validation scratch checkout
 .codex-pr-validation/
+
+# Claude Code agent worktrees
+.claude/worktrees/
