@@ -363,7 +363,7 @@ class GalleryActivity :
 
     private fun handleBack() {
         when {
-            adapter.selectedPhotos().isNotEmpty() -> adapter.clearSelection()
+            adapter.hasSelection() -> adapter.clearSelection()
             GalleryNavigationPolicy.parent(currentUiState.destination) != null -> navigateUp()
             else -> finish()
         }
@@ -375,7 +375,7 @@ class GalleryActivity :
 
     private fun updateNavigationControls() {
         val destination = currentUiState.destination
-        val selecting = adapter.selectedPhotos().isNotEmpty()
+        val selecting = adapter.hasSelection()
         screen.renderNavigation(destination, currentUiState.title)
         // Every photo grid gets the draggable handle; the album list uses the platform scrollbar.
         list.setFastScrollHandleEnabled(currentUiState.content is GalleryContent.Photos)
@@ -420,7 +420,7 @@ class GalleryActivity :
             safeBottom = safeArea.bottom
             screen.applySafeArea(safeArea)
             updateFastScrollTrack()
-            updateGalleryFooterHeight(adapter.selectedPhotos().isNotEmpty())
+            updateGalleryFooterHeight(adapter.hasSelection())
             selectionBar.applyBottomOverlayInsets(safeArea)
             insets
         }

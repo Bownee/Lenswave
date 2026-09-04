@@ -338,7 +338,7 @@ internal class GalleryScreen(
             UiStyle.iconButton(activity, R.drawable.ic_back, activity.getString(R.string.back)).apply {
                 visibility = View.GONE
                 setOnClickListener {
-                    if (adapter.selectedPhotos().isNotEmpty()) adapter.clearSelection() else actions.onBack()
+                    if (adapter.hasSelection()) adapter.clearSelection() else actions.onBack()
                 }
             }
         titleRow.addView(

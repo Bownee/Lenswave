@@ -16,11 +16,18 @@ import androidx.core.view.setPadding
 import com.bownee.lenswave.R
 import com.bownee.lenswave.UiStyle
 import com.bownee.lenswave.dp
+import com.bownee.lenswave.proton.ProtonAlbum
 
 /** A photo thumbnail in the grid with its selection, loading and video overlays. */
 internal class PhotoCell(
     context: Context,
 ) : FrameLayout(context) {
+    /** The photo currently bound, read back by the shared click listeners and selection updates. */
+    var asset: GalleryAsset? = null
+
+    /** Set at bind when the cell already shows this photo, so a cache miss does not blank it. */
+    var keepsShownImage = false
+    lateinit var thumbnailTarget: GalleryThumbnailTarget
     val image =
         ImageView(context).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
@@ -78,6 +85,8 @@ internal class PhotoCell(
 internal class AlbumCell(
     context: Context,
 ) : LinearLayout(context) {
+    var album: ProtonAlbum? = null
+    lateinit var thumbnailTarget: GalleryThumbnailTarget
     private val cover =
         FrameLayout(context).apply {
             UiStyle.clipRounded(this, 18)
@@ -133,6 +142,7 @@ internal class AlbumCell(
 internal class EntryCell(
     context: Context,
 ) : LinearLayout(context) {
+    var entry: LibraryItem.Entry? = null
     val icon =
         ImageView(context).apply {
             imageTintList = ColorStateList.valueOf(UiStyle.accent)
