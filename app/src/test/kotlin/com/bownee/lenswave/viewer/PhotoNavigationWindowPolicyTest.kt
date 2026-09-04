@@ -1,5 +1,6 @@
 package com.bownee.lenswave.viewer
 
+import com.bownee.lenswave.gallery.GalleryAsset
 import com.bownee.lenswave.viewer.PhotoNavigationWindowPolicy.Window
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -15,6 +16,21 @@ class PhotoNavigationWindowPolicyTest {
         assertEquals(Window(0, 0), PhotoNavigationWindowPolicy.initial(currentIndex = 0, listSize = 0))
         assertEquals(41, PhotoNavigationWindowPolicy.initial(currentIndex = 100, listSize = 1_000).size)
     }
+
+    @Test
+    fun `a tapped index that names the photo is trusted, anything else falls back to the search`() {
+        val assets = listOf(asset("a"), asset("b"), asset("c"))
+
+        assertEquals(1, PhotoNavigationWindowPolicy.currentIndex(assets, "b", hint = 1))
+        assertEquals(2, PhotoNavigationWindowPolicy.currentIndex(assets, "c", hint = 0))
+        assertEquals(0, PhotoNavigationWindowPolicy.currentIndex(assets, "a", hint = -1))
+        assertEquals(1, PhotoNavigationWindowPolicy.currentIndex(assets, "b", hint = 7))
+        assertEquals(0, PhotoNavigationWindowPolicy.currentIndex(assets, "missing", hint = 2))
+        assertEquals(0, PhotoNavigationWindowPolicy.currentIndex(emptyList(), "a", hint = 0))
+    }
+
+    private fun asset(stableId: String) =
+        GalleryAsset(stableId = stableId, capturedAtEpochMillis = 0L, nodeUid = stableId, hasThumbnail = true)
 
     @Test
     fun `an out-of-range index is clamped into the list`() {

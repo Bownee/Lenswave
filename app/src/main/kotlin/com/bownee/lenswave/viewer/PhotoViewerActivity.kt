@@ -1372,7 +1372,10 @@ class PhotoViewerActivity :
         /**
          * [destination] names the gallery page [navigation] came from, so a viewer restored after
          * a process death can rebuild the list from the page's cache (see
-         * [PhotoNavigationSourceProvider]).
+         * [PhotoNavigationSourceProvider]). [currentIndex] is where the gallery found [photo] in
+         * [navigation]; when it is in range and names that photo the list is not searched, which
+         * on a timeline of tens of thousands of entries is a scan the tap would otherwise pay for.
+         * Any other value falls back to the search.
          */
         fun createIntent(
             context: Context,
@@ -1380,10 +1383,11 @@ class PhotoViewerActivity :
             userId: UserId,
             navigation: List<GalleryAsset> = listOf(photo),
             destination: GalleryDestination? = null,
+            currentIndex: Int = -1,
         ): Intent {
             val request = PhotoRequest.from(photo, userId.id)
-            val currentIndex = navigation.indexOfFirst { it.stableId == photo.stableId }.coerceAtLeast(0)
-            val window = PhotoNavigationWindowPolicy.initial(currentIndex, navigation.size)
+            val index = PhotoNavigationWindowPolicy.currentIndex(navigation, photo.stableId, currentIndex)
+            val window = PhotoNavigationWindowPolicy.initial(index, navigation.size)
             // The intent carries a small window, parcelled directly; the full list stays in the
             // process and the viewer grows the window from it while the user swipes.
             return request.writeTo(Intent(context, PhotoViewerActivity::class.java)).apply {

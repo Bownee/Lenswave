@@ -1,5 +1,6 @@
 package com.bownee.lenswave.viewer
 
+import com.bownee.lenswave.gallery.GalleryAsset
 import kotlin.math.max
 import kotlin.math.min
 
@@ -25,6 +26,20 @@ internal object PhotoNavigationWindowPolicy {
         val end: Int,
     ) {
         val size: Int get() = end - start
+    }
+
+    /**
+     * Where the photo with [stableId] sits in [assets]: [hint] when it is in range and names that
+     * photo (the index the gallery tapped, so no scan is needed), otherwise the first match, or 0
+     * when the photo is not in the list at all.
+     */
+    fun currentIndex(
+        assets: List<GalleryAsset>,
+        stableId: String,
+        hint: Int,
+    ): Int {
+        if (hint in assets.indices && assets[hint].stableId == stableId) return hint
+        return assets.indexOfFirst { it.stableId == stableId }.coerceAtLeast(0)
     }
 
     fun initial(
