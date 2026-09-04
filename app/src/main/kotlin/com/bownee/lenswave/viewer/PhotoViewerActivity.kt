@@ -93,7 +93,7 @@ class PhotoViewerActivity : FragmentActivity() {
     private lateinit var swipe: ViewerSwipeController
     private lateinit var video: ViewerVideoController
     private lateinit var request: PhotoRequest
-    private var navigationRequests: List<PhotoRequest> = emptyList()
+    private var navigationRequests: MutableList<PhotoRequest> = mutableListOf()
     private var resolvedUri: Uri? = null
     private var photoTransitioning = false
     private var deletionInProgress = false
@@ -103,6 +103,7 @@ class PhotoViewerActivity : FragmentActivity() {
     private var previewStableId: String? = null
     private var navigationFallback: NavigationFallback? = null
     private var photoLoadJob: Job? = null
+    private var prefetchJob: Job? = null
     private var loadingPanelRunnable: Runnable? = null
 
     /** Accumulates what the gallery must refresh; a later result must not drop an earlier flag. */
@@ -111,7 +112,7 @@ class PhotoViewerActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         request = PhotoRequest.from(intent)
-        navigationRequests = PhotoRequest.navigationFrom(intent).ifEmpty { listOf(request) }
+        navigationRequests = PhotoRequest.navigationFrom(intent).ifEmpty { listOf(request) }.toMutableList()
         configureEdgeToEdgeWindow()
         buildInterface()
         onBackPressedDispatcher.addCallback(
@@ -125,6 +126,7 @@ class PhotoViewerActivity : FragmentActivity() {
 
     override fun onDestroy() {
         photoLoadJob?.cancel()
+        prefetchJob?.cancel()
         details.release()
         cancelLoadingPanelDelay()
         clearThumbnailPreview()
@@ -302,6 +304,18 @@ class PhotoViewerActivity : FragmentActivity() {
         request.writeTo(intent)
     }
 
+    /**
+     * Replaces one entry of the navigation list in place. The list keeps its identity and order,
+     * so the swipe controller's index stays valid and nothing copies two hundred requests.
+     */
+    private fun updateNavigationRequest(
+        stableId: String,
+        transform: (PhotoRequest) -> PhotoRequest,
+    ) {
+        val index = navigationRequests.indexOfFirst { it.stableId == stableId }
+        if (index >= 0) navigationRequests[index] = transform(navigationRequests[index])
+    }
+
     private fun updatePhotoDetailsLayout(availableHeight: Int) {
         if (availableHeight <= 0) return
         val mediaParams = mediaFrame.layoutParams as LinearLayout.LayoutParams
@@ -412,10 +426,7 @@ class PhotoViewerActivity : FragmentActivity() {
                     originalMedia.getOriginalFileName(UserId(requestedPhoto.userId), requestedPhoto.nodeUid)
                 }.orEmpty()
             if (name.isBlank()) return@launch
-            navigationRequests =
-                navigationRequests.map { item ->
-                    if (item.stableId == requestedPhoto.stableId) item.copy(displayName = name) else item
-                }
+            updateNavigationRequest(requestedPhoto.stableId) { item -> item.copy(displayName = name) }
             if (request.stableId != requestedPhoto.stableId) return@launch
             setCurrentRequest(request.copy(displayName = name))
             photoView.contentDescription =
@@ -604,6 +615,10 @@ class PhotoViewerActivity : FragmentActivity() {
         val previousRequest = request
         photoTransitioning = true
         photoLoadJob?.cancel()
+        // The neighbour being prepared may not be the one the user is heading for; the new
+        // photo's own prefetch restarts it in the direction of travel once it is on screen.
+        prefetchJob?.cancel()
+        prefetchJob = null
         cancelLoadingPanelDelay()
         navigationFallback = NavigationFallback(previousRequest, resolvedUri)
         setActionsEnabled(false)
@@ -736,10 +751,7 @@ class PhotoViewerActivity : FragmentActivity() {
                     return@launch
                 }
                 setCurrentRequest(request.withFavorite(favorite))
-                navigationRequests =
-                    navigationRequests.map { item ->
-                        if (item.stableId == request.stableId) item.withFavorite(favorite) else item
-                    }
+                updateNavigationRequest(request.stableId) { item -> item.withFavorite(favorite) }
                 setResult(Activity.RESULT_OK, resultIntent.putExtra(EXTRA_FAVORITE_CHANGED, true))
             } catch (error: CancellationException) {
                 throw error
@@ -769,13 +781,15 @@ class PhotoViewerActivity : FragmentActivity() {
                 .mapNotNull { offset -> swipe.adjacentTo(stableId, offset) }
                 .filter { it.mediaKind != MediaKind.VIDEO }
         if (neighbours.isEmpty()) return
-        lifecycleScope.launch(Dispatchers.IO) {
-            neighbours.forEach { neighbour ->
-                runCatching {
-                    originalMedia.prepareCachedOriginal(UserId(neighbour.userId), neighbour.nodeUid)
+        prefetchJob?.cancel()
+        prefetchJob =
+            lifecycleScope.launch(Dispatchers.IO) {
+                neighbours.forEach { neighbour ->
+                    runCatching {
+                        originalMedia.prepareCachedOriginal(UserId(neighbour.userId), neighbour.nodeUid)
+                    }.onFailure { error -> if (error is CancellationException) throw error }
                 }
             }
-        }
     }
 
     override fun onKeyDown(
