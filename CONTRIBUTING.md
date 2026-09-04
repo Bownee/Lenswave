@@ -11,7 +11,7 @@
 This is what CI runs on every pull request. Run it before pushing:
 
 ```shell
-./gradlew ktlintCheck testDebugUnitTest jacocoDebugCoverageVerification lintDebug lintRelease assembleDebug
+./gradlew ktlintCheck testDebugUnitTest jacocoDebugCoverageVerification lintDebug assembleDebug
 ```
 
 `ktlintCheck` fails on formatting drift; `./gradlew ktlintFormat` fixes it in place.
