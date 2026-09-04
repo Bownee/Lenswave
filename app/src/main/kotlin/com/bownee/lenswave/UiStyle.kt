@@ -104,12 +104,13 @@ object UiStyle {
         fill: Int = surfaceRaised,
         tint: Int = text,
         sizeDp: Int = 44,
+        iconDp: Int = 22,
     ): ImageButton =
         ImageButton(context).apply {
             setImageResource(icon)
             imageTintList = ColorStateList.valueOf(tint)
             contentDescription = description
-            val inset = context.dp((sizeDp - 22) / 2)
+            val inset = context.dp((sizeDp - iconDp) / 2)
             setPadding(inset, inset, inset, inset)
             background = rippled(circle(context, fill), tint)
             scaleType = ImageView.ScaleType.FIT_CENTER

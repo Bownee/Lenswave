@@ -332,7 +332,7 @@ internal class GalleryScreen(
             },
         )
         val pageTitle =
-            UiStyle.label(activity, sizeSp = 24f, medium = true).apply {
+            UiStyle.label(activity, sizeSp = 20f, medium = true).apply {
                 maxLines = 1
                 ellipsize = TextUtils.TruncateAt.END
                 visibility = View.GONE
@@ -360,7 +360,7 @@ internal class GalleryScreen(
                 )
                 addView(
                     divider,
-                    LinearLayout.LayoutParams(activity.dp(1), activity.dp(22)).apply {
+                    LinearLayout.LayoutParams(activity.dp(1), activity.dp(18)).apply {
                         marginStart = activity.dp(6)
                         marginEnd = activity.dp(6)
                     },
@@ -378,6 +378,8 @@ internal class GalleryScreen(
                     activity,
                     R.drawable.ic_settings,
                     activity.getString(R.string.settings),
+                    sizeDp = TITLE_ROW_HEIGHT_DP,
+                    iconDp = 20,
                 ).apply { setOnClickListener { actions.onSettings() } }
         titleRow.addView(
             settings,
@@ -560,7 +562,7 @@ internal class GalleryScreen(
         label: String,
     ) : FrameLayout(context) {
         private val labelView =
-            UiStyle.label(context, label, 24f, medium = true).apply {
+            UiStyle.label(context, label, 20f, medium = true).apply {
                 gravity = Gravity.CENTER
             }
 
@@ -665,7 +667,7 @@ internal class GalleryScreen(
     companion object {
         /** Height of the floating selection bar including padding, used to keep the list clear of it. */
         const val SELECTION_BAR_HEIGHT_DP = 60
-        private const val TITLE_ROW_HEIGHT_DP = 44
+        private const val TITLE_ROW_HEIGHT_DP = 40
         private const val CHIP_HEIGHT_DP = 38
         private const val SCROLL_TO_TOP_JUMP_ROWS = 12
     }
