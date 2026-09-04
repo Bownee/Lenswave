@@ -137,6 +137,31 @@ class ProtonTimelineRepositoryTest {
         }
 
     @Test
+    fun `an automatic refresh that drops most of the library keeps the cached listing and fails the refresh`() =
+        runTest {
+            val cached = List(400) { index -> photo("v~p$index", index.toLong()) }
+            cache.timelines[USER.id] = cached
+            repository.loadCached(USER)
+            clients.timeline = List(100) { index -> "v~p$index" to index.toLong() }
+
+            repository.syncMetadata(USER, forceRemote = false)
+
+            val state = repository.state.value
+            assertEquals(400, state.photos.size)
+            assertTrue(state.refreshFailed)
+            assertFalse(state.syncing)
+            assertEquals(400, cache.timelines.getValue(USER.id).size)
+            assertTrue(cache.events.none { it.startsWith("reconcilePhotos") || it.startsWith("writeIndex") })
+            assertTrue(failures.single().second is ProtonSuspiciousListingException)
+
+            repository.syncMetadata(USER, forceRemote = true)
+
+            assertEquals(100, repository.state.value.photos.size)
+            assertFalse(repository.state.value.refreshFailed)
+            assertEquals(100, cache.timelines.getValue(USER.id).size)
+        }
+
+    @Test
     fun `a tag listing is committed whole while the timeline has not loaded`() =
         runTest {
             cache.tags[USER.id to ProtonMediaTag.VIDEOS] = listOf(photo("v~old", 1L))

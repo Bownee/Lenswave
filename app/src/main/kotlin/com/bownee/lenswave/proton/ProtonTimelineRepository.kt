@@ -100,10 +100,18 @@ internal class ProtonTimelineRepository
                     items.map { item -> availability.photo(item.nodeUid.value, item.captureTime.epochSecond) }
                 },
                 commit = { photos ->
+                    val remoteNodeUids = photos.map(ProtonGalleryPhoto::nodeUid)
+                    val remote = remoteNodeUids.toHashSet()
+                    val removedCount = existing.count { photo -> photo.nodeUid !in remote }
+                    // Thrown from the commit, the refusal is reported and published as a failed
+                    // refresh like any other, which is what offers the manual refresh.
+                    if (!ProtonReconcileSafetyPolicy.mayCommit(existing.size, removedCount, forceRemote)) {
+                        throw ProtonSuspiciousListingException(existing.size, removedCount)
+                    }
                     cache.reconcilePhotos(
                         userId = userId.id,
                         cachedNodeUids = existing.map(ProtonGalleryPhoto::nodeUid),
-                        remoteNodeUids = photos.map(ProtonGalleryPhoto::nodeUid),
+                        remoteNodeUids = remoteNodeUids,
                     )
                     cache.writeIndex(userId.id, photos)
                     photos
