@@ -131,11 +131,17 @@ internal class ProtonThumbnailStore
             }
         }
 
+        /**
+         * The first call lists the directory inside the map's own lock, so a write or removal
+         * that lands while the listing runs waits and then adjusts the stored count instead of
+         * being dropped by a `getOrPut` whose value is not in the map yet.
+         */
         fun count(userId: String): Int =
-            counts.getOrPut(userId) {
+            counts.computeIfAbsent(userId) {
                 directory(userId).listFiles()?.count(::isStoredThumbnail) ?: 0
             }
 
+        /** Only a count that has been established is adjusted; the next [count] lists from scratch otherwise. */
         private fun adjustCount(
             userId: String,
             delta: Int,

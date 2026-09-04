@@ -135,8 +135,9 @@ internal class ProtonPreviewStore
             }
         }
 
+        /** Lists inside the map's lock so a concurrent write or removal adjusts the count rather than being dropped. */
         fun count(userId: String): Int =
-            counts.getOrPut(userId) {
+            counts.computeIfAbsent(userId) {
                 directory(userId).listFiles()?.count(::isStoredPreview) ?: 0
             }
 
