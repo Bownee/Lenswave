@@ -1,15 +1,20 @@
 package com.bownee.lenswave.proton
 
 import com.bownee.lenswave.LenswaveClock
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class ProtonThumbnailQueueTest {
     @Test
     fun newestCaptureTimeIsAlwaysChosenFirst() =
-        runBlocking {
-            val queue = ProtonThumbnailQueue(FakeStore(), FakeClock())
+        runTest {
+            val queue = queue(FakeStore(), FakeClock())
             queue.replaceSource(
                 USER_ID,
                 "timeline",
@@ -23,9 +28,25 @@ class ProtonThumbnailQueueTest {
         }
 
     @Test
+    fun claimingFewerThanPendingStillTakesTheNewestOnes() =
+        runTest {
+            val queue = queue(FakeStore(), FakeClock())
+            queue.replaceSource(
+                USER_ID,
+                "timeline",
+                (1..50L).map { captureTime -> candidate("photo-$captureTime", captureTime) }.shuffled(),
+            )
+
+            assertEquals(
+                listOf("photo-50", "photo-49", "photo-48"),
+                queue.claimReady(USER_ID, limit = 3).map(ProtonThumbnailQueueEntry::nodeUid),
+            )
+        }
+
+    @Test
     fun sourceReplacementReordersExistingEntriesByCaptureTime() =
-        runBlocking {
-            val queue = ProtonThumbnailQueue(FakeStore(), FakeClock())
+        runTest {
+            val queue = queue(FakeStore(), FakeClock())
             queue.replaceSource(
                 USER_ID,
                 "timeline",
@@ -43,9 +64,9 @@ class ProtonThumbnailQueueTest {
 
     @Test
     fun replacingOneSourcePreservesItemsReferencedByAnotherSource() =
-        runBlocking {
+        runTest {
             val store = FakeStore()
-            val queue = ProtonThumbnailQueue(store, FakeClock())
+            val queue = queue(store, FakeClock())
 
             queue.replaceSource(USER_ID, "timeline", candidates("a", "b"))
             queue.replaceSource(USER_ID, "album", candidates("b", "c"))
@@ -63,8 +84,8 @@ class ProtonThumbnailQueueTest {
 
     @Test
     fun removingNewerSourceRestoresRemainingSourcesCaptureTime() =
-        runBlocking {
-            val queue = ProtonThumbnailQueue(FakeStore(), FakeClock())
+        runTest {
+            val queue = queue(FakeStore(), FakeClock())
             queue.replaceSource(USER_ID, "timeline", listOf(candidate("shared", 100), candidate("other", 200)))
             queue.replaceSource(USER_ID, "album", listOf(candidate("shared", 300)))
             val initiallyClaimed = queue.claimReady(USER_ID, limit = 1)
@@ -78,9 +99,9 @@ class ProtonThumbnailQueueTest {
 
     @Test
     fun aFailedItemIsDeferredWithoutBlockingTheNextNewestThumbnail() =
-        runBlocking {
+        runTest {
             val clock = FakeClock()
-            val queue = ProtonThumbnailQueue(FakeStore(), clock)
+            val queue = queue(FakeStore(), clock)
             queue.replaceSource(
                 USER_ID,
                 "timeline",
@@ -99,8 +120,8 @@ class ProtonThumbnailQueueTest {
 
     @Test
     fun invalidatedThumbnailIsRestoredForImmediateDownloadAtItsCaptureTime() =
-        runBlocking {
-            val queue = ProtonThumbnailQueue(FakeStore(), FakeClock())
+        runTest {
+            val queue = queue(FakeStore(), FakeClock())
             queue.replaceSource(USER_ID, "timeline", listOf(candidate("photo", 200)))
             queue.settle(USER_ID, setOf("photo"), emptySet())
 
@@ -114,8 +135,8 @@ class ProtonThumbnailQueueTest {
 
     @Test
     fun claimedBatchesDoNotDuplicateInFlightWork() =
-        runBlocking {
-            val queue = ProtonThumbnailQueue(FakeStore(), FakeClock())
+        runTest {
+            val queue = queue(FakeStore(), FakeClock())
             queue.replaceSource(USER_ID, "timeline", candidates("a", "b", "c"))
 
             val first = queue.claimReady(USER_ID, limit = 2)
@@ -128,8 +149,8 @@ class ProtonThumbnailQueueTest {
 
     @Test
     fun releasedClaimsCanBeSelectedAgain() =
-        runBlocking {
-            val queue = ProtonThumbnailQueue(FakeStore(), FakeClock())
+        runTest {
+            val queue = queue(FakeStore(), FakeClock())
             queue.replaceSource(USER_ID, "timeline", candidates("photo"))
             val claimed = queue.claimReady(USER_ID, limit = 1)
 
@@ -139,13 +160,13 @@ class ProtonThumbnailQueueTest {
         }
 
     @Test
-    fun settlingABatchPersistsSuccessAndFailureTogether() =
-        runBlocking {
+    fun settlingABatchIsWrittenOnceAfterTheFlushDelay() =
+        runTest {
             val store = FakeStore()
             val clock = FakeClock()
-            val queue = ProtonThumbnailQueue(store, clock)
-            queue.replaceSource(USER_ID, "timeline", candidates("success", "failure"))
-            queue.claimReady(USER_ID, limit = 2)
+            val queue = queue(store, clock)
+            queue.replaceSource(USER_ID, "timeline", candidates("success", "failure", "later"))
+            queue.claimReady(USER_ID, limit = 3)
             val writesBeforeSettlement = store.writeCount
 
             val completed =
@@ -154,18 +175,79 @@ class ProtonThumbnailQueueTest {
                     successfulNodeUids = setOf("success"),
                     failedNodeUids = setOf("failure"),
                 )
+            queue.settle(USER_ID, successfulNodeUids = setOf("later"), failedNodeUids = emptySet())
 
             assertEquals(listOf("success"), completed.map { it.nodeUid })
+            assertEquals(writesBeforeSettlement, store.writeCount)
+            advanceTimeBy(ProtonQueueFlushPolicy.FLUSH_DELAY_MILLIS)
+            runCurrent()
             assertEquals(writesBeforeSettlement + 1, store.writeCount)
+            assertEquals(listOf("failure"), store.entries.getValue(USER_ID).map { it.nodeUid })
             assertEquals(emptyList<ProtonThumbnailQueueEntry>(), queue.claimReady(USER_ID, limit = 1))
             clock.value += 30_000L
             assertEquals("failure", queue.claimReady(USER_ID, limit = 1).single().nodeUid)
         }
 
     @Test
+    fun flushingWritesPendingChangesAtOnceAndCancelsTheScheduledWrite() =
+        runTest {
+            val store = FakeStore()
+            val queue = queue(store, FakeClock())
+            queue.replaceSource(USER_ID, "timeline", candidates("a", "b"))
+            queue.claimReady(USER_ID, limit = 2)
+            val writesBeforeSettlement = store.writeCount
+            queue.settle(USER_ID, setOf("a"), emptySet())
+
+            queue.flush(USER_ID)
+
+            assertEquals(writesBeforeSettlement + 1, store.writeCount)
+            assertEquals(listOf("b"), store.entries.getValue(USER_ID).map { it.nodeUid })
+            advanceTimeBy(ProtonQueueFlushPolicy.FLUSH_DELAY_MILLIS)
+            runCurrent()
+            assertEquals(writesBeforeSettlement + 1, store.writeCount)
+            queue.flush(USER_ID)
+            assertEquals(writesBeforeSettlement + 1, store.writeCount)
+        }
+
+    @Test
+    fun manySettlesBringTheWriteForward() =
+        runTest {
+            val store = FakeStore()
+            val queue = queue(store, FakeClock())
+            val nodeUids = (1..ProtonQueueFlushPolicy.MAX_UNFLUSHED_CHANGES).map { "photo-$it" }
+            queue.replaceSource(USER_ID, "timeline", candidates(*nodeUids.toTypedArray()))
+            queue.claimReady(USER_ID, limit = nodeUids.size)
+            val writesBeforeSettlement = store.writeCount
+
+            nodeUids.forEach { nodeUid -> queue.settle(USER_ID, setOf(nodeUid), emptySet()) }
+            runCurrent()
+
+            assertEquals(writesBeforeSettlement + 1, store.writeCount)
+            assertEquals(emptyList<ProtonThumbnailQueueEntry>(), store.entries.getValue(USER_ID))
+        }
+
+    @Test
+    fun forgettingAUserDiscardsItsPendingWrite() =
+        runTest {
+            val store = FakeStore()
+            val queue = queue(store, FakeClock())
+            queue.replaceSource(USER_ID, "timeline", candidates("a"))
+            queue.claimReady(USER_ID, limit = 1)
+            val writesBeforeSettlement = store.writeCount
+            queue.settle(USER_ID, setOf("a"), emptySet())
+
+            queue.forget(USER_ID)
+            advanceTimeBy(ProtonQueueFlushPolicy.FLUSH_DELAY_MILLIS)
+            runCurrent()
+            queue.flush(USER_ID)
+
+            assertEquals(writesBeforeSettlement, store.writeCount)
+        }
+
+    @Test
     fun settlingUsesSourcesAddedWhileAThumbnailWasInFlight() =
-        runBlocking {
-            val queue = ProtonThumbnailQueue(FakeStore(), FakeClock())
+        runTest {
+            val queue = queue(FakeStore(), FakeClock())
             queue.replaceSource(USER_ID, "timeline", candidates("photo"))
             queue.claimReady(USER_ID, limit = 1)
             queue.replaceSource(USER_ID, "album:one", candidates("photo"))
@@ -177,19 +259,19 @@ class ProtonThumbnailQueueTest {
 
     @Test
     fun pendingQueueSurvivesCreatingANewQueueInstance() =
-        runBlocking {
+        runTest {
             val store = FakeStore()
-            ProtonThumbnailQueue(store, FakeClock()).replaceSource(USER_ID, "timeline", candidates("photo"))
+            queue(store, FakeClock()).replaceSource(USER_ID, "timeline", candidates("photo"))
 
-            val restored = ProtonThumbnailQueue(store, FakeClock())
+            val restored = queue(store, FakeClock())
 
             assertEquals("photo", restored.claimReady(USER_ID, limit = 1).single().nodeUid)
         }
 
     @Test
     fun pendingCountIncludesClaimedAndDelayedWorkUntilItSettles() =
-        runBlocking {
-            val queue = ProtonThumbnailQueue(FakeStore(), FakeClock())
+        runTest {
+            val queue = queue(FakeStore(), FakeClock())
             queue.replaceSource(USER_ID, "timeline", candidates("claimed", "delayed"))
             queue.claimReady(USER_ID, limit = 1)
             queue.settle(USER_ID, emptySet(), setOf("delayed"))
@@ -202,9 +284,9 @@ class ProtonThumbnailQueueTest {
 
     @Test
     fun deletedAlbumsNoLongerKeepTheirThumbnailWork() =
-        runBlocking {
+        runTest {
             val store = FakeStore()
-            val queue = ProtonThumbnailQueue(store, FakeClock())
+            val queue = queue(store, FakeClock())
             queue.replaceSource(USER_ID, "album:kept", candidates("kept-photo"))
             queue.replaceSource(USER_ID, "album:deleted", candidates("deleted-photo"))
 
@@ -215,9 +297,9 @@ class ProtonThumbnailQueueTest {
 
     @Test
     fun replacingAlbumCoversPreservesTimelineWork() =
-        runBlocking {
+        runTest {
             val store = FakeStore()
-            val queue = ProtonThumbnailQueue(store, FakeClock())
+            val queue = queue(store, FakeClock())
             queue.replaceSource(USER_ID, "timeline", candidates("timeline-photo"))
             queue.replaceSource(USER_ID, "album-covers", candidates("old-cover"))
 
@@ -236,25 +318,12 @@ class ProtonThumbnailQueueTest {
             )
         }
 
-    private fun candidate(
-        nodeUid: String,
-        captureTimeEpochSeconds: Long,
-    ) = ProtonThumbnailCandidate(nodeUid, captureTimeEpochSeconds)
-
-    private fun candidates(vararg nodeUids: String): List<ProtonThumbnailCandidate> =
-        nodeUids.mapIndexed { index, nodeUid -> candidate(nodeUid, nodeUids.size - index.toLong()) }
-
-    private fun entry(
-        store: FakeStore,
-        nodeUid: String,
-    ) = store.entries.getValue(USER_ID).single { it.nodeUid == nodeUid }
-
     @Test
     fun previewQueuePersistsSeparatelyFromTheThumbnailQueue() =
-        runBlocking {
+        runTest {
             val store = FakeStore()
-            val thumbnails = ProtonThumbnailQueue(store, FakeClock(), ProtonQueueName.THUMBNAILS)
-            val previews = ProtonThumbnailQueue(store, FakeClock(), ProtonQueueName.PREVIEWS)
+            val thumbnails = queue(store, FakeClock(), ProtonQueueName.THUMBNAILS)
+            val previews = queue(store, FakeClock(), ProtonQueueName.PREVIEWS)
 
             thumbnails.replaceSource(USER_ID, "timeline", candidates("thumb"))
             previews.replaceSource(USER_ID, "timeline-previews", candidates("preview"))
@@ -270,9 +339,9 @@ class ProtonThumbnailQueueTest {
 
     @Test
     fun theDefaultQueueIsTheThumbnailQueue() =
-        runBlocking {
+        runTest {
             val store = FakeStore()
-            ProtonThumbnailQueue(store, FakeClock()).replaceSource(USER_ID, "timeline", candidates("photo"))
+            queue(store, FakeClock()).replaceSource(USER_ID, "timeline", candidates("photo"))
 
             assertEquals(listOf("photo"), store.entries.getValue(USER_ID).map { it.nodeUid })
             assertEquals(null, store.previewEntries[USER_ID])
@@ -280,10 +349,10 @@ class ProtonThumbnailQueueTest {
 
     @Test
     fun anEntryIsDroppedAfterTheLastAllowedRetry() =
-        runBlocking {
+        runTest {
             val store = FakeStore()
             val clock = FakeClock()
-            val queue = ProtonThumbnailQueue(store, clock)
+            val queue = queue(store, clock)
             queue.replaceSource(USER_ID, "timeline", candidates("stubborn"))
 
             repeat(ProtonThumbnailQueue.MAX_RETRY_COUNT - 1) {
@@ -295,10 +364,30 @@ class ProtonThumbnailQueueTest {
 
             queue.claimReady(USER_ID, limit = 1)
             queue.settle(USER_ID, emptySet(), setOf("stubborn"))
+            queue.flush(USER_ID)
 
             assertEquals(0, queue.pendingCount(USER_ID))
             assertEquals(emptyList<ProtonThumbnailQueueEntry>(), store.entries.getValue(USER_ID))
         }
+
+    private fun TestScope.queue(
+        store: FakeStore,
+        clock: FakeClock,
+        name: ProtonQueueName = ProtonQueueName.THUMBNAILS,
+    ) = ProtonThumbnailQueue(store, clock, name, backgroundScope)
+
+    private fun candidate(
+        nodeUid: String,
+        captureTimeEpochSeconds: Long,
+    ) = ProtonThumbnailCandidate(nodeUid, captureTimeEpochSeconds)
+
+    private fun candidates(vararg nodeUids: String): List<ProtonThumbnailCandidate> =
+        nodeUids.mapIndexed { index, nodeUid -> candidate(nodeUid, nodeUids.size - index.toLong()) }
+
+    private fun entry(
+        store: FakeStore,
+        nodeUid: String,
+    ) = store.entries.getValue(USER_ID).single { it.nodeUid == nodeUid }
 
     private class FakeStore : ProtonThumbnailQueueStore {
         val entries = mutableMapOf<String, List<ProtonThumbnailQueueEntry>>()

@@ -293,9 +293,11 @@ class ProtonPhotoGateway
             withContext(Dispatchers.IO) {
                 sessionGuard.disconnect(userId) { wasActive ->
                     clientProvider.disconnect(userId)
-                    cache.clearUser(userId.id)
+                    // The queues drop their pending writes first so none can land after the
+                    // user's directory is gone.
                     thumbnailQueue.forget(userId.id)
                     previewQueue.forget(userId.id)
+                    cache.clearUser(userId.id)
                     originals.forgetUser(userId)
                     if (wasActive) {
                         timeline.reset()

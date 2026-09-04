@@ -5,8 +5,10 @@ import dagger.Module
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import me.proton.core.domain.entity.UserId
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -78,25 +80,36 @@ internal class ProtonRenditionSync
                         previewQueue.claimReady(userId.id, ProtonThumbnailDownloadPolicy.BACKGROUND_CLAIM_SIZE)
                     },
                 )
-            return when (batch?.queue) {
-                ProtonQueueName.THUMBNAILS -> {
-                    processThumbnailBatch(userId, batch.entries, onProgress)
-                }
+            try {
+                return when (batch?.queue) {
+                    ProtonQueueName.THUMBNAILS -> {
+                        processThumbnailBatch(userId, batch.entries, onProgress)
+                    }
 
-                ProtonQueueName.PREVIEWS -> {
-                    processPreviewBatch(userId, batch.entries, onProgress)
-                }
+                    ProtonQueueName.PREVIEWS -> {
+                        processPreviewBatch(userId, batch.entries, onProgress)
+                    }
 
-                null -> {
-                    ProtonBackgroundBatchPolicy.idle(
-                        thumbnailsPending = thumbnailQueue.hasPending(userId.id),
-                        previewsPending = previewQueue.hasPending(userId.id),
-                        thumbnailRetryDelayMillis = thumbnailQueue.retryDelayMillis(userId.id),
-                        previewRetryDelayMillis = previewQueue.retryDelayMillis(userId.id),
-                        allowPreviews = allowPreviews,
-                    )
+                    null -> {
+                        ProtonBackgroundBatchPolicy.idle(
+                            thumbnailsPending = thumbnailQueue.hasPending(userId.id),
+                            previewsPending = previewQueue.hasPending(userId.id),
+                            thumbnailRetryDelayMillis = thumbnailQueue.retryDelayMillis(userId.id),
+                            previewRetryDelayMillis = previewQueue.retryDelayMillis(userId.id),
+                            allowPreviews = allowPreviews,
+                        )
+                    }
                 }
+            } finally {
+                // Settles are coalesced in memory while a batch runs; the end of every step, a
+                // stopped worker and the run deadline included, is where they must reach disk.
+                withContext(NonCancellable) { flushQueues(userId) }
             }
+        }
+
+        suspend fun flushQueues(userId: UserId) {
+            thumbnailQueue.flush(userId.id)
+            previewQueue.flush(userId.id)
         }
 
         suspend fun progress(userId: UserId): ProtonThumbnailWorkProgress =

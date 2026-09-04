@@ -2,6 +2,7 @@ package com.bownee.lenswave.proton
 
 import com.bownee.lenswave.LenswaveClock
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.TestScope
 import me.proton.core.domain.entity.UserId
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -11,8 +12,9 @@ import org.junit.Test
 class ProtonRenditionSyncTest {
     private val clock = FakeClock()
     private val store = FakeStore()
-    private val thumbnails = ProtonThumbnailQueue(store, clock, ProtonQueueName.THUMBNAILS)
-    private val previews = ProtonThumbnailQueue(store, clock, ProtonQueueName.PREVIEWS)
+    private val flushScope = TestScope().backgroundScope
+    private val thumbnails = ProtonThumbnailQueue(store, clock, ProtonQueueName.THUMBNAILS, flushScope)
+    private val previews = ProtonThumbnailQueue(store, clock, ProtonQueueName.PREVIEWS, flushScope)
     private val source = FakeSource()
     private val availability = FakeAvailability()
     private val sync = ProtonRenditionSync(source, availability, thumbnails, previews)
