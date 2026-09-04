@@ -1,13 +1,18 @@
 package com.bownee.lenswave.proton
 
 import com.bownee.lenswave.LenswaveOperation
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import me.proton.core.domain.entity.UserId
 import me.proton.drive.sdk.entity.AlbumNode
 import me.proton.drive.sdk.entity.NodeUid
@@ -74,10 +79,17 @@ internal class ProtonAlbumRepository
                 enumerate = {
                     val photosClient = clientProvider.get(userId)
                     val sharedNodeUids = photosClient.enumerateSharedWithMeNodeUids().toList()
-                    (photosClient.enumerateAlbumNodeUids().toList() + sharedNodeUids)
-                        .distinctBy(NodeUid::value)
-                        .map { nodeUid -> loadAlbum(photosClient, userId, nodeUid) }
-                        .sortedByDescending(ProtonAlbum::lastActivityEpochSeconds)
+                    val albumNodeUids =
+                        (photosClient.enumerateAlbumNodeUids().toList() + sharedNodeUids).distinctBy(NodeUid::value)
+                    // Each album is one round trip; a few in flight at a time keeps the listing
+                    // from growing linearly with the album count without flooding the SDK.
+                    val inFlight = Semaphore(ALBUM_LOAD_PARALLELISM)
+                    coroutineScope {
+                        albumNodeUids
+                            .map { nodeUid ->
+                                async { inFlight.withPermit { loadAlbum(photosClient, userId, nodeUid) } }
+                            }.awaitAll()
+                    }.sortedByDescending(ProtonAlbum::lastActivityEpochSeconds)
                 },
                 commit = { albums ->
                     cache.reconcileAlbums(userId.id, albums.map(ProtonAlbum::nodeUid))
@@ -302,5 +314,9 @@ internal class ProtonAlbumRepository
                     hasLoaded = hasLoaded,
                     syncing = syncing,
                 )
+        }
+
+        private companion object {
+            const val ALBUM_LOAD_PARALLELISM = 4
         }
     }
