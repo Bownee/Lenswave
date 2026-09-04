@@ -68,6 +68,55 @@ class ProtonThumbnailDownloadPolicyTest {
     }
 
     @Test
+    fun passWaitsTheWholeDeadlineForTheFirstAnswer() {
+        val deadline = ProtonThumbnailDownloadPolicy.SDK_PASS_TIMEOUT_MILLIS
+
+        assertEquals(
+            deadline,
+            ProtonThumbnailDownloadPolicy.answerWaitMillis(ThumbnailType.THUMBNAIL, answered = false, deadline),
+        )
+    }
+
+    @Test
+    fun previewPassGivesUpOnTheFirstAnswerBeforeItsDeadline() {
+        val firstAnswer = ProtonThumbnailDownloadPolicy.PREVIEW_FIRST_ANSWER_TIMEOUT_MILLIS
+
+        assertTrue(firstAnswer < ProtonThumbnailDownloadPolicy.PREVIEW_PASS_TIMEOUT_MILLIS)
+        assertTrue(firstAnswer > ProtonThumbnailDownloadPolicy.idleTimeoutMillis(ThumbnailType.PREVIEW))
+        assertEquals(
+            firstAnswer,
+            ProtonThumbnailDownloadPolicy.answerWaitMillis(
+                ThumbnailType.PREVIEW,
+                answered = false,
+                ProtonThumbnailDownloadPolicy.PREVIEW_PASS_TIMEOUT_MILLIS,
+            ),
+        )
+        // The preview fetched in place of a thumbnail runs under the shorter thumbnail deadline.
+        assertEquals(
+            ProtonThumbnailDownloadPolicy.SDK_PASS_TIMEOUT_MILLIS,
+            ProtonThumbnailDownloadPolicy.answerWaitMillis(
+                ThumbnailType.PREVIEW,
+                answered = false,
+                ProtonThumbnailDownloadPolicy.SDK_PASS_TIMEOUT_MILLIS,
+            ),
+        )
+    }
+
+    @Test
+    fun idleWindowAppliesOnceTheSdkHasAnswered() {
+        val deadline = ProtonThumbnailDownloadPolicy.SDK_PASS_TIMEOUT_MILLIS
+
+        assertEquals(
+            ProtonThumbnailDownloadPolicy.idleTimeoutMillis(ThumbnailType.THUMBNAIL),
+            ProtonThumbnailDownloadPolicy.answerWaitMillis(ThumbnailType.THUMBNAIL, answered = true, deadline),
+        )
+        assertEquals(
+            ProtonThumbnailDownloadPolicy.idleTimeoutMillis(ThumbnailType.PREVIEW),
+            ProtonThumbnailDownloadPolicy.answerWaitMillis(ThumbnailType.PREVIEW, answered = true, deadline),
+        )
+    }
+
+    @Test
     fun idleTimeoutIsLongerForPreviewsButBelowEachDeadline() {
         val previewIdle = ProtonThumbnailDownloadPolicy.idleTimeoutMillis(ThumbnailType.PREVIEW)
         val thumbnailIdle = ProtonThumbnailDownloadPolicy.idleTimeoutMillis(ThumbnailType.THUMBNAIL)
