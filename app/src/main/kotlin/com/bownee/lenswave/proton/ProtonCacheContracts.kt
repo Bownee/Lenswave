@@ -160,9 +160,14 @@ interface ProtonMediaCache {
 
     fun previewCount(userId: String): Int
 
+    /**
+     * The cached original decrypted to a plaintext file; null when not cached. [shouldContinue]
+     * is asked between decrypt chunks and a false answer aborts with a cancellation exception.
+     */
     fun readOriginal(
         userId: String,
         nodeUid: String,
+        shouldContinue: () -> Boolean = { true },
     ): File?
 
     fun createOriginalTarget(

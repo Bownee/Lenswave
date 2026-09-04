@@ -6,6 +6,7 @@ import com.bownee.lenswave.storage.AtomicFileStore
 import com.bownee.lenswave.storage.SecureFileStore
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
+import java.util.concurrent.CancellationException
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -45,10 +46,17 @@ internal class ProtonOriginalStore
          */
         private val trackedBytes = ConcurrentHashMap<String, Long>()
 
-        /** The plaintext copy the viewer reads, decrypting it on demand; null when nothing is cached. */
+        /**
+         * The plaintext copy the viewer reads, decrypting it on demand; null when nothing is cached.
+         *
+         * [shouldContinue] is consulted between decrypt chunks. When it turns false the decrypt
+         * stops with a [CancellationException]; the encrypted original is kept, because the caller
+         * lost interest, not the file its integrity. Callers outside a coroutine leave the default.
+         */
         fun read(
             userId: String,
             nodeUid: String,
+            shouldContinue: () -> Boolean = { true },
         ): File? {
             val file = file(userId, nodeUid)
             if (!file.isFile || file.length() <= 0L) {
@@ -61,13 +69,16 @@ internal class ProtonOriginalStore
                 file.setLastModified(clock.nowMillis())
                 return materialized
             }
-            return runCatching {
+            return try {
                 materialized.delete()
-                secureFiles.decryptFile(scope(userId), file, materialized)
+                secureFiles.decryptFile(scope(userId), file, materialized, shouldContinue)
                 file.setLastModified(clock.nowMillis())
                 materialized.setLastModified(clock.nowMillis())
                 materialized
-            }.getOrElse {
+            } catch (interrupted: CancellationException) {
+                materialized.delete()
+                throw interrupted
+            } catch (_: Exception) {
                 materialized.delete()
                 deleteTracked(userId, file)
                 null

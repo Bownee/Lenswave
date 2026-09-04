@@ -317,7 +317,8 @@ internal class ProtonPhotoCache
         override fun readOriginal(
             userId: String,
             nodeUid: String,
-        ): File? = originals.read(userId, nodeUid)
+            shouldContinue: () -> Boolean,
+        ): File? = originals.read(userId, nodeUid, shouldContinue)
 
         override fun createOriginalTarget(
             userId: String,

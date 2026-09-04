@@ -117,11 +117,15 @@ internal class ProtonOriginalDownloads
             }
         }
 
-        /** The cached original, decrypted on demand; never waits on a transfer, of this node or any other. */
+        /**
+         * The cached original, decrypted on demand; never waits on a transfer, of this node or any
+         * other. [shouldContinue] lets a caller that lost interest stop the decrypt between chunks.
+         */
         fun prepareCachedOriginal(
             userId: UserId,
             nodeUid: String,
-        ): File? = cache.readOriginal(userId.id, nodeUid)
+            shouldContinue: () -> Boolean = { true },
+        ): File? = cache.readOriginal(userId.id, nodeUid, shouldContinue)
 
         private suspend fun downloadOriginalInForeground(
             userId: UserId,

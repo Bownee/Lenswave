@@ -103,10 +103,16 @@ class SecureFileStore(
         }
     }
 
+    /**
+     * Decrypts [encrypted] into [target] through a temporary file. [shouldContinue] is asked before
+     * every chunk; once it returns false the copy stops with a [CopyInterruptedException], nothing
+     * is committed and the partial plaintext is removed.
+     */
     fun decryptFile(
         scope: String,
         encrypted: File,
         target: File,
+        shouldContinue: () -> Boolean = { true },
     ) {
         target.parentFile?.mkdirs()
         val temporary = File.createTempFile("${target.name}.", ".part", target.parentFile)
@@ -114,7 +120,9 @@ class SecureFileStore(
             FileInputStream(encrypted).use { rawInput ->
                 val cipher = readHeader(scope, rawInput)
                 CipherInputStream(BufferedInputStream(rawInput), cipher).use { decryptedInput ->
-                    BufferedOutputStream(FileOutputStream(temporary)).use(decryptedInput::copyTo)
+                    BufferedOutputStream(FileOutputStream(temporary)).use { output ->
+                        InterruptibleCopy.copy(decryptedInput, output, shouldContinue)
+                    }
                 }
             }
             AtomicFileStore.commit(temporary, target, "Could not materialize encrypted photo")

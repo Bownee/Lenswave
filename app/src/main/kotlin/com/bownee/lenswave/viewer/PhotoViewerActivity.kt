@@ -837,8 +837,8 @@ class PhotoViewerActivity : FragmentActivity() {
         prefetchJob?.cancel()
         prefetchJob =
             lifecycleScope.launch(Dispatchers.IO) {
-                // The decrypt itself cannot be interrupted, so the only cheap place to honour a
-                // cancellation from beginNavigation is before it starts.
+                // The decrypt watches this job between chunks, so a cancellation from
+                // beginNavigation stops it promptly whether it has started or not.
                 ensureActive()
                 runCatching {
                     originalMedia.prepareCachedOriginal(UserId(neighbour.userId), neighbour.nodeUid)

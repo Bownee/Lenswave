@@ -208,7 +208,12 @@ class ProtonPhotoGateway
             nodeUid: String,
         ): File? =
             withContext(Dispatchers.IO) {
-                sessionGuard.withActiveSession(userId) { originals.prepareCachedOriginal(userId, nodeUid) }
+                val job = currentCoroutineContext()[Job]
+                sessionGuard.withActiveSession(userId) {
+                    // A prefetch the viewer abandoned stops between decrypt chunks with a
+                    // cancellation, so the photo on screen gets the disk and the CPU back.
+                    originals.prepareCachedOriginal(userId, nodeUid) { job?.isActive != false }
+                }
             }
 
         override suspend fun downloadOriginalProgressively(
