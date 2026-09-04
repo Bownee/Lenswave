@@ -147,9 +147,9 @@ internal class ProtonRenditionDownloads
                 substituted.forEach(failures::remove)
                 onProgress(ThumbnailBatchResult(substituted, emptyMap()))
             }
-            val finalFailures = failures.filterKeys { nodeUid -> nodeUid !in successful }
-            if (finalFailures.isNotEmpty()) onProgress(ThumbnailBatchResult(emptySet(), finalFailures))
-            return ThumbnailBatchResult(successful, finalFailures)
+            // Failures are reported once, in the result; reporting them through onProgress as
+            // well made the caller settle each one twice per pass, doubling the backoff steps.
+            return ThumbnailBatchResult(successful, failures.filterKeys { nodeUid -> nodeUid !in successful })
         }
 
         private suspend fun downloadChunks(
