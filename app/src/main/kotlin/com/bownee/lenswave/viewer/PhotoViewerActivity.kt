@@ -307,11 +307,21 @@ class PhotoViewerActivity :
         setResult(Activity.RESULT_OK, resultIntent.putExtra(extra, true))
     }
 
-    /** Applies the outcome of every favourite or trash call, including one that finished while recreating. */
+    /**
+     * Applies the outcome of every favourite or trash call on a photo of this viewer, including
+     * one that finished while recreating. Outcomes of photos outside its window are left in the
+     * coordinator for the gallery (see [ViewerOutcomePolicy]); an outcome taken here is recorded
+     * in the result before anything else, so the gallery's refresh cannot be lost to a finish.
+     */
     private fun observeMutationOutcomes() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                mutationCoordinator.outcomes.collect { outcomes -> outcomes.forEach(::applyMutationOutcome) }
+                mutationCoordinator.outcomes.collect { outcomes ->
+                    outcomes
+                        .filter { outcome ->
+                            ViewerOutcomePolicy.consumes(outcome.stableId, request.stableId, navigationRequests)
+                        }.forEach(::applyMutationOutcome)
+                }
             }
         }
     }
