@@ -77,14 +77,6 @@ class GalleryViewModel
             requestRefresh(manual = false)
         }
 
-        fun openPhotosTab() {
-            selectDestination(GalleryDestination.Timeline)
-        }
-
-        fun openLibrary() {
-            selectDestination(GalleryDestination.Library)
-        }
-
         fun navigateUp() {
             GalleryNavigationPolicy.parent(destination)?.let(::selectDestination)
         }
