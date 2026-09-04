@@ -257,7 +257,8 @@ class GalleryListAdapter(
         LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            val gap = context.dp(PHOTO_GAP_DP)
+            // Half of the old 3dp gap; dp() rounds whole values, so the pixel size is halved instead.
+            val gap = (context.dp((PHOTO_GAP_DP * 2).toInt()) / 2).coerceAtLeast(1)
             layoutParams =
                 AbsListView.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
@@ -401,7 +402,7 @@ class GalleryListAdapter(
         const val ENTRY_HEIGHT_DP = 60
         const val ENTRY_GAP_DP = 10
         const val ALBUM_COVER_ASPECT = 0.82f
-        const val PHOTO_GAP_DP = 3
+        const val PHOTO_GAP_DP = 1.5f
         const val ALBUM_GAP_DP = 12
     }
 }
