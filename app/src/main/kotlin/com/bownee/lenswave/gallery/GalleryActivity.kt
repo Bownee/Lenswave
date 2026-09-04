@@ -34,7 +34,6 @@ import com.bownee.lenswave.gallery.GalleryNavigationPolicy
 import com.bownee.lenswave.gallery.GalleryNotificationPermissionPrompter
 import com.bownee.lenswave.gallery.GalleryRowSet
 import com.bownee.lenswave.gallery.GalleryScrollPosition
-import com.bownee.lenswave.gallery.GalleryScrollPositionStore
 import com.bownee.lenswave.gallery.GallerySettingsPresenter
 import com.bownee.lenswave.gallery.GalleryThumbnailCacheIdentity
 import com.bownee.lenswave.gallery.GalleryThumbnailCachePolicy
@@ -114,7 +113,6 @@ class GalleryActivity :
                 groupingGeneration.update { generation -> generation + 1 }
             }
         }
-    private val scrollPositions = GalleryScrollPositionStore()
     private var pendingScrollRestore: GalleryDestination? = null
     private var safeBottom = 0
     private var thumbnailCacheIdentity: GalleryThumbnailCacheIdentity? = null
@@ -202,7 +200,16 @@ class GalleryActivity :
 
     override fun onSaveInstanceState(outState: Bundle) {
         updatePresenter.save(outState)
+        saveScrollPosition()
         super.onSaveInstanceState(outState)
+    }
+
+    /** Hands the position of the page on screen to the view model, which outlives this activity. */
+    private fun saveScrollPosition() {
+        val destination = renderedDestination ?: return
+        // A restore still pending means the list does not show that page's position yet.
+        if (pendingScrollRestore == destination) return
+        screen.captureScrollPosition()?.let { position -> viewModel.saveScrollPosition(destination, position) }
     }
 
     override fun onUpdateRequested() = updatePresenter.onUpdateRequested()
@@ -272,11 +279,7 @@ class GalleryActivity :
             val rows = buildRows(state.content)
             if (destinationChanged) {
                 // The list still shows the previous page here, so its position can be captured.
-                renderedDestination?.let { previousDestination ->
-                    screen.captureScrollPosition()?.let { position ->
-                        scrollPositions.save(previousDestination, position)
-                    }
-                }
+                saveScrollPosition()
                 pendingScrollRestore = state.destination
             }
             adapter.submitRows(rows)
@@ -448,7 +451,7 @@ class GalleryActivity :
     private fun restorePendingScrollPosition(state: GalleryUiState) {
         val destination = pendingScrollRestore ?: return
         if (destination != state.destination) return
-        val savedPosition = scrollPositions.positionFor(destination)
+        val savedPosition = viewModel.scrollPositions.positionFor(destination)
         if (savedPosition != null &&
             savedPosition.firstVisiblePosition > 0 &&
             adapter.count == 0 &&

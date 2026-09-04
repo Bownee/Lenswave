@@ -86,6 +86,13 @@ class GalleryViewModel internal constructor(
     private var lastPeriodicCheckMillis: Long? = null
 
     /**
+     * Where each page was scrolled to. Owned here so a configuration change keeps every page's
+     * position; the current page's position is also written to the saved state, so a process
+     * death restores the page the user was looking at where they left it.
+     */
+    internal val scrollPositions = GalleryScrollPositionStore()
+
+    /**
      * Everything the UI state depends on that is owned by this view model. It joins the
      * repository flows below; a change to any of them recomputes the state once, off the
      * main thread, and bursts of changes collapse into the latest one.
@@ -132,7 +139,17 @@ class GalleryViewModel internal constructor(
             )
 
     init {
+        restoreScrollPosition(savedStateHandle)?.let { position -> scrollPositions.save(destination, position) }
         observeAccountSession()
+    }
+
+    /** Records where [pageDestination] is scrolled to; the current page's position also goes to the saved state. */
+    internal fun saveScrollPosition(
+        pageDestination: GalleryDestination,
+        position: GalleryScrollPosition,
+    ) {
+        scrollPositions.save(pageDestination, position)
+        if (pageDestination == destination) persistScrollPosition()
     }
 
     fun selectDestination(newDestination: GalleryDestination) {
@@ -372,8 +389,21 @@ class GalleryViewModel internal constructor(
         savedStateHandle[STATE_ALBUM_UID] = stored.albumUid
         savedStateHandle[STATE_ALBUM_NAME] = stored.albumName
         savedStateHandle[STATE_TAG] = stored.tag
+        persistScrollPosition()
         // A cold start reopens the tab root, never a deep collection or album.
         navigationStore.write(GalleryNavigationPolicy.root(destination))
+    }
+
+    /** The saved state carries the position of the current page only; it follows the destination. */
+    private fun persistScrollPosition() {
+        val position = scrollPositions.positionFor(destination)
+        if (position == null) {
+            savedStateHandle.remove<Int>(STATE_SCROLL_FIRST_VISIBLE)
+            savedStateHandle.remove<Int>(STATE_SCROLL_TOP_OFFSET)
+        } else {
+            savedStateHandle[STATE_SCROLL_FIRST_VISIBLE] = position.firstVisiblePosition
+            savedStateHandle[STATE_SCROLL_TOP_OFFSET] = position.topOffset
+        }
     }
 
     private companion object {
@@ -381,6 +411,8 @@ class GalleryViewModel internal constructor(
         const val STATE_ALBUM_UID = "gallery.album-uid"
         const val STATE_ALBUM_NAME = "gallery.album-name"
         const val STATE_TAG = "gallery.proton-tag"
+        const val STATE_SCROLL_FIRST_VISIBLE = "gallery.scroll-first-visible"
+        const val STATE_SCROLL_TOP_OFFSET = "gallery.scroll-top-offset"
         const val UI_STATE_STOP_TIMEOUT_MILLIS = 5_000L
 
         private fun accountStatus(state: ProtonAccountSessionState): ProtonAccountStatus =
@@ -415,5 +447,11 @@ class GalleryViewModel internal constructor(
                     tag = state[STATE_TAG],
                 ),
             )
+
+        fun restoreScrollPosition(state: SavedStateHandle): GalleryScrollPosition? {
+            val firstVisible = state.get<Int>(STATE_SCROLL_FIRST_VISIBLE) ?: return null
+            val topOffset = state.get<Int>(STATE_SCROLL_TOP_OFFSET) ?: return null
+            return GalleryScrollPosition(firstVisiblePosition = firstVisible, topOffset = topOffset)
+        }
     }
 }

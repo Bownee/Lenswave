@@ -179,6 +179,48 @@ class GalleryViewModelTest {
         }
 
     @Test
+    fun `the current page's scroll position is saved to the state and seeds a restored view model`() =
+        runTest(dispatcher) {
+            val viewModel = connectedViewModel()
+
+            viewModel.saveScrollPosition(GalleryDestination.Library, GalleryScrollPosition(8, -3))
+            viewModel.saveScrollPosition(GalleryDestination.Timeline, GalleryScrollPosition(42, -17))
+
+            assertEquals(
+                GalleryScrollPosition(8, -3),
+                viewModel.scrollPositions.positionFor(GalleryDestination.Library),
+            )
+            assertEquals(42, savedState.get<Int>("gallery.scroll-first-visible"))
+            assertEquals(-17, savedState.get<Int>("gallery.scroll-top-offset"))
+
+            viewModel.selectDestination(GalleryDestination.Library)
+            runCurrent()
+            assertEquals(
+                "the saved state follows the destination",
+                8,
+                savedState.get<Int>("gallery.scroll-first-visible"),
+            )
+
+            viewModel.selectDestination(GalleryDestination.Tag(ProtonMediaTag.VIDEOS))
+            runCurrent()
+            assertNull(
+                "a page never scrolled has no saved position",
+                savedState.get<Int>("gallery.scroll-first-visible"),
+            )
+
+            savedState["gallery.destination"] = "proton-timeline"
+            savedState["gallery.scroll-first-visible"] = 42
+            savedState["gallery.scroll-top-offset"] = -17
+            val restored = viewModel()
+
+            assertEquals(
+                GalleryScrollPosition(42, -17),
+                restored.scrollPositions.positionFor(GalleryDestination.Timeline),
+            )
+            assertNull(restored.scrollPositions.positionFor(GalleryDestination.Library))
+        }
+
+    @Test
     fun `a manual refresh stays refreshing until the latest manual refresh has finished`() =
         runTest(dispatcher) {
             val viewModel = connectedViewModel()
