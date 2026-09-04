@@ -9,7 +9,8 @@ import androidx.media3.datasource.BaseDataSource
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSourceException
 import androidx.media3.datasource.DataSpec
-import com.bownee.lenswave.proton.ProtonOriginalStream
+import com.bownee.lenswave.LenswaveDiagnostics
+import com.bownee.lenswave.LenswaveOperation
 import java.io.RandomAccessFile
 import kotlin.math.min
 
@@ -26,24 +27,26 @@ internal class ProtonProgressiveDataSource(
     override fun open(dataSpec: DataSpec): Long {
         transferInitializing(dataSpec)
         val state = stream.awaitReadable(dataSpec.position)
-        if (state.complete && dataSpec.position > state.availableBytes) {
+        val remaining =
+            ProtonProgressiveReadPolicy.bytesRemaining(
+                position = dataSpec.position,
+                requestedLength = dataSpec.length,
+                availableBytes = state.availableBytes,
+                complete = state.complete,
+            )
+        if (remaining == null) {
+            // Worth a line in the log: this is what a truncated or wrongly sized download looks like.
+            LenswaveDiagnostics.reportState(
+                LenswaveOperation.VIDEO_PLAYBACK,
+                "open-beyond-end-position-${dataSpec.position}-available-${state.availableBytes}",
+                1,
+                1,
+            )
             throw DataSourceException(PlaybackException.ERROR_CODE_IO_READ_POSITION_OUT_OF_RANGE)
         }
         input = RandomAccessFile(stream.file, "r").apply { seek(dataSpec.position) }
         readPosition = dataSpec.position
-        // The SDK's progress total describes the encrypted transfer, not the decrypted file, so
-        // it must not bound the reads: a too-small total would end the stream early and fail the
-        // first playback. Only the finished file's real length is trusted.
-        bytesRemaining =
-            when {
-                dataSpec.length != C.LENGTH_UNSET.toLong() -> dataSpec.length
-                state.complete -> state.availableBytes - dataSpec.position
-                else -> C.LENGTH_UNSET.toLong()
-            }
-        if (bytesRemaining < 0L) {
-            closeInput()
-            throw DataSourceException(PlaybackException.ERROR_CODE_IO_READ_POSITION_OUT_OF_RANGE)
-        }
+        bytesRemaining = remaining
         opened = true
         transferStarted(dataSpec)
         return bytesRemaining

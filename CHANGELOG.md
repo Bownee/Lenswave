@@ -19,6 +19,9 @@ All notable changes to Lenswave. The format follows [Keep a Changelog](https://k
   you are swiping.
 
 ### Fixed
+- The first playback of a video that was not cached yet failed with "Could not play this video";
+  only the retry, served from the cache, worked. A length check mistook "length not known yet"
+  for a negative length.
 - The Proton session database is now keyed with the stored random passphrase. Earlier builds
   zeroed the passphrase before the database was opened, so it was effectively encrypted with a
   constant key. Existing databases are rekeyed once on first launch.
