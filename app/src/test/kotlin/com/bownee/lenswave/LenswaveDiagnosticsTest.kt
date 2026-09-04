@@ -21,6 +21,24 @@ class LenswaveDiagnosticsTest {
     }
 
     @Test
+    fun overlongOrUnsafeStateIsCutDownRatherThanRejected() {
+        val longState = "open-beyond-end-position-" + "9".repeat(60)
+
+        assertEquals(
+            "operation=video-playback state=${longState.take(64)} attempt=1 maximumAttempts=1",
+            LenswaveDiagnostics.stateSummary("video-playback", longState, 1, 1),
+        )
+        assertEquals(
+            "operation=video-playback state=user_data_line_break attempt=1 maximumAttempts=1",
+            LenswaveDiagnostics.stateSummary("video-playback", "user data\nline break", 1, 1),
+        )
+        assertEquals(
+            "operation=unknown state=unknown attempt=1 maximumAttempts=1",
+            LenswaveDiagnostics.stateSummary("", "", 1, 1),
+        )
+    }
+
+    @Test
     fun protonFailureIncludesOnlyStructuredNonSensitiveFields() {
         val innerError =
             ProtonSdkError(

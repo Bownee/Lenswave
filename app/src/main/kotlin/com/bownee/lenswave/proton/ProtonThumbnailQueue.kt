@@ -387,7 +387,11 @@ internal class ProtonThumbnailQueue(
                 // Forgotten meanwhile: the user's files are gone, and so is the reason to retry.
                 val state = persistence[userId] ?: return
                 state.consecutiveWriteFailures++
-                if (state.scheduledFlush == null) {
+                // A chain that has given up leaves the queue dirty; the next change re-arms it.
+                if (
+                    state.scheduledFlush == null &&
+                    ProtonQueueFlushPolicy.shouldRetryAfterFailedWrite(state.consecutiveWriteFailures)
+                ) {
                     val delayMillis = ProtonQueueFlushPolicy.retryDelayAfterFailedWrite(state.consecutiveWriteFailures)
                     state.scheduledFlush =
                         flushScope.launch {
@@ -407,6 +411,10 @@ internal class ProtonThumbnailQueue(
     ) {
         val state = persistence.getOrPut(userId, ::UserPersistence)
         state.generation += changes
+        // A change after the retry chain gave up starts a fresh, equally bounded chain.
+        if (!ProtonQueueFlushPolicy.shouldRetryAfterFailedWrite(state.consecutiveWriteFailures)) {
+            state.consecutiveWriteFailures = 0
+        }
         val unflushed = (state.generation - state.writtenGeneration).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
         val delayMillis =
             ProtonQueueFlushPolicy.flushDelayMillis(unflushed, flushScheduled = state.scheduledFlush != null)

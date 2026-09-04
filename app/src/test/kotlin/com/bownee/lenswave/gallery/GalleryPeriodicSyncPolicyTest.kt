@@ -1,7 +1,10 @@
 package com.bownee.lenswave.gallery
 
+import com.bownee.lenswave.proton.ProtonSyncSource
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.time.Duration
 
 class GalleryPeriodicSyncPolicyTest {
     @Test
@@ -46,6 +49,17 @@ class GalleryPeriodicSyncPolicyTest {
                 intervalMillis = 1_000L,
             ),
         )
+    }
+
+    @Test
+    fun `the interval is well above the freshness limit so ticks rarely re-enumerate`() {
+        val freshnessLimit = ProtonSyncSource.TIMELINE.maximumAgeMillis
+
+        assertTrue(GalleryPeriodicSyncPolicy.CHECK_INTERVAL_MILLIS >= freshnessLimit * 3)
+        assertTrue(GalleryPeriodicSyncPolicy.CHECK_INTERVAL_MILLIS >= Duration.ofMinutes(45).toMillis())
+        // A tick that lands within the freshness limit of a user-driven refresh is a no-op; the
+        // interval must leave room for that rather than aligning with the limit.
+        assertEquals(0L, GalleryPeriodicSyncPolicy.CHECK_INTERVAL_MILLIS % freshnessLimit)
     }
 
     @Test(expected = IllegalArgumentException::class)

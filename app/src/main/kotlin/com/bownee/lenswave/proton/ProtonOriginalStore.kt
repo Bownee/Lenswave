@@ -45,11 +45,12 @@ internal class ProtonOriginalStore
          * exact figure from its own listing.
          */
         private val trackedBytes = ConcurrentHashMap<String, Long>()
+        private val transientReadFailures = ProtonRenditionReadFailures()
 
         /**
          * The plaintext copy the viewer reads, decrypting it on demand; null when nothing is cached.
          *
-         * [shouldContinue] is consulted between decrypt chunks. When it turns false the decrypt
+         * [shouldContinue] is consulted between decrypt segments. When it turns false the decrypt
          * stops with a [CancellationException]; the encrypted original is kept, because the caller
          * lost interest, not the file its integrity. Callers outside a coroutine leave the default.
          */
@@ -72,15 +73,22 @@ internal class ProtonOriginalStore
             return try {
                 materialized.delete()
                 secureFiles.decryptFile(scope(userId), file, materialized, shouldContinue)
+                transientReadFailures.recovered()
                 file.setLastModified(clock.nowMillis())
                 materialized.setLastModified(clock.nowMillis())
                 materialized
             } catch (interrupted: CancellationException) {
                 materialized.delete()
                 throw interrupted
-            } catch (_: Exception) {
+            } catch (error: Exception) {
                 materialized.delete()
-                deleteTracked(userId, file)
+                // Only a provably bad original is dropped; a Keystore or I/O hiccup keeps the
+                // encrypted file, and the next open decrypts it again.
+                if (ProtonSnapshotCorruptionPolicy.isCorrupt(error)) {
+                    deleteTracked(userId, file)
+                } else {
+                    transientReadFailures.report(error)
+                }
                 null
             }
         }

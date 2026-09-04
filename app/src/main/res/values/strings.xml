@@ -20,6 +20,8 @@
     <string name="connect_proton">Connect Proton</string>
     <string name="connect_proton_photos">Connect Proton Photos</string>
     <string name="connect_proton_message">Sign in securely to browse your Proton photo library. Lenswave is not an official Proton app.</string>
+    <string name="signed_out">Signed out</string>
+    <string name="signed_out_message">Your Proton session ended. Connect again to keep browsing your photos.</string>
     <string name="photos">Photos</string>
     <string name="all_photos">All</string>
     <string name="proton_tag_favorites">Favorites</string>
@@ -76,6 +78,7 @@
     <string name="proton_unlock_failed">Proton could not unlock the account keys</string>
     <string name="could_not_download_proton_photo">Could not download this Proton photo</string>
     <string name="could_not_display_photo">Could not display this photo</string>
+    <string name="no_more_photos_loaded">No more photos are loaded here. Go back to the gallery to keep browsing.</string>
     <string name="error">Error</string>
     <string name="could_not_read_metadata">Could not read metadata</string>
     <string name="no_maps_app">No maps app is available</string>
@@ -90,6 +93,7 @@
     <string name="thumbnail_download_notification_detail">Downloading in the background</string>
     <string name="thumbnail_download_notification_progress">Stored: %1$d · Remaining: %2$d</string>
     <string name="preview_download_notification_progress">Downloading previews %1$d of %2$d</string>
+    <string name="thumbnail_download_notification_pause">Pause</string>
     <string name="could_not_move_photos_to_proton_trash">Could not move photos to Proton Trash</string>
     <plurals name="move_to_proton_trash_count">
         <item quantity="one">Move %1$d photo to Proton Trash?</item>
@@ -111,6 +115,7 @@
     <string name="privacy_disconnected_message">Lenswave disables Proton Core observability. Lenswave periodically contacts GitHub at startup to check for updates.</string>
     <string name="privacy_connected_message">Lenswave disables Proton Core observability. Proton account telemetry is controlled by the setting below and applies to your Proton account. Lenswave periodically contacts GitHub at startup to check for updates.</string>
     <string name="allow_proton_telemetry">Allow Proton account telemetry</string>
+    <string name="block_screenshots_in_viewer">Block screenshots in the viewer</string>
     <string name="save">Save</string>
     <string name="privacy_setting_saved">Privacy setting saved</string>
     <string name="privacy_setting_failed">Could not update the Proton privacy setting</string>

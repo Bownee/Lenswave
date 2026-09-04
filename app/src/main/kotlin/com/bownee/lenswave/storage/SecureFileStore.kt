@@ -3,6 +3,8 @@ package com.bownee.lenswave.storage
 import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
+import com.bownee.lenswave.LenswaveDiagnostics
+import com.bownee.lenswave.LenswaveOperation
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
@@ -14,9 +16,9 @@ import java.nio.ByteBuffer
 import java.security.KeyStore
 import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
+import javax.crypto.AEADBadTagException
 import javax.crypto.Cipher
 import javax.crypto.CipherInputStream
-import javax.crypto.CipherOutputStream
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
@@ -31,8 +33,12 @@ import javax.inject.Singleton
  * per second on some devices, so sending every cached index and thumbnail through them made the
  * gallery take seconds to open.
  *
- * Files written by earlier versions were encrypted with the Keystore key directly (format
- * version 1); they are still readable and are rewritten in the current format when read.
+ * Small payloads ([read], [write]) are one GCM record (format version 2). Whole files
+ * ([encryptFile], [decryptFile]) go through [SegmentedEnvelope] (format version 3) so an original
+ * of any size streams through a bounded buffer and a decrypt can stop between segments. Files
+ * written by earlier versions were encrypted with the Keystore key directly (version 1) or as one
+ * whole-file record (version 2); both stay readable, and small version 1 payloads are rewritten
+ * in the current format when read.
  */
 @Singleton
 class SecureFileStore(
@@ -64,7 +70,9 @@ class SecureFileStore(
         bytes: ByteArray,
         failureMessage: String,
     ) {
-        AtomicFileStore.write(file, encrypt(scope, bytes), failureMessage)
+        val key = dataKey(scope)
+        val payload = encrypt(key, bytes)
+        AtomicFileStore.write(file, payload, failureMessage) { commit -> commitWith(scope, key, commit) }
     }
 
     fun writeText(
@@ -85,19 +93,13 @@ class SecureFileStore(
         target.parentFile?.mkdirs()
         val temporary = File.createTempFile("${target.name}.", ".part", target.parentFile)
         try {
-            val cipher =
-                Cipher.getInstance(TRANSFORMATION).apply {
-                    init(Cipher.ENCRYPT_MODE, dataKey(scope))
-                }
-            FileOutputStream(temporary).use { rawOutput ->
-                rawOutput.write(MAGIC)
-                rawOutput.write(byteArrayOf(VERSION, cipher.iv.size.toByte()))
-                rawOutput.write(cipher.iv)
-                CipherOutputStream(BufferedOutputStream(rawOutput), cipher).use { encryptedOutput ->
-                    BufferedInputStream(FileInputStream(plaintext)).use { input -> input.copyTo(encryptedOutput) }
-                }
+            val key = dataKey(scope)
+            FileOutputStream(temporary).use { output ->
+                output.write(MAGIC)
+                output.write(SEGMENTED_VERSION.toInt())
+                FileInputStream(plaintext).use { input -> SegmentedEnvelope.encrypt(key, input, output) }
             }
-            AtomicFileStore.commit(temporary, target, failureMessage)
+            commitWith(scope, key) { AtomicFileStore.commit(temporary, target, failureMessage) }
         } finally {
             temporary.delete()
         }
@@ -105,8 +107,9 @@ class SecureFileStore(
 
     /**
      * Decrypts [encrypted] into [target] through a temporary file. [shouldContinue] is asked before
-     * every chunk; once it returns false the copy stops with a [CopyInterruptedException], nothing
-     * is committed and the partial plaintext is removed.
+     * every segment; once it returns false the decrypt stops with a [CopyInterruptedException],
+     * nothing is committed and the partial plaintext is removed. A file in a whole-file legacy
+     * format is asked once, before it starts: its provider decrypts it in one piece.
      */
     fun decryptFile(
         scope: String,
@@ -118,10 +121,16 @@ class SecureFileStore(
         val temporary = File.createTempFile("${target.name}.", ".part", target.parentFile)
         try {
             FileInputStream(encrypted).use { rawInput ->
-                val cipher = readHeader(scope, rawInput)
-                CipherInputStream(BufferedInputStream(rawInput), cipher).use { decryptedInput ->
-                    BufferedOutputStream(FileOutputStream(temporary)).use { output ->
-                        InterruptibleCopy.copy(decryptedInput, output, shouldContinue)
+                val version = readMagic(rawInput)
+                FileOutputStream(temporary).use { output ->
+                    if (version == SEGMENTED_VERSION) {
+                        SegmentedEnvelope.decrypt(dataKey(scope), rawInput, output, shouldContinue)
+                    } else {
+                        if (!shouldContinue()) throw CopyInterruptedException()
+                        val cipher = readLegacyHeader(scope, version, rawInput)
+                        CipherInputStream(BufferedInputStream(rawInput), cipher).use { decryptedInput ->
+                            BufferedOutputStream(output).use { buffered -> decryptedInput.copyTo(buffered) }
+                        }
                     }
                 }
             }
@@ -131,8 +140,21 @@ class SecureFileStore(
         }
     }
 
+    /** The name under which [scope]'s wrapped key is stored; a hash, so safe to keep beside the data. */
+    fun keyAlias(scope: String): String = alias(scope)
+
+    /**
+     * Forgets the scope's keys; everything they encrypted is unreadable from here on. Runs under
+     * the alias lock so a write that already holds the old key cannot commit after this, see
+     * [commitWith].
+     */
     fun deleteKey(scope: String) {
-        val alias = alias(scope)
+        deleteKeyAlias(alias(scope))
+    }
+
+    /** [deleteKey] for a stored [keyAlias], for callers that no longer know the scope. */
+    fun deleteKeyAlias(alias: String) {
+        require(ALIAS_PATTERN.matches(alias)) { "Key alias is invalid" }
         synchronized(lockFor(alias)) {
             keyStore.deleteEntry(alias)
             keyReferences.remove(alias)
@@ -141,15 +163,42 @@ class SecureFileStore(
         }
     }
 
-    private fun readHeader(
+    /**
+     * Runs [commit] only while [key] is still the live data key of [scope].
+     *
+     * [dataKey] hands keys out without a lock, so a writer that fetched its key just before
+     * [deleteKey] could otherwise finish encrypting and land a file after the scope was wiped,
+     * one that no key will ever read again. The check and the commit share the alias lock with
+     * [deleteKey], so either the write lands before the key goes or it does not land at all.
+     */
+    private fun <T> commitWith(
         scope: String,
-        rawInput: InputStream,
-    ): Cipher {
+        key: SecretKey,
+        commit: () -> T,
+    ): T {
+        val alias = alias(scope)
+        return synchronized(lockFor(alias)) {
+            check(dataKeys[alias] === key) { "Data key was deleted before the write completed" }
+            commit()
+        }
+    }
+
+    /** Checks the magic and returns the format version byte that follows it. */
+    private fun readMagic(rawInput: InputStream): Byte {
         val magic = ByteArray(MAGIC.size)
         require(rawInput.read(magic) == magic.size && magic.contentEquals(MAGIC)) {
             "Encrypted file header is invalid"
         }
-        val version = rawInput.read().toByte()
+        val version = rawInput.read()
+        require(version >= 0) { "Encrypted file is truncated" }
+        return version.toByte()
+    }
+
+    private fun readLegacyHeader(
+        scope: String,
+        version: Byte,
+        rawInput: InputStream,
+    ): Cipher {
         val key = keyForVersion(scope, version)
         val ivSize = rawInput.read()
         require(ivSize in 12..16) { "Encrypted file IV is invalid" }
@@ -161,11 +210,11 @@ class SecureFileStore(
     }
 
     private fun encrypt(
-        scope: String,
+        key: SecretKey,
         plaintext: ByteArray,
     ): ByteArray {
         val cipher = Cipher.getInstance(TRANSFORMATION)
-        cipher.init(Cipher.ENCRYPT_MODE, dataKey(scope))
+        cipher.init(Cipher.ENCRYPT_MODE, key)
         val encrypted = cipher.doFinal(plaintext)
         return ByteBuffer
             .allocate(MAGIC.size + 1 + 1 + cipher.iv.size + encrypted.size)
@@ -212,12 +261,18 @@ class SecureFileStore(
         file: File,
         plaintext: ByteArray,
     ) {
-        runCatching { AtomicFileStore.write(file, encrypt(scope, plaintext), "Could not upgrade encrypted file") }
+        runCatching { write(scope, file, plaintext, "Could not upgrade encrypted file") }
     }
 
     /**
      * The per-scope data key, unwrapped once per process; created and wrapped on first use.
      * The lock is per alias, so the Keystore round trip for one scope never stalls another.
+     *
+     * A key that cannot be produced right now (the Keystore refuses to answer, the wrapper
+     * cannot be read or a fresh one cannot be stored) surfaces as [DataKeyUnavailableException]:
+     * a fault of the whole scope that would otherwise fail every read of every file in it with
+     * whatever the Keystore threw, and a reader judging files one by one could mistake that for
+     * corruption and delete the lot.
      */
     private fun dataKey(scope: String): SecretKey {
         val alias = alias(scope)
@@ -226,18 +281,60 @@ class SecureFileStore(
             dataKeys[alias] ?: run {
                 val file = wrappedKeyFile(alias)
                 val raw =
-                    if (file.isFile) {
-                        unwrap(scope, file.readBytes())
-                    } else {
-                        ByteArray(DATA_KEY_BYTES).also { bytes ->
-                            SecureRandom().nextBytes(bytes)
-                            AtomicFileStore.write(file, wrap(scope, bytes), "Could not store data key")
-                        }
+                    try {
+                        (if (file.isFile) unwrapOrDiscard(scope, file) else null) ?: generateDataKey(scope, file)
+                    } catch (error: Exception) {
+                        throw DataKeyUnavailableException(error)
                     }
                 SecretKeySpec(raw, KeyProperties.KEY_ALGORITHM_AES).also { key -> dataKeys[alias] = key }
             }
         }
     }
+
+    /**
+     * The scope's data key could not be unwrapped or created. Nothing about the file being read
+     * caused it, so readers keep the file and try again later instead of discarding it as corrupt.
+     */
+    class DataKeyUnavailableException internal constructor(
+        cause: Throwable,
+    ) : IllegalStateException("The data key of this scope is unavailable", cause)
+
+    /**
+     * The stored data key, or null once it is discarded because it can no longer be unwrapped.
+     *
+     * The Keystore entry can disappear while the wrapped file stays: a Keystore reset, a
+     * restored backup, a device migration. [keystoreKey] then quietly generates a fresh entry
+     * and the old wrapper fails its tag; before this every launch crashed here with no way out.
+     * Discarding the wrapper lets [dataKey] mint a new key. Everything this scope encrypted
+     * before is unreadable from now on: readers see a bad tag and treat those files as corrupt
+     * or absent, and the caches refill. A Keystore that merely fails to answer is not handled
+     * here, because discarding the wrapper over a hiccup would lose a perfectly good key.
+     */
+    private fun unwrapOrDiscard(
+        scope: String,
+        file: File,
+    ): ByteArray? {
+        val failure =
+            try {
+                return unwrap(scope, file.readBytes())
+            } catch (error: AEADBadTagException) {
+                error
+            } catch (error: IllegalArgumentException) {
+                error
+            }
+        LenswaveDiagnostics.reportFailure(LenswaveOperation.DATA_KEY_RECOVERY, failure)
+        check(file.delete() || !file.exists()) { "Could not discard the unreadable data key" }
+        return null
+    }
+
+    private fun generateDataKey(
+        scope: String,
+        file: File,
+    ): ByteArray =
+        ByteArray(DATA_KEY_BYTES).also { bytes ->
+            SecureRandom().nextBytes(bytes)
+            AtomicFileStore.write(file, wrap(scope, bytes), "Could not store data key")
+        }
 
     private fun wrap(
         scope: String,
@@ -304,6 +401,7 @@ class SecureFileStore(
     private companion object {
         const val ANDROID_KEYSTORE = "AndroidKeyStore"
         const val ALIAS_PREFIX = "lenswave.secure-file."
+        val ALIAS_PATTERN = Regex(Regex.escape(ALIAS_PREFIX) + "[0-9a-f]{64}")
         const val KEY_DIRECTORY = "secure-keys"
         const val TRANSFORMATION = "AES/GCM/NoPadding"
         const val TAG_BITS = 128
@@ -311,6 +409,7 @@ class SecureFileStore(
         val MAGIC = byteArrayOf(0x4c, 0x57, 0x45, 0x46)
         const val LEGACY_VERSION: Byte = 1
         const val VERSION: Byte = 2
+        const val SEGMENTED_VERSION: Byte = 3
         val keyStore: KeyStore by lazy {
             KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
         }

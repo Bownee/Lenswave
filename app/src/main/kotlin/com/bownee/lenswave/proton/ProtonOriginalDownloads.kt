@@ -97,11 +97,15 @@ internal class ProtonOriginalDownloads
                     }
                 }
                 stream.complete()
-                runCatching {
+                // A cache that cannot keep the original is not a failed download: the plaintext
+                // the viewer is already reading stays. A cancellation is one, and goes below.
+                try {
                     cache.commitOriginal(userId.id, nodeUid, temporary, target).also {
                         cache.onOriginalStored(userId.id, target)
                     }
-                }.getOrElse { error ->
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Throwable) {
                     LenswaveDiagnostics.reportFailure(LenswaveOperation.ORIGINAL_CACHE_STORE, error)
                     temporary
                 }

@@ -15,16 +15,21 @@ internal object AtomicFileStore {
         write(target, contents.toByteArray(Charsets.UTF_8), failureMessage)
     }
 
+    /**
+     * Writes [contents] to a temporary file and moves it over [target]. [commitGate] wraps only
+     * the move, so a caller can hold a lock across the commit without holding it across the write.
+     */
     fun write(
         target: File,
         contents: ByteArray,
         failureMessage: String,
+        commitGate: (commit: () -> Unit) -> Unit = { commit -> commit() },
     ) {
         target.parentFile?.mkdirs()
         val temporary = File.createTempFile("${target.name}.", ".part", target.parentFile)
         try {
             temporary.writeBytes(contents)
-            commit(temporary, target, failureMessage)
+            commitGate { commit(temporary, target, failureMessage) }
         } catch (error: Exception) {
             temporary.delete()
             if (error is IllegalStateException) throw error

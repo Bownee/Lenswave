@@ -81,6 +81,7 @@ internal class GitHubReleasesClient
     }
 
 internal object GitHubReleaseJson {
+    /** The release's tag name, or null when the document has none or it is not a plausible tag (see [ReleaseTagPolicy]). */
     fun readVersionName(input: InputStream): String? =
         JsonReader(
             InputStreamReader(input, Charsets.UTF_8),
@@ -95,6 +96,6 @@ internal object GitHubReleaseJson {
                 }
             }
             reader.endObject()
-            versionName
+            ReleaseTagPolicy.accept(versionName)
         }
 }

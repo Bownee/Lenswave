@@ -153,9 +153,11 @@ abstract class ProtonCoreDatabase :
         ): ProtonCoreDatabase {
             System.loadLibrary("sqlcipher")
             // The factory keeps this array by reference and SQLCipher reads it on the first real
-            // open, so it must stay intact for the lifetime of the database. Never zero it here.
+            // open, so it must stay intact for the lifetime of the database. Never zero it here,
+            // and never hand this same array to anything else: the migration gets its own copy so
+            // a library that wipes the key it was given cannot zero the one Room still holds.
             val passphrase = passphraseStore.getOrCreate()
-            ProtonDatabaseKeyMigration.rekeyLegacyDatabase(context.getDatabasePath(name), passphrase)
+            ProtonDatabaseKeyMigration.rekeyLegacyDatabase(context.getDatabasePath(name), passphrase.copyOf())
             return Room
                 .databaseBuilder(context, ProtonCoreDatabase::class.java, name)
                 .openHelperFactory(SupportOpenHelperFactory(passphrase))

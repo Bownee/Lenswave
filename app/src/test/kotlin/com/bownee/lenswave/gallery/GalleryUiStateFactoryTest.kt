@@ -79,6 +79,22 @@ class GalleryUiStateFactoryTest {
     }
 
     @Test
+    fun `a session that ended on its own says so instead of inviting a first connection`() {
+        val state =
+            factory.create(
+                GalleryUiInputs(
+                    destination = GalleryDestination.Timeline,
+                    protonAccountStatus = ProtonAccountStatus.DISCONNECTED,
+                    signedOut = true,
+                ),
+            )
+
+        assertEquals(GalleryEmptyAction.CONNECT_PROTON, state.emptyState?.action)
+        assertEquals("${R.string.signed_out}()", state.emptyState?.title)
+        assertEquals("${R.string.signed_out_message}()", state.emptyState?.message)
+    }
+
+    @Test
     fun `disconnected timeline offers a connect prompt`() {
         val state =
             factory.create(
