@@ -2,6 +2,8 @@ package com.bownee.lenswave.proton
 
 import android.content.Context
 import com.bownee.lenswave.LenswaveClock
+import com.bownee.lenswave.LenswaveDiagnostics
+import com.bownee.lenswave.LenswaveOperation
 import com.bownee.lenswave.storage.AtomicFileStore
 import com.bownee.lenswave.storage.SecureFileStore
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -129,11 +131,9 @@ internal class ProtonPhotoCache
         override fun readAlbumsSnapshot(
             userId: String,
             availability: ProtonStoredRenditions,
-        ): List<ProtonAlbum>? {
-            val index = albumsIndexFile(userId)
-            if (!index.isFile) return null
-            return runCatching {
-                val array = JSONArray(readText(userId, index))
+        ): List<ProtonAlbum>? =
+            readSnapshot(userId, albumsIndexFile(userId)) { text ->
+                val array = JSONArray(text)
                 buildList {
                     for (position in 0 until array.length()) {
                         val value = array.getJSONObject(position)
@@ -155,11 +155,7 @@ internal class ProtonPhotoCache
                         )
                     }
                 }
-            }.getOrElse {
-                index.delete()
-                null
             }
-        }
 
         override fun writeAlbums(
             userId: String,
@@ -222,11 +218,9 @@ internal class ProtonPhotoCache
         override fun readQueue(
             userId: String,
             queue: ProtonQueueName,
-        ): List<ProtonThumbnailQueueEntry> {
-            val queue = queueFile(userId, queue)
-            if (!queue.isFile) return emptyList()
-            return runCatching {
-                val array = JSONArray(readText(userId, queue))
+        ): List<ProtonThumbnailQueueEntry> =
+            readSnapshot(userId, queueFile(userId, queue)) { text ->
+                val array = JSONArray(text)
                 buildList {
                     for (position in 0 until array.length()) {
                         val value = array.getJSONObject(position)
@@ -257,11 +251,7 @@ internal class ProtonPhotoCache
                         )
                     }
                 }
-            }.getOrElse {
-                queue.delete()
-                emptyList()
-            }
-        }
+            }.orEmpty()
 
         override fun writeQueue(
             userId: String,
@@ -461,7 +451,7 @@ internal class ProtonPhotoCache
 
         private fun userDirectory(userId: String): File = File(root, safeName(userId))
 
-        /** The listing in [index], or null when it is absent or corrupt (a corrupt file is discarded). */
+        /** The listing in [index], or null when it is absent or unreadable; see [readSnapshot]. */
         private fun readPhotoSnapshot(
             userId: String,
             index: File,
@@ -481,13 +471,32 @@ internal class ProtonPhotoCache
             userId: String,
             index: File,
             entry: (JSONObject) -> T,
-        ): List<T>? {
-            if (!index.isFile) return null
-            return try {
-                val array = JSONArray(readText(userId, index))
+        ): List<T>? =
+            readSnapshot(userId, index) { text ->
+                val array = JSONArray(text)
                 List(array.length()) { position -> entry(array.getJSONObject(position)) }
-            } catch (_: Exception) {
-                index.delete()
+            }
+
+        /**
+         * [file] read, decrypted and parsed, or null when it is absent or unreadable. A corrupt
+         * file is deleted so it reads as a plain miss from then on; a crypto or I/O failure (a
+         * Keystore that refuses to unwrap the data key for a moment, say) is reported and leaves
+         * the file alone, so one hiccup cannot wipe the timeline, the albums or the download queue.
+         */
+        private inline fun <T> readSnapshot(
+            userId: String,
+            file: File,
+            parse: (String) -> T,
+        ): T? {
+            if (!file.isFile) return null
+            return try {
+                parse(readText(userId, file))
+            } catch (error: Exception) {
+                if (ProtonSnapshotCorruptionPolicy.isCorrupt(error)) {
+                    file.delete()
+                } else {
+                    LenswaveDiagnostics.reportFailure(LenswaveOperation.CACHE_SNAPSHOT_READ, error)
+                }
                 null
             }
         }

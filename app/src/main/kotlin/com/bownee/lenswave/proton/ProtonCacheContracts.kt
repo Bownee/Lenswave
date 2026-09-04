@@ -9,7 +9,9 @@ import java.io.File
 
 /**
  * Snapshot readers return null when no valid listing is stored, so one read answers both "what
- * is cached" and "is anything cached"; a corrupt file is discarded and reads as absent.
+ * is cached" and "is anything cached"; a corrupt file is discarded and reads as absent, while a
+ * file that merely could not be read right now (a transient crypto or I/O failure) is kept and
+ * reads as absent for this call only.
  * Every hydrated photo carries its rendition availability from [storedRenditions]; pass one
  * snapshot to several reads to list the rendition directories only once.
  */
