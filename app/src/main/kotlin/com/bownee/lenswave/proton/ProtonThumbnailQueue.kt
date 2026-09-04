@@ -137,18 +137,27 @@ internal class ProtonThumbnailQueue(
                     mutableSetOf(),
                     ProtonSyncKeys.QueueSource::albumPhotos,
                 )
-            entries.replaceAll { _, entry ->
-                entry.copy(
-                    sourceCaptureTimes =
-                        entry.sourceCaptureTimes.filterKeys { source ->
-                            source !in replacedSources &&
-                                (
-                                    retainedAlbumSources == null ||
-                                        !ProtonSyncKeys.QueueSource.isAlbumPhotos(source) ||
-                                        source in retainedAlbumSources
-                                )
-                        },
-                )
+
+            fun isRemoved(source: String): Boolean =
+                source in replacedSources ||
+                    (
+                        retainedAlbumSources != null &&
+                            ProtonSyncKeys.QueueSource.isAlbumPhotos(source) &&
+                            source !in retainedAlbumSources
+                    )
+            // Most entries keep every source they have; copying each of them on every
+            // reconciliation (several per app open, for both queues) is work for nothing.
+            val iterator = entries.entries.iterator()
+            while (iterator.hasNext()) {
+                val slot = iterator.next()
+                val entry = slot.value
+                if (entry.sources.none(::isRemoved)) continue
+                val kept = entry.sourceCaptureTimes.filterKeys { source -> !isRemoved(source) }
+                if (kept.isEmpty()) {
+                    iterator.remove()
+                } else {
+                    slot.setValue(entry.copy(sourceCaptureTimes = kept))
+                }
             }
             pendingCandidatesBySource.forEach { (source, candidates) ->
                 candidates.distinctBy(ProtonThumbnailCandidate::nodeUid).forEach { candidate ->
@@ -164,7 +173,6 @@ internal class ProtonThumbnailQueue(
                         )
                 }
             }
-            entries.values.removeAll { entry -> entry.sources.isEmpty() }
             claimedNodeUids[userId]?.retainAll(entries.keys)
             markChanged(userId)
         }

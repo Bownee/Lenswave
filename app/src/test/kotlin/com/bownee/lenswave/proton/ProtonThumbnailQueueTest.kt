@@ -7,6 +7,7 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -375,6 +376,21 @@ class ProtonThumbnailQueueTest {
 
             assertEquals(listOf("photo"), store.entries.getValue(USER_ID).map { it.nodeUid })
             assertEquals(null, store.previewEntries[USER_ID])
+        }
+
+    @Test
+    fun replacingAnUnrelatedSourceLeavesOtherEntriesUntouched() =
+        runTest {
+            val queue = queue(FakeStore(), FakeClock())
+            queue.replaceSource(USER_ID, "timeline", candidates("a", "b"))
+            val before = queue.claimReady(USER_ID, limit = 2)
+            queue.release(USER_ID, before.map { it.nodeUid })
+
+            queue.replaceSource(USER_ID, "album:one", candidates("c"))
+
+            val after = queue.claimReady(USER_ID, limit = 3).filter { it.nodeUid != "c" }
+            assertEquals(before, after)
+            before.zip(after).forEach { (old, new) -> assertTrue(old === new) }
         }
 
     @Test
