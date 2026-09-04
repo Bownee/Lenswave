@@ -71,6 +71,19 @@ class ProtonThumbnailWorkPolicyTest {
     }
 
     @Test
+    fun `the wait until the next publication is the rest of the interval`() {
+        val interval = ProtonThumbnailWorkPolicy.PROGRESS_PUBLISH_INTERVAL_MILLIS
+
+        assertEquals(0L, ProtonThumbnailWorkPolicy.progressPublishWaitMillis(null, 10L))
+        assertEquals(interval, ProtonThumbnailWorkPolicy.progressPublishWaitMillis(10L, 10L))
+        assertEquals(interval - 100L, ProtonThumbnailWorkPolicy.progressPublishWaitMillis(10L, 110L))
+        assertEquals(0L, ProtonThumbnailWorkPolicy.progressPublishWaitMillis(10L, 10L + interval))
+        assertEquals(0L, ProtonThumbnailWorkPolicy.progressPublishWaitMillis(10L, 10L + interval * 3))
+        // A clock that went backwards waits one interval at most.
+        assertEquals(interval, ProtonThumbnailWorkPolicy.progressPublishWaitMillis(10_000L, 10L))
+    }
+
+    @Test
     fun `a busy viewer is an idle step that keeps the work pending and asks again soon`() {
         val step = ProtonThumbnailWorkPolicy.foregroundBusyStep()
 

@@ -401,4 +401,14 @@ internal object ProtonThumbnailWorkPolicy {
         force ||
             lastPublishedAtMillis == null ||
             nowMillis - lastPublishedAtMillis >= PROGRESS_PUBLISH_INTERVAL_MILLIS
+
+    /** How long until the next progress publication is allowed; zero when it is allowed now. */
+    fun progressPublishWaitMillis(
+        lastPublishedAtMillis: Long?,
+        nowMillis: Long,
+    ): Long {
+        if (lastPublishedAtMillis == null) return 0L
+        return (lastPublishedAtMillis + PROGRESS_PUBLISH_INTERVAL_MILLIS - nowMillis)
+            .coerceIn(0L, PROGRESS_PUBLISH_INTERVAL_MILLIS)
+    }
 }
