@@ -65,6 +65,22 @@ class ProtonAlbumRepositoryTest {
             assertEquals(listOf("y"), cache.albumPhotos.getValue(USER.id to "al1").map(ProtonGalleryPhoto::nodeUid))
         }
 
+    @Test
+    fun `a sync writes the album listing before it deletes the indexes of vanished albums`() =
+        runTest {
+            cache.albums[USER.id] = listOf(album("al1", photoCount = 2L))
+            repository.loadCached(USER)
+
+            repository.syncMetadata(USER, forceRemote = false)
+
+            assertEquals(listOf("writeAlbums:0", "reconcileAlbums:0"), cache.events)
+            assertTrue(
+                repository.albumsState.value.albums
+                    .isEmpty(),
+            )
+            assertTrue(failures.isEmpty())
+        }
+
     private fun album(
         nodeUid: String,
         photoCount: Long,

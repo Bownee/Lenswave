@@ -159,6 +159,8 @@ class ProtonTimelineRepositoryTest {
             assertEquals(100, repository.state.value.photos.size)
             assertFalse(repository.state.value.refreshFailed)
             assertEquals(100, cache.timelines.getValue(USER.id).size)
+            // The new listing is on disk before anything it no longer names is deleted.
+            assertEquals(listOf("writeIndex:100", "reconcilePhotos:400->100"), cache.events)
         }
 
     @Test

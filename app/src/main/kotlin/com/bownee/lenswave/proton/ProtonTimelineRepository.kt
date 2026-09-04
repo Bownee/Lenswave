@@ -108,12 +108,15 @@ internal class ProtonTimelineRepository
                     if (!ProtonReconcileSafetyPolicy.mayCommit(existing.size, removedCount, forceRemote)) {
                         throw ProtonSuspiciousListingException(existing.size, removedCount)
                     }
+                    // The new listing lands before anything is deleted: a crash between the two
+                    // then leaves stray renditions for the next reconcile, not a listing that
+                    // points at renditions which are gone.
+                    cache.writeIndex(userId.id, photos)
                     cache.reconcilePhotos(
                         userId = userId.id,
                         cachedNodeUids = existing.map(ProtonGalleryPhoto::nodeUid),
                         remoteNodeUids = remoteNodeUids,
                     )
-                    cache.writeIndex(userId.id, photos)
                     photos
                 },
                 publishResult = { photos ->

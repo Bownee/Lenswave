@@ -99,8 +99,11 @@ internal class ProtonAlbumRepository
                     }.sortedByDescending(ProtonAlbum::lastActivityEpochSeconds)
                 },
                 commit = { albums ->
-                    cache.reconcileAlbums(userId.id, albums.map(ProtonAlbum::nodeUid))
+                    // The listing lands before the vanished albums' photo indexes are deleted,
+                    // so a crash in between leaves a stray index rather than a listing whose
+                    // albums have no index.
                     cache.writeAlbums(userId.id, albums)
+                    cache.reconcileAlbums(userId.id, albums.map(ProtonAlbum::nodeUid))
                     albums
                 },
                 publishResult = { albums -> emitAlbums(userId, albums, syncing = false) },

@@ -386,12 +386,10 @@ internal class ProtonPhotoCache
             nodeUids: Collection<String>,
         ) {
             val removed = nodeUids.toSet()
-            removed.forEach { nodeUid ->
-                thumbnails.remove(userId, nodeUid)
-                previews.remove(userId, nodeUid)
-                originals.remove(userId, nodeUid)
-            }
-            forgetRenditions(userId)
+            // The listings are rewritten before any rendition is deleted, so a crash in between
+            // leaves stray files for the next reconcile rather than listings that still name
+            // the photos. Only the node uids are persisted, so the rendition availability the
+            // listings are hydrated with does not matter here.
             val availability = storedRenditions(userId)
             // A listing that did not contain any of the photos is left as it is; rewriting it
             // would encrypt and commit the same contents again under the sync mutex.
@@ -428,6 +426,12 @@ internal class ProtonPhotoCache
                     )
                 }
             }
+            removed.forEach { nodeUid ->
+                thumbnails.remove(userId, nodeUid)
+                previews.remove(userId, nodeUid)
+                originals.remove(userId, nodeUid)
+            }
+            forgetRenditions(userId)
         }
 
         /**
