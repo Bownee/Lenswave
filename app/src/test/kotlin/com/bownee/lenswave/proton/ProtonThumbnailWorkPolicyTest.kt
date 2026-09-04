@@ -68,4 +68,14 @@ class ProtonThumbnailWorkPolicyTest {
         assertTrue(ProtonThumbnailWorkPolicy.shouldPublishProgress(10L, 10L + interval, force = false))
         assertTrue(ProtonThumbnailWorkPolicy.shouldPublishProgress(10L, 11L, force = true))
     }
+
+    @Test
+    fun `a busy viewer is an idle step that keeps the work pending and asks again soon`() {
+        val step = ProtonThumbnailWorkPolicy.foregroundBusyStep()
+
+        assertTrue(step.hasPending)
+        assertFalse(step.previewsDeferred)
+        assertEquals(ProtonThumbnailWorkPolicy.FOREGROUND_BUSY_RETRY_MILLIS, step.retryAfterMillis)
+        assertTrue(ProtonThumbnailWorkPolicy.FOREGROUND_BUSY_RETRY_MILLIS <= 10_000L)
+    }
 }

@@ -44,6 +44,7 @@ class ProtonThumbnailWorker(
             )
         val repository = entryPoint.thumbnailWork()
         val runGuard = entryPoint.runGuard()
+        val transferCoordinator = entryPoint.transferCoordinator()
         // Unique work de-duplicates per name and per WorkManager instance; this is the
         // process-wide guarantee that two batch loops never share the queues, and so that the
         // release of stale claims below the gateway only ever comes from the single active run.
@@ -81,15 +82,21 @@ class ProtonThumbnailWorker(
                             runOutcome = ProtonThumbnailWorkOutcome.WAITING_FOR_NETWORK
                             break
                         }
-                        when (
-                            val step =
+                        // Media the user opened comes first. The wait is short and the answer
+                        // is an idle step, so the loop below decides what a busy viewer means
+                        // for this run instead of the claim sitting on the viewer's download.
+                        val step =
+                            if (!transferCoordinator.awaitNoForegroundTransfer(FOREGROUND_YIELD_TIMEOUT_MILLIS)) {
+                                ProtonThumbnailWorkPolicy.foregroundBusyStep()
+                            } else {
                                 repository.downloadNextQueuedThumbnailBatch(
                                     requestedUserId,
                                     previewsAllowed(),
                                 ) { progress ->
                                     publishForeground(foregroundInfoFactory, progress.notificationProgress())
                                 }
-                        ) {
+                            }
+                        when (step) {
                             ProtonThumbnailQueueStep.Processed -> {}
 
                             is ProtonThumbnailQueueStep.Idle -> {
@@ -221,12 +228,15 @@ class ProtonThumbnailWorker(
         fun thumbnailScheduler(): ProtonThumbnailScheduler
 
         fun runGuard(): ProtonThumbnailRunGuard
+
+        fun transferCoordinator(): ProtonTransferCoordinator
     }
 
     companion object {
         const val KEY_USER_ID = "user-id"
         private const val SESSION_READY_TIMEOUT_MILLIS = 30_000L
         private const val NETWORK_READY_TIMEOUT_MILLIS = 5_000L
+        private const val FOREGROUND_YIELD_TIMEOUT_MILLIS = 5_000L
 
         /** Sleeping longer than this inside a foreground service would keep the phone awake for nothing. */
         private const val MAX_IDLE_WAIT_MILLIS = 2L * 60L * 1_000L
@@ -302,6 +312,16 @@ internal object ProtonThumbnailWorkPolicy {
         progress: ProtonThumbnailWorkProgress,
         allowPreviews: Boolean,
     ): Boolean = progress.pending > 0 || (allowPreviews && progress.previewsPending > 0)
+
+    /** How soon a run asks again after a foreground transfer kept it from claiming a batch. */
+    const val FOREGROUND_BUSY_RETRY_MILLIS = 3_000L
+
+    /**
+     * The step a run takes while the viewer is downloading: the queues were not consulted, so
+     * the work is still pending and worth asking about again shortly.
+     */
+    fun foregroundBusyStep(): ProtonThumbnailQueueStep.Idle =
+        ProtonThumbnailQueueStep.Idle(hasPending = true, retryAfterMillis = FOREGROUND_BUSY_RETRY_MILLIS)
 
     /** The notification is re-posted at most every [PROGRESS_PUBLISH_INTERVAL_MILLIS] unless forced. */
     fun shouldPublishProgress(
