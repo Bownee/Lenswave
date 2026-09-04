@@ -39,6 +39,10 @@ internal class ProtonAlbumRepository
          * commit time instead (see [ProtonPhotoReconciliation.withoutRemovedSince]).
          */
         private val mutationMutex = Mutex()
+
+        /** Uid lookups over the published albums (by cover) and album photos, memoized per list instance. */
+        private val albumCoverIndex = ProtonNodeUidIndex(ProtonAlbum::coverPhotoNodeUid)
+        private val albumPhotoIndex = ProtonNodeUidIndex(ProtonGalleryPhoto::nodeUid)
         private val mutableAlbumsState = MutableStateFlow(ProtonAlbumsState())
         private val mutableAlbumPhotosState = MutableStateFlow(ProtonAlbumPhotosState())
 
@@ -241,13 +245,15 @@ internal class ProtonAlbumRepository
             available: Boolean,
         ) {
             if (nodeUids.isEmpty()) return
+            val current = mutableAlbumsState.value
+            if (current.userId != userId.id || !current.albums.containsAnyNodeUid(nodeUids, albumCoverIndex)) return
             mutableAlbumsState.update { state ->
                 if (state.userId != userId.id) return@update state
                 val albums =
                     state.albums.withThumbnailAvailability(
                         nodeUids,
                         available,
-                        nodeUid = ProtonAlbum::coverPhotoNodeUid,
+                        albumCoverIndex,
                         hasThumbnail = ProtonAlbum::hasCoverThumbnail,
                         copy = { album, hasCoverThumbnail -> album.copy(hasCoverThumbnail = hasCoverThumbnail) },
                     ) ?: return@update state
@@ -261,13 +267,15 @@ internal class ProtonAlbumRepository
             available: Boolean,
         ) {
             if (nodeUids.isEmpty()) return
+            val current = mutableAlbumPhotosState.value
+            if (current.userId != userId.id || !current.photos.containsAnyNodeUid(nodeUids, albumPhotoIndex)) return
             mutableAlbumPhotosState.update { state ->
                 if (state.userId != userId.id) return@update state
                 val photos =
                     state.photos.withThumbnailAvailability(
                         nodeUids,
                         available,
-                        nodeUid = ProtonGalleryPhoto::nodeUid,
+                        albumPhotoIndex,
                         hasThumbnail = ProtonGalleryPhoto::hasThumbnail,
                         copy = { photo, hasThumbnail -> photo.copy(hasThumbnail = hasThumbnail) },
                     ) ?: return@update state

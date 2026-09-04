@@ -32,6 +32,12 @@ internal class ProtonNodeUidIndex<T>(
         uid: String,
     ): Boolean = uid in positions(items)
 
+    /** The position of the first item of [items] carrying [uid], or null. */
+    fun position(
+        items: List<T>,
+        uid: String,
+    ): Int? = positions(items)[uid]
+
     private fun positions(items: List<T>): Map<String, Int> {
         val cached = memo
         if (cached != null) {

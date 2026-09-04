@@ -38,8 +38,9 @@ internal class ProtonTimelineRepository
         private val mutationMutex = Mutex()
         private val mutableState = MutableStateFlow(ProtonGalleryState())
 
-        /** Uid lookups over the published timeline, memoized per list instance; see [ProtonNodeUidIndex]. */
+        /** Uid lookups over the published timeline and tag listings, memoized per list instance; see [ProtonNodeUidIndex]. */
         private val timelineIndex = ProtonNodeUidIndex(ProtonGalleryPhoto::nodeUid)
+        private val tagIndexes = ProtonMediaTag.entries.associateWith { photoIndex() }
 
         val state: StateFlow<ProtonGalleryState> = mutableState.asStateFlow()
 
@@ -276,23 +277,37 @@ internal class ProtonTimelineRepository
             markThumbnails(userId, nodeUids, available = false)
         }
 
+        /**
+         * Only the marked positions are replaced (see [withThumbnailAvailability]), and a mark for
+         * photos no listing shows skips the state update altogether.
+         */
         private fun markThumbnails(
             userId: UserId,
             nodeUids: Set<String>,
             available: Boolean,
         ) {
             if (nodeUids.isEmpty()) return
+            val current = mutableState.value
+            if (current.userId != userId.id) return
+            val shown =
+                current.photos.containsAnyNodeUid(nodeUids, timelineIndex) ||
+                    current.tags.any { (tag, tagState) ->
+                        tagState.photos.containsAnyNodeUid(nodeUids, tagIndexes.getValue(tag))
+                    }
+            if (!shown) return
             mutableState.update { state ->
                 if (state.userId != userId.id) return@update state
-                val photos = state.photos.withThumbnailAvailability(nodeUids, available)
+                val photos = state.photos.withThumbnailAvailability(nodeUids, available, timelineIndex)
                 // Tag listings that did not change keep their instance, so the tabs' memos hold.
                 var tagsChanged = false
                 val tags =
-                    state.tags.mapValues { (_, tagState) ->
-                        tagState.photos.withThumbnailAvailability(nodeUids, available)?.let { updated ->
-                            tagsChanged = true
-                            tagState.copy(photos = updated)
-                        } ?: tagState
+                    state.tags.mapValues { (tag, tagState) ->
+                        tagState.photos
+                            .withThumbnailAvailability(nodeUids, available, tagIndexes.getValue(tag))
+                            ?.let { updated ->
+                                tagsChanged = true
+                                tagState.copy(photos = updated)
+                            } ?: tagState
                     }
                 if (photos == null && !tagsChanged) return@update state
                 state.copy(photos = photos ?: state.photos, tags = if (tagsChanged) tags else state.tags)
@@ -302,11 +317,12 @@ internal class ProtonTimelineRepository
         private fun List<ProtonGalleryPhoto>.withThumbnailAvailability(
             nodeUids: Set<String>,
             available: Boolean,
+            index: ProtonNodeUidIndex<ProtonGalleryPhoto>,
         ): List<ProtonGalleryPhoto>? =
             withThumbnailAvailability(
                 nodeUids,
                 available,
-                nodeUid = ProtonGalleryPhoto::nodeUid,
+                index,
                 hasThumbnail = ProtonGalleryPhoto::hasThumbnail,
                 copy = { photo, hasThumbnail -> photo.copy(hasThumbnail = hasThumbnail) },
             )
@@ -317,13 +333,15 @@ internal class ProtonTimelineRepository
             nodeUids: Set<String>,
         ) {
             if (nodeUids.isEmpty()) return
+            val current = mutableState.value
+            if (current.userId != userId.id || !current.photos.containsAnyNodeUid(nodeUids, timelineIndex)) return
             mutableState.update { state ->
                 if (state.userId != userId.id) return@update state
                 val photos =
                     state.photos.withThumbnailAvailability(
                         nodeUids,
                         available = true,
-                        nodeUid = ProtonGalleryPhoto::nodeUid,
+                        timelineIndex,
                         hasThumbnail = ProtonGalleryPhoto::hasPreview,
                         copy = { photo, hasPreview -> photo.copy(hasPreview = hasPreview) },
                     ) ?: return@update state
@@ -476,5 +494,7 @@ internal class ProtonTimelineRepository
         private companion object {
             /** Below this the tag files parse in a few milliseconds, so the first publish can wait for them. */
             const val TAGS_WITH_FIRST_PUBLISH_LIMIT = 5_000
+
+            fun photoIndex() = ProtonNodeUidIndex(ProtonGalleryPhoto::nodeUid)
         }
     }
