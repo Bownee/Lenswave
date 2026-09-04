@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   verify:
-    name: Test, lint, and build all runtime modes
+    name: Verify
     uses: ./.github/workflows/verify.yml
     with:
       assemble-debug: true
@@ -26,6 +26,18 @@ jobs:
       checks: write
       pull-requests: write
       security-events: write
+
+  # Branch protection requires a check with exactly this name. A job called through a reusable
+  # workflow reports as "Verify / verify", so this gate carries the required name and only runs
+  # (and therefore only reports) when the verify job succeeded.
+  gate:
+    name: Test, lint, and build all runtime modes
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Confirm the verify job passed
+        run: echo "Verify passed for ${{ github.sha }}"
 
   instrumentation:
     name: API 29 device contracts
