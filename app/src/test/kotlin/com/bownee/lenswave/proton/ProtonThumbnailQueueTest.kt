@@ -249,19 +249,90 @@ class ProtonThumbnailQueueTest {
         nodeUid: String,
     ) = store.entries.getValue(USER_ID).single { it.nodeUid == nodeUid }
 
+    @Test
+    fun previewQueuePersistsSeparatelyFromTheThumbnailQueue() =
+        runBlocking {
+            val store = FakeStore()
+            val thumbnails = ProtonThumbnailQueue(store, FakeClock(), ProtonQueueName.THUMBNAILS)
+            val previews = ProtonThumbnailQueue(store, FakeClock(), ProtonQueueName.PREVIEWS)
+
+            thumbnails.replaceSource(USER_ID, "timeline", candidates("thumb"))
+            previews.replaceSource(USER_ID, "timeline-previews", candidates("preview"))
+
+            assertEquals(listOf("thumb"), store.entries.getValue(USER_ID).map { it.nodeUid })
+            assertEquals(
+                listOf("preview"),
+                store.previewEntries.getValue(USER_ID).map { it.nodeUid },
+            )
+            assertEquals("thumb", thumbnails.claimReady(USER_ID, limit = 5).single().nodeUid)
+            assertEquals("preview", previews.claimReady(USER_ID, limit = 5).single().nodeUid)
+        }
+
+    @Test
+    fun theDefaultQueueIsTheThumbnailQueue() =
+        runBlocking {
+            val store = FakeStore()
+            ProtonThumbnailQueue(store, FakeClock()).replaceSource(USER_ID, "timeline", candidates("photo"))
+
+            assertEquals(listOf("photo"), store.entries.getValue(USER_ID).map { it.nodeUid })
+            assertEquals(null, store.previewEntries[USER_ID])
+        }
+
+    @Test
+    fun abandonedItemsLeaveTheQueueWithoutBeingReportedAsCompleted() =
+        runBlocking {
+            val store = FakeStore()
+            val queue = ProtonThumbnailQueue(store, FakeClock())
+            queue.replaceSource(USER_ID, "timeline", candidates("missing", "ok", "flaky"))
+            queue.claimReady(USER_ID, limit = 3)
+
+            val completed =
+                queue.settle(
+                    USER_ID,
+                    successfulNodeUids = setOf("ok"),
+                    failedNodeUids = setOf("flaky"),
+                    abandonedNodeUids = setOf("missing"),
+                )
+
+            assertEquals(listOf("ok"), completed.map(ProtonThumbnailQueueEntry::nodeUid))
+            assertEquals(listOf("flaky"), store.entries.getValue(USER_ID).map { it.nodeUid })
+            assertEquals(1, queue.pendingCount(USER_ID))
+        }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun anItemCannotBeAbandonedAndRetriedAtOnce() =
+        runBlocking {
+            val queue = ProtonThumbnailQueue(FakeStore(), FakeClock())
+            queue.replaceSource(USER_ID, "timeline", candidates("photo"))
+
+            queue.settle(USER_ID, emptySet(), setOf("photo"), abandonedNodeUids = setOf("photo"))
+            Unit
+        }
+
     private class FakeStore : ProtonThumbnailQueueStore {
         val entries = mutableMapOf<String, List<ProtonThumbnailQueueEntry>>()
+        val previewEntries = mutableMapOf<String, List<ProtonThumbnailQueueEntry>>()
         var writeCount = 0
 
-        override fun readThumbnailQueue(userId: String): List<ProtonThumbnailQueueEntry> = entries[userId].orEmpty()
-
-        override fun writeThumbnailQueue(
+        override fun readQueue(
             userId: String,
+            queue: ProtonQueueName,
+        ): List<ProtonThumbnailQueueEntry> = entriesFor(queue)[userId].orEmpty()
+
+        override fun writeQueue(
+            userId: String,
+            queue: ProtonQueueName,
             entries: List<ProtonThumbnailQueueEntry>,
         ) {
             writeCount++
-            this.entries[userId] = entries.toList()
+            entriesFor(queue)[userId] = entries.toList()
         }
+
+        private fun entriesFor(queue: ProtonQueueName) =
+            when (queue) {
+                ProtonQueueName.THUMBNAILS -> entries
+                ProtonQueueName.PREVIEWS -> previewEntries
+            }
     }
 
     private class FakeClock(

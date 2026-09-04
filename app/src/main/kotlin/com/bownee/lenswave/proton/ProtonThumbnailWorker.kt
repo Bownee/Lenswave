@@ -47,7 +47,7 @@ class ProtonThumbnailWorker(
                 return Result.failure()
             }
             val initialProgress = repository.thumbnailWorkProgress(requestedUserId)
-            if (initialProgress.pending == 0) {
+            if (!initialProgress.hasPendingWork) {
                 return resolve(repository)
             }
             val networkMonitor = ProtonThumbnailNetworkMonitor(applicationContext)

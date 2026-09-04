@@ -13,9 +13,16 @@ import com.bownee.lenswave.R
 import com.bownee.lenswave.gallery.GalleryActivity
 import java.util.UUID
 
+/** Which rendition the background worker is currently downloading. */
+internal enum class ProtonDownloadPhase {
+    THUMBNAILS,
+    PREVIEWS,
+}
+
 internal data class ProtonThumbnailNotificationProgress(
     val downloaded: Int,
     val total: Int,
+    val phase: ProtonDownloadPhase = ProtonDownloadPhase.THUMBNAILS,
 ) {
     init {
         require(downloaded >= 0) { "Downloaded thumbnail count cannot be negative" }
@@ -29,20 +36,51 @@ internal data class ProtonThumbnailNotificationProgress(
     val remaining: Int get() = total - downloaded
 }
 
+/**
+ * Counts for both queues. Thumbnails are reported while any is pending; the notification only
+ * switches to previews once every thumbnail is stored.
+ */
 internal data class ProtonThumbnailWorkProgress(
     val stored: Int,
     val pending: Int,
+    val previewsStored: Int = 0,
+    val previewsPending: Int = 0,
 ) {
     init {
         require(stored >= 0) { "Stored thumbnail count cannot be negative" }
         require(pending >= 0) { "Pending thumbnail count cannot be negative" }
+        require(previewsStored >= 0) { "Stored preview count cannot be negative" }
+        require(previewsPending >= 0) { "Pending preview count cannot be negative" }
     }
 
+    val hasPendingWork: Boolean get() = pending > 0 || previewsPending > 0
+
     fun notificationProgress() =
-        ProtonThumbnailNotificationProgress(
-            downloaded = stored,
-            total = stored + pending,
-        )
+        if (ProtonThumbnailNotificationPolicy.phase(pending, previewsPending) == ProtonDownloadPhase.PREVIEWS) {
+            ProtonThumbnailNotificationProgress(
+                downloaded = previewsStored,
+                total = previewsStored + previewsPending,
+                phase = ProtonDownloadPhase.PREVIEWS,
+            )
+        } else {
+            ProtonThumbnailNotificationProgress(
+                downloaded = stored,
+                total = stored + pending,
+            )
+        }
+}
+
+internal object ProtonThumbnailNotificationPolicy {
+    /** Previews are only announced once no thumbnail is left; thumbnails always come first. */
+    fun phase(
+        thumbnailsPending: Int,
+        previewsPending: Int,
+    ): ProtonDownloadPhase =
+        if (thumbnailsPending == 0 && previewsPending > 0) {
+            ProtonDownloadPhase.PREVIEWS
+        } else {
+            ProtonDownloadPhase.THUMBNAILS
+        }
 }
 
 internal class ProtonThumbnailForegroundInfoFactory(
@@ -86,10 +124,18 @@ internal class ProtonThumbnailForegroundInfoFactory(
     }
 
     private fun ProtonThumbnailNotificationProgress.contentText(): String =
-        if (isDeterminate) {
-            context.getString(R.string.thumbnail_download_notification_progress, downloaded, remaining)
-        } else {
-            context.getString(R.string.thumbnail_download_notification_detail)
+        when {
+            !isDeterminate -> {
+                context.getString(R.string.thumbnail_download_notification_detail)
+            }
+
+            phase == ProtonDownloadPhase.PREVIEWS -> {
+                context.getString(R.string.preview_download_notification_progress, downloaded, total)
+            }
+
+            else -> {
+                context.getString(R.string.thumbnail_download_notification_progress, downloaded, remaining)
+            }
         }
 
     private fun createNotificationChannel() {

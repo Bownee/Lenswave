@@ -4,6 +4,10 @@ All notable changes to Lenswave. The format follows [Keep a Changelog](https://k
 
 ## [Unreleased]
 
+### Added
+- Previews (~1920 px) of every photo are downloaded in the background after thumbnails, so
+  photos open sharp immediately.
+
 ### Fixed
 - The Proton session database is now keyed with the stored random passphrase. Earlier builds
   zeroed the passphrase before the database was opened, so it was effectively encrypted with a

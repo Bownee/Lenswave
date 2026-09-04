@@ -179,9 +179,11 @@ class ProtonPhotoCacheInstrumentedTest {
                 ),
             )
         try {
-            cache.writeThumbnailQueue(userId, entries)
+            cache.writeQueue(userId, ProtonQueueName.THUMBNAILS, entries)
+            cache.writeQueue(userId, ProtonQueueName.PREVIEWS, entries.take(1))
 
-            assertEquals(entries, cache.readThumbnailQueue(userId))
+            assertEquals(entries, cache.readQueue(userId, ProtonQueueName.THUMBNAILS))
+            assertEquals(entries.take(1), cache.readQueue(userId, ProtonQueueName.PREVIEWS))
         } finally {
             cache.clearUser(userId)
             context.testRoot.deleteRecursively()
@@ -246,6 +248,7 @@ class ProtonPhotoCacheInstrumentedTest {
             secureFiles,
             clock,
             ProtonThumbnailStore(context, secureFiles, clock),
+            ProtonPreviewStore(context, secureFiles, clock),
         )
 
     private class IsolatedCacheContext(

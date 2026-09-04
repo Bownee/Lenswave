@@ -37,7 +37,8 @@ class ProtonPhotoGateway
         private val timeline: ProtonTimelineRepository,
         private val albums: ProtonAlbumRepository,
         private val downloads: ProtonDownloadRepository,
-        private val thumbnailQueue: ProtonThumbnailQueue,
+        @ThumbnailQueue private val thumbnailQueue: ProtonThumbnailQueue,
+        @PreviewQueue private val previewQueue: ProtonThumbnailQueue,
         private val clientProvider: ProtonPhotosClientProvider,
         private val cache: ProtonSessionCache,
         private val sessionGuard: ProtonSessionGuard,
@@ -67,6 +68,7 @@ class ProtonPhotoGateway
                     timeline.loadCached(userId)
                     albums.loadCached(userId)
                     reconcileTimelineThumbnailQueue(userId)
+                    reconcileTimelinePreviewQueue(userId)
                     reconcileAlbumCoverThumbnailQueue(userId)
                 }
             }
@@ -79,6 +81,7 @@ class ProtonPhotoGateway
             sessionGuard.withActiveSession(userId) {
                 timeline.syncMetadata(userId, forceRemote)
                 reconcileTimelineThumbnailQueue(userId)
+                reconcileTimelinePreviewQueue(userId)
                 coroutineScope {
                     launch { timeline.syncTagMetadata(userId, ProtonMediaTag.VIDEOS, forceRemote) }
                     launch { timeline.syncTagMetadata(userId, ProtonMediaTag.FAVORITES, forceRemote) }
@@ -167,6 +170,15 @@ class ProtonPhotoGateway
                 sessionGuard.withActiveSession(userId) { downloads.getOriginalFileName(userId, nodeUid) }
             }
 
+        override suspend fun loadPreview(
+            userId: UserId,
+            nodeUid: String,
+            targetLongEdge: Int,
+        ): Bitmap? =
+            withContext(Dispatchers.IO) {
+                sessionGuard.withActiveSession(userId) { downloads.loadPreview(userId, nodeUid, targetLongEdge) }
+            }
+
         override suspend fun loadThumbnail(
             userId: UserId,
             nodeUid: String,
@@ -253,6 +265,7 @@ class ProtonPhotoGateway
                     clientProvider.disconnect(userId)
                     cache.clearUser(userId.id)
                     thumbnailQueue.forget(userId.id)
+                    previewQueue.forget(userId.id)
                     downloads.forgetUser(userId)
                     if (wasActive) {
                         timeline.reset()
@@ -269,14 +282,36 @@ class ProtonPhotoGateway
             ): ProtonThumbnailQueueStep =
                 withContext(Dispatchers.IO) {
                     sessionGuard.withActiveSession(userId) {
-                        processThumbnailBatch(
-                            userId,
-                            thumbnailQueue.claimReady(
-                                userId.id,
-                                ProtonThumbnailDownloadPolicy.BACKGROUND_CLAIM_SIZE,
-                            ),
-                            onProgress,
-                        )
+                        val batch =
+                            ProtonBackgroundBatchPolicy.choose(
+                                thumbnailBatch =
+                                    thumbnailQueue.claimReady(
+                                        userId.id,
+                                        ProtonThumbnailDownloadPolicy.BACKGROUND_CLAIM_SIZE,
+                                    ),
+                                claimPreviews = {
+                                    previewQueue.claimReady(
+                                        userId.id,
+                                        ProtonThumbnailDownloadPolicy.BACKGROUND_CLAIM_SIZE,
+                                    )
+                                },
+                            )
+                        when (batch?.queue) {
+                            ProtonQueueName.THUMBNAILS -> {
+                                processThumbnailBatch(userId, batch.entries, onProgress)
+                            }
+
+                            ProtonQueueName.PREVIEWS -> {
+                                processPreviewBatch(userId, batch.entries, onProgress)
+                            }
+
+                            null -> {
+                                ProtonBackgroundBatchPolicy.idle(
+                                    thumbnailsPending = thumbnailQueue.hasPending(userId.id),
+                                    previewsPending = previewQueue.hasPending(userId.id),
+                                )
+                            }
+                        }
                     }
                 }
 
@@ -294,7 +329,57 @@ class ProtonPhotoGateway
             ProtonThumbnailWorkProgress(
                 stored = downloads.storedThumbnailCount(userId),
                 pending = thumbnailQueue.pendingCount(userId.id),
+                previewsStored = downloads.storedPreviewCount(userId),
+                previewsPending = previewQueue.pendingCount(userId.id),
             )
+
+        private suspend fun processPreviewBatch(
+            userId: UserId,
+            entries: List<ProtonThumbnailQueueEntry>,
+            onProgress: suspend (ProtonThumbnailWorkProgress) -> Unit,
+        ): ProtonThumbnailQueueStep {
+            val nodeUids = entries.map(ProtonThumbnailQueueEntry::nodeUid)
+            val progressMutex = Mutex()
+            return try {
+                val result =
+                    downloads.downloadPreviews(userId, nodeUids) { progress ->
+                        progressMutex.withLock {
+                            settlePreviewProgress(userId, progress)
+                            onProgress(thumbnailWorkProgressInActiveSession(userId))
+                        }
+                    }
+                // Photos without a preview on the server are dropped, not failures worth a retry.
+                if (result.failures.values.all(ProtonBackgroundBatchPolicy::isPermanent)) {
+                    ProtonThumbnailQueueStep.Downloaded
+                } else {
+                    ProtonThumbnailQueueStep.Failed
+                }
+            } catch (error: CancellationException) {
+                previewQueue.release(userId.id, nodeUids)
+                throw error
+            } catch (_: Throwable) {
+                previewQueue.settle(userId.id, emptySet(), nodeUids.toSet())
+                onProgress(thumbnailWorkProgressInActiveSession(userId))
+                ProtonThumbnailQueueStep.Failed
+            }
+        }
+
+        private suspend fun settlePreviewProgress(
+            userId: UserId,
+            result: ThumbnailBatchResult,
+        ) {
+            val (permanent, transient) =
+                result.failures.entries.partition { (_, kind) ->
+                    ProtonBackgroundBatchPolicy.isPermanent(kind)
+                }
+            previewQueue.settle(
+                userId.id,
+                successfulNodeUids = result.successfulNodeUids,
+                failedNodeUids = transient.mapTo(mutableSetOf()) { (nodeUid, _) -> nodeUid },
+                abandonedNodeUids = permanent.mapTo(mutableSetOf()) { (nodeUid, _) -> nodeUid },
+            )
+            timeline.markPreviewsAvailable(userId, result.successfulNodeUids)
+        }
 
         private suspend fun processThumbnailBatch(
             userId: UserId,
@@ -302,7 +387,10 @@ class ProtonPhotoGateway
             onProgress: suspend (ProtonThumbnailWorkProgress) -> Unit = {},
         ): ProtonThumbnailQueueStep {
             if (entries.isEmpty()) {
-                return ProtonThumbnailQueueStep.Idle(thumbnailQueue.hasPending(userId.id))
+                return ProtonBackgroundBatchPolicy.idle(
+                    thumbnailsPending = thumbnailQueue.hasPending(userId.id),
+                    previewsPending = previewQueue.hasPending(userId.id),
+                )
             }
             val nodeUids = entries.map(ProtonThumbnailQueueEntry::nodeUid)
             val progressMutex = Mutex()
@@ -391,6 +479,27 @@ class ProtonPhotoGateway
                     state.photos.filterNot(ProtonGalleryPhoto::hasThumbnail).map { photo ->
                         ProtonThumbnailCandidate(photo.nodeUid, photo.captureTimeEpochSeconds)
                     },
+                )
+            }
+        }
+
+        /**
+         * Every timeline photo without a stored preview is queued, newest first. Known videos are
+         * skipped: the viewer never shows a preview for them.
+         */
+        private suspend fun reconcileTimelinePreviewQueue(userId: UserId) {
+            timeline.state.value.takeIf { it.userId == userId.id && it.hasLoaded }?.let { state ->
+                val videoNodeUids =
+                    state.tags[ProtonMediaTag.VIDEOS]
+                        ?.photos
+                        ?.mapTo(mutableSetOf(), ProtonGalleryPhoto::nodeUid)
+                        .orEmpty()
+                previewQueue.replaceSource(
+                    userId.id,
+                    ProtonSyncKeys.QueueSource.TIMELINE_PREVIEWS,
+                    state.photos
+                        .filterNot { photo -> photo.hasPreview || photo.nodeUid in videoNodeUids }
+                        .map { photo -> ProtonThumbnailCandidate(photo.nodeUid, photo.captureTimeEpochSeconds) },
                 )
             }
         }

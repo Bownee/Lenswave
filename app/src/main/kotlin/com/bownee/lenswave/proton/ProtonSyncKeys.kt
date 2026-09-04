@@ -19,6 +19,9 @@ internal object ProtonSyncKeys {
         const val TIMELINE = "timeline"
         const val ALBUM_COVERS = "album-covers"
 
+        /** The only source of the preview queue: screen-sized renditions of the timeline. */
+        const val TIMELINE_PREVIEWS = "timeline-previews"
+
         /** Prefix for the photos of one album; the album node uid follows the colon. */
         const val ALBUM_PHOTOS = "album"
 

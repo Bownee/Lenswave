@@ -95,6 +95,16 @@ interface ProtonOriginalMediaSource {
         nodeUid: String,
     ): File?
 
+    /**
+     * The stored screen-sized preview decoded for a display whose longer edge is
+     * [targetLongEdge] pixels; null when none is downloaded yet. Never hits the network.
+     */
+    suspend fun loadPreview(
+        userId: UserId,
+        nodeUid: String,
+        targetLongEdge: Int,
+    ): Bitmap?
+
     suspend fun getOriginalFileName(
         userId: UserId,
         nodeUid: String,

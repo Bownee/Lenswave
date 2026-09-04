@@ -89,6 +89,7 @@
     <string name="thumbnail_download_notification_title">Downloading Proton thumbnails</string>
     <string name="thumbnail_download_notification_detail">Downloading in the background</string>
     <string name="thumbnail_download_notification_progress">Stored: %1$d · Remaining: %2$d</string>
+    <string name="preview_download_notification_progress">Downloading previews %1$d of %2$d</string>
     <string name="could_not_move_photos_to_proton_trash">Could not move photos to Proton Trash</string>
     <plurals name="move_to_proton_trash_count">
         <item quantity="one">Move %1$d photo to Proton Trash?</item>

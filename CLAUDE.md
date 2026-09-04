@@ -25,6 +25,9 @@ dependency changed; see CONTRIBUTING.md.
   swipe/peek, dismiss, details sheet).
 - `proton/` — everything that talks to Proton: `ProtonPhotoGateway` is the session boundary; UI
   code depends on the narrow interfaces in `gallery/GalleryDataSources.kt`, not the gateway.
+  Background downloads run through two `ProtonThumbnailQueue` instances (`@ThumbnailQueue`,
+  `@PreviewQueue`); `ProtonBackgroundBatchPolicy` serves thumbnails before previews, and
+  `ProtonPreviewStore` keeps the screen-sized renditions the viewer shows before the original.
 - `storage/` — Keystore-backed encrypted files and the database passphrase.
 - `update/` — GitHub Releases update check.
 

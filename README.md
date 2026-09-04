@@ -3,6 +3,8 @@
 Lenswave is an Android viewer for Proton Photos. Browse your cloud timeline, filter by media type,
 open albums, and manage favourites and deletions from your phone. Full-size photos and
 videos are kept in an encrypted on-device cache so they open instantly the second time.
+Screen-sized previews of every photo are fetched in the background, so photos open sharp at once
+while the original is still downloading.
 
 Lenswave is an independent project and is not affiliated with Proton. The Proton integration uses
 preview SDKs and may change.

@@ -57,6 +57,7 @@ import me.proton.core.domain.entity.UserId
 import java.time.ZoneId
 import java.util.Locale
 import javax.inject.Inject
+import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
@@ -310,6 +311,7 @@ class PhotoViewerActivity : FragmentActivity() {
         photoLoadJob =
             lifecycleScope.launch {
                 showCachedProtonThumbnail(requestedPhoto)
+                if (requestedPhoto.mediaKind != MediaKind.VIDEO) launch { showCachedProtonPreview(requestedPhoto) }
                 try {
                     val file =
                         withContext(Dispatchers.IO) {
@@ -407,6 +409,39 @@ class PhotoViewerActivity : FragmentActivity() {
         thumbnailPreview.scaleY = photoView.scaleY
         thumbnailPreview.translationX = photoView.translationX
         // Shown at full opacity straight away: fading it up from black reads as a brightness dip.
+        thumbnailPreview.alpha = 1f
+        photoDetailsScroll.post(details::synchronizeWithImage)
+    }
+
+    /**
+     * Sharpens the stand-in with the stored screen-sized preview while the original downloads.
+     * The bitmap replaces the thumbnail in the same view with no animation, so the position,
+     * scale and opacity of a running swipe or dismiss gesture are preserved. Once the original
+     * has arrived there is nothing left to sharpen and the preview is dropped.
+     */
+    private suspend fun showCachedProtonPreview(requestedPhoto: PhotoRequest) {
+        val metrics = resources.displayMetrics
+        val bitmap =
+            originalMedia.loadPreview(
+                UserId(requestedPhoto.userId),
+                requestedPhoto.nodeUid,
+                targetLongEdge = max(metrics.widthPixels, metrics.heightPixels),
+            ) ?: return
+        if (request.stableId != requestedPhoto.stableId || photoReady) return
+        if (thumbnailPreview.isVisible && previewStableId == requestedPhoto.stableId) {
+            thumbnailPreview.setImageBitmap(bitmap)
+            return
+        }
+        clearThumbnailPreview()
+        previewStableId = requestedPhoto.stableId
+        thumbnailPreview.setImageBitmap(bitmap)
+        thumbnailPreview.visibility = View.VISIBLE
+        thumbnailPreview.animate().cancel()
+        photoView.alpha = 0f
+        thumbnailPreview.translationY = photoView.translationY
+        thumbnailPreview.scaleX = photoView.scaleX
+        thumbnailPreview.scaleY = photoView.scaleY
+        thumbnailPreview.translationX = photoView.translationX
         thumbnailPreview.alpha = 1f
         photoDetailsScroll.post(details::synchronizeWithImage)
     }

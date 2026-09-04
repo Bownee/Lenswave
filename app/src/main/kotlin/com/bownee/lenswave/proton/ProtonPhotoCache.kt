@@ -19,6 +19,7 @@ internal class ProtonPhotoCache
         private val secureFiles: SecureFileStore,
         private val clock: LenswaveClock,
         private val thumbnails: ProtonThumbnailStore,
+        private val previews: ProtonPreviewStore,
     ) : ProtonSyncMetadataStore,
         ProtonAccountCacheCleaner,
         ProtonTimelineCache,
@@ -69,6 +70,34 @@ internal class ProtonPhotoCache
         }
 
         override fun thumbnailCount(userId: String): Int = thumbnails.count(userId)
+
+        override fun previewExists(
+            userId: String,
+            nodeUid: String,
+        ): Boolean = previews.exists(userId, nodeUid)
+
+        override fun writePreview(
+            userId: String,
+            nodeUid: String,
+            bytes: ByteArray,
+        ) {
+            previews.write(userId, nodeUid, bytes)
+        }
+
+        override fun loadPreview(
+            userId: String,
+            nodeUid: String,
+            targetLongEdge: Int,
+        ) = previews.load(userId, nodeUid, targetLongEdge)
+
+        override fun removePreview(
+            userId: String,
+            nodeUid: String,
+        ) {
+            previews.remove(userId, nodeUid)
+        }
+
+        override fun previewCount(userId: String): Int = previews.count(userId)
 
         override fun readIndex(userId: String): List<ProtonGalleryPhoto> = readPhotoIndex(userId, indexFile(userId))
 
@@ -192,8 +221,11 @@ internal class ProtonPhotoCache
             )
         }
 
-        override fun readThumbnailQueue(userId: String): List<ProtonThumbnailQueueEntry> {
-            val queue = thumbnailQueueFile(userId)
+        override fun readQueue(
+            userId: String,
+            queue: ProtonQueueName,
+        ): List<ProtonThumbnailQueueEntry> {
+            val queue = queueFile(userId, queue)
             if (!queue.isFile) return emptyList()
             return runCatching {
                 val array = JSONArray(readText(userId, queue))
@@ -233,8 +265,9 @@ internal class ProtonPhotoCache
             }
         }
 
-        override fun writeThumbnailQueue(
+        override fun writeQueue(
             userId: String,
+            queue: ProtonQueueName,
             entries: List<ProtonThumbnailQueueEntry>,
         ) {
             val array = JSONArray()
@@ -253,9 +286,9 @@ internal class ProtonPhotoCache
             }
             writeAtomically(
                 userId,
-                thumbnailQueueFile(userId),
+                queueFile(userId, queue),
                 array.toString(),
-                "Could not commit Proton thumbnail queue",
+                "Could not commit Proton download queue",
             )
         }
 
@@ -340,6 +373,7 @@ internal class ProtonPhotoCache
 
         override fun trimUser(userId: String) {
             thumbnails.maintain(userId)
+            previews.maintain(userId)
             wipeStaleDecryptedCopies()
             expireFiles(decryptedDirectory(userId), ProtonStorageLayout.DECRYPTED_TTL_MILLIS)
         }
@@ -369,11 +403,13 @@ internal class ProtonPhotoCache
             changes.removedNodeUids.forEach { nodeUid ->
                 if (nodeUid in retainedNodeUids) return@forEach
                 thumbnails.remove(userId, nodeUid)
+                previews.remove(userId, nodeUid)
                 originalFile(userId, nodeUid).delete()
                 decryptedOriginalFile(userId, nodeUid).delete()
             }
             val validNames = (remoteNodeUids + retainedNodeUids).mapTo(mutableSetOf(), ::safeName)
             thumbnails.removeUnreferenced(userId, remoteNodeUids + retainedNodeUids)
+            previews.removeUnreferenced(userId, remoteNodeUids + retainedNodeUids)
             originalDirectory(userId).listFiles()?.forEach { file ->
                 if (file.isPrunable(validNames)) {
                     file.delete()
@@ -393,6 +429,7 @@ internal class ProtonPhotoCache
             val removed = nodeUids.toSet()
             removed.forEach { nodeUid ->
                 removeThumbnail(userId, nodeUid)
+                removePreview(userId, nodeUid)
                 originalFile(userId, nodeUid).delete()
                 decryptedOriginalFile(userId, nodeUid).delete()
             }
@@ -423,6 +460,7 @@ internal class ProtonPhotoCache
 
         override fun clearUser(userId: String) {
             thumbnails.clearMemory(userId)
+            previews.forget(userId)
             val indexDeleted = userDirectory(userId).deleteRecursively()
             val originalsDeleted = originalDirectory(userId).deleteRecursively()
             val decryptedDeleted = decryptedDirectory(userId).deleteRecursively()
@@ -442,6 +480,7 @@ internal class ProtonPhotoCache
                 check(directory.deleteRecursively()) { "Could not remove orphaned decrypted Proton media" }
             }
             thumbnails.retainMemoryFor(userId)
+            previews.retainCountsFor(userId)
         }
 
         private fun originalFile(
@@ -479,7 +518,10 @@ internal class ProtonPhotoCache
             source: String,
         ): File = File(File(userDirectory(userId), "sync"), "${safeName(source)}.timestamp")
 
-        private fun thumbnailQueueFile(userId: String): File = File(userDirectory(userId), "thumbnail-queue.json")
+        private fun queueFile(
+            userId: String,
+            queue: ProtonQueueName,
+        ): File = File(userDirectory(userId), queue.fileName)
 
         private fun userDirectory(userId: String): File = File(root, safeName(userId))
 
@@ -499,6 +541,7 @@ internal class ProtonPhotoCache
                                 nodeUid = nodeUid,
                                 captureTimeEpochSeconds = value.getLong("captureTime"),
                                 hasThumbnail = thumbnailExists(userId, nodeUid),
+                                hasPreview = previewExists(userId, nodeUid),
                             ),
                         )
                     }

@@ -68,6 +68,7 @@ internal class ProtonTimelineRepository
                             nodeUid = item.nodeUid.value,
                             captureTimeEpochSeconds = item.captureTime.epochSecond,
                             hasThumbnail = cache.thumbnailExists(userId.id, item.nodeUid.value),
+                            hasPreview = cache.previewExists(userId.id, item.nodeUid.value),
                         )
                     }
                 },
@@ -201,6 +202,26 @@ internal class ProtonTimelineRepository
                             )
                         },
                 )
+            }
+        }
+
+        /** Previews only matter to the timeline queue, so tag listings are left untouched. */
+        internal fun markPreviewsAvailable(
+            userId: UserId,
+            nodeUids: Set<String>,
+        ) {
+            if (nodeUids.isEmpty()) return
+            mutableState.update { state ->
+                if (state.userId != userId.id) return@update state
+                val photos =
+                    state.photos.withThumbnailAvailability(
+                        nodeUids,
+                        available = true,
+                        nodeUid = ProtonGalleryPhoto::nodeUid,
+                        hasThumbnail = ProtonGalleryPhoto::hasPreview,
+                        copy = { photo, hasPreview -> photo.copy(hasPreview = hasPreview) },
+                    ) ?: return@update state
+                state.copy(photos = photos)
             }
         }
 

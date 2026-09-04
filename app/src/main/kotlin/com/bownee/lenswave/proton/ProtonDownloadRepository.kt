@@ -180,10 +180,11 @@ internal class ProtonDownloadRepository
 
             val photosClient = clientProvider.get(userId)
             val failures = mutableMapOf<String, ThumbnailFailureKind>()
-            downloadChunks(photosClient, userId, pending, onProgress).forEach { result ->
-                successful += result.successfulNodeUids
-                failures += result.failures
-            }
+            downloadChunks(pending) { chunk -> downloadChunk(photosClient, userId, chunk, onProgress) }
+                .forEach { result ->
+                    successful += result.successfulNodeUids
+                    failures += result.failures
+                }
             return ThumbnailBatchResult(successful, failures)
         }
 
@@ -196,11 +197,59 @@ internal class ProtonDownloadRepository
 
         internal fun storedThumbnailCount(userId: UserId): Int = cache.thumbnailCount(userId.id)
 
-        private suspend fun downloadChunks(
-            photosClient: ProtonPhotosClient,
+        fun loadPreview(
             userId: UserId,
-            nodeUids: List<String>,
+            nodeUid: String,
+            targetLongEdge: Int,
+        ): Bitmap? = cache.loadPreview(userId.id, nodeUid, targetLongEdge)
+
+        internal fun storedPreviewCount(userId: UserId): Int = cache.previewCount(userId.id)
+
+        /**
+         * Downloads Proton's screen-sized preview rendition into the preview store. A single pass:
+         * a photo without a preview on the server fails with [ThumbnailFailureKind.NOT_FOUND] and
+         * the caller settles it permanently.
+         */
+        internal suspend fun downloadPreviews(
+            userId: UserId,
+            nodeUids: Collection<String>,
             onProgress: suspend (ThumbnailBatchResult) -> Unit,
+        ): ThumbnailBatchResult {
+            val requested = nodeUids.distinct()
+            val successful =
+                requested.filterTo(mutableSetOf()) { nodeUid ->
+                    cache.previewExists(userId.id, nodeUid)
+                }
+            if (successful.isNotEmpty()) {
+                onProgress(ThumbnailBatchResult(successful.toSet(), emptyMap()))
+            }
+            val pending = requested.filterNot { nodeUid -> nodeUid in successful }
+            if (pending.isEmpty()) return ThumbnailBatchResult(successful, emptyMap())
+
+            val photosClient = clientProvider.get(userId)
+            val failures = mutableMapOf<String, ThumbnailFailureKind>()
+            downloadChunks(pending) { chunk ->
+                downloadThumbnailPass(
+                    photosClient,
+                    userId,
+                    chunk,
+                    ThumbnailType.PREVIEW,
+                    onProgress,
+                    timeoutMillis = ProtonThumbnailDownloadPolicy.PREVIEW_PASS_TIMEOUT_MILLIS,
+                    store = { nodeUid, bytes -> cache.writePreview(userId.id, nodeUid, bytes) },
+                ).also { result ->
+                    if (result.failures.isNotEmpty()) onProgress(ThumbnailBatchResult(emptySet(), result.failures))
+                }
+            }.forEach { result ->
+                successful += result.successfulNodeUids
+                failures += result.failures
+            }
+            return ThumbnailBatchResult(successful, failures)
+        }
+
+        private suspend fun downloadChunks(
+            nodeUids: List<String>,
+            downloadChunk: suspend (List<String>) -> ThumbnailBatchResult,
         ): List<ThumbnailBatchResult> =
             coroutineScope {
                 val results = mutableListOf<ThumbnailBatchResult>()
@@ -208,7 +257,7 @@ internal class ProtonDownloadRepository
                     results +=
                         concurrentChunks
                             .map { chunk ->
-                                async { downloadChunk(photosClient, userId, chunk, onProgress) }
+                                async { downloadChunk(chunk) }
                             }.awaitAll()
                 }
                 results
@@ -259,17 +308,22 @@ internal class ProtonDownloadRepository
             nodeUids: Collection<String>,
             type: ThumbnailType,
             onProgress: suspend (ThumbnailBatchResult) -> Unit,
+            timeoutMillis: Long = ProtonThumbnailDownloadPolicy.SDK_PASS_TIMEOUT_MILLIS,
+            store: (nodeUid: String, bytes: ByteArray) -> Unit = { nodeUid, bytes ->
+                cache.writeThumbnail(userId.id, nodeUid, bytes)
+            },
         ): ThumbnailBatchResult =
             transferCoordinator.withBackgroundTransfer {
-                downloadThumbnailPassWhenAllowed(photosClient, userId, nodeUids, type, onProgress)
+                downloadThumbnailPassWhenAllowed(photosClient, nodeUids, type, onProgress, timeoutMillis, store)
             }
 
         private suspend fun downloadThumbnailPassWhenAllowed(
             photosClient: ProtonPhotosClient,
-            userId: UserId,
             nodeUids: Collection<String>,
             type: ThumbnailType,
             onProgress: suspend (ThumbnailBatchResult) -> Unit,
+            timeoutMillis: Long,
+            store: (nodeUid: String, bytes: ByteArray) -> Unit,
         ): ThumbnailBatchResult {
             val requested = nodeUids.toSet()
             val successful = mutableSetOf<String>()
@@ -283,14 +337,14 @@ internal class ProtonDownloadRepository
             }
 
             val completed =
-                withTimeoutOrNull(ProtonThumbnailDownloadPolicy.SDK_PASS_TIMEOUT_MILLIS) {
+                withTimeoutOrNull(timeoutMillis) {
                     try {
                         photosClient.enumerateThumbnails(nodeUids.map(::NodeUid), type).collect { thumbnail ->
                             val nodeUid = thumbnail.uid.value
                             if (nodeUid !in requested) return@collect
                             thumbnail.result.fold(
                                 onSuccess = { bytes ->
-                                    if (runCatching { cache.writeThumbnail(userId.id, nodeUid, bytes) }.isSuccess) {
+                                    if (runCatching { store(nodeUid, bytes) }.isSuccess) {
                                         successful += nodeUid
                                         unreportedSuccessful += nodeUid
                                         failures.remove(nodeUid)
@@ -373,6 +427,9 @@ internal object ProtonThumbnailDownloadPolicy {
     const val BACKGROUND_CLAIM_SIZE = SDK_BATCH_SIZE * MAX_CONCURRENT_BATCHES
     const val PROGRESS_BATCH_SIZE = 4
     const val SDK_PASS_TIMEOUT_MILLIS = 15_000L
+
+    /** Previews are a few hundred kilobytes each, so one pass of [SDK_BATCH_SIZE] gets longer. */
+    const val PREVIEW_PASS_TIMEOUT_MILLIS = 90_000L
 
     fun <T> concurrentWindows(values: List<T>): List<List<List<T>>> =
         values.chunked(SDK_BATCH_SIZE).chunked(MAX_CONCURRENT_BATCHES)

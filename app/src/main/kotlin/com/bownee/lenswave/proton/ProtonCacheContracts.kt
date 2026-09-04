@@ -38,6 +38,11 @@ interface ProtonTimelineCache {
         nodeUid: String,
     ): Boolean
 
+    fun previewExists(
+        userId: String,
+        nodeUid: String,
+    ): Boolean
+
     /** Drops cached media and tag entries for nodes that vanished from the remote timeline. */
     fun reconcilePhotos(
         userId: String,
@@ -113,6 +118,32 @@ interface ProtonMediaCache {
 
     fun thumbnailCount(userId: String): Int
 
+    fun previewExists(
+        userId: String,
+        nodeUid: String,
+    ): Boolean
+
+    /** Stores a preview exactly as delivered; throws when the bytes are not a decodable image. */
+    fun writePreview(
+        userId: String,
+        nodeUid: String,
+        bytes: ByteArray,
+    )
+
+    /** Decodes the stored preview so its longer edge covers [targetLongEdge] pixels; null when absent. */
+    fun loadPreview(
+        userId: String,
+        nodeUid: String,
+        targetLongEdge: Int,
+    ): Bitmap?
+
+    fun removePreview(
+        userId: String,
+        nodeUid: String,
+    )
+
+    fun previewCount(userId: String): Int
+
     fun readOriginal(
         userId: String,
         nodeUid: String,
@@ -142,11 +173,16 @@ interface ProtonSessionCache {
     fun trimUser(userId: String)
 }
 
+/** Persistence for the download queues; each [ProtonQueueName] maps to its own file per user. */
 internal interface ProtonThumbnailQueueStore {
-    fun readThumbnailQueue(userId: String): List<ProtonThumbnailQueueEntry>
-
-    fun writeThumbnailQueue(
+    fun readQueue(
         userId: String,
+        queue: ProtonQueueName,
+    ): List<ProtonThumbnailQueueEntry>
+
+    fun writeQueue(
+        userId: String,
+        queue: ProtonQueueName,
         entries: List<ProtonThumbnailQueueEntry>,
     )
 }

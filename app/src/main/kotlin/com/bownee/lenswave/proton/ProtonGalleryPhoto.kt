@@ -4,6 +4,8 @@ data class ProtonGalleryPhoto(
     val nodeUid: String,
     val captureTimeEpochSeconds: Long,
     val hasThumbnail: Boolean,
+    /** A screen-sized preview is stored on the device; hydrated from disk, never persisted. */
+    val hasPreview: Boolean = false,
 )
 
 data class ProtonTagState(
