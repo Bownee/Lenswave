@@ -20,6 +20,7 @@ import androidx.core.graphics.Insets
 import androidx.core.graphics.drawable.toDrawable
 import androidx.core.view.ViewCompat
 import androidx.core.view.isNotEmpty
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.bownee.lenswave.R
 import com.bownee.lenswave.UiStyle
 import com.bownee.lenswave.dp
@@ -65,6 +66,7 @@ internal class GalleryScreen(
     private val emptyTitle: TextView
     private val emptyMessage: TextView
     private val emptyAction: Button
+    private val refreshLayout: SwipeRefreshLayout
     private val stickyDate: TextView
     private val stickyDateController: GalleryStickyDateController
     private val selectionCount: TextView
@@ -124,7 +126,14 @@ internal class GalleryScreen(
                 addFooterView(galleryFooter, null, false)
                 adapter = this@GalleryScreen.adapter
             }
-        root.addView(list, UiStyle.matchParentFrame())
+        refreshLayout =
+            SwipeRefreshLayout(activity).apply {
+                setColorSchemeColors(UiStyle.accent)
+                setProgressBackgroundColorSchemeColor(UiStyle.surface)
+                setOnRefreshListener { actions.onRefresh() }
+                addView(list, UiStyle.matchParentFrame())
+            }
+        root.addView(refreshLayout, UiStyle.matchParentFrame())
 
         stickyDate =
             UiStyle.label(activity, sizeSp = 12.5f, medium = true).apply {
@@ -284,9 +293,16 @@ internal class GalleryScreen(
         selectionBar.visibility = if (selecting) View.VISIBLE else View.GONE
     }
 
+    /** Mirrors the view model's manual refresh state; a finished refresh hides the spinner. */
+    fun setRefreshing(refreshing: Boolean) {
+        if (refreshLayout.isRefreshing != refreshing) refreshLayout.isRefreshing = refreshing
+    }
+
     private fun layoutBelowHeader() {
         val headerHeight = stickyHeader.height
         if (list.paddingTop != headerHeight) list.setPadding(0, headerHeight, 0, 0)
+        // The spinner drops out from under the pinned header rather than from the screen edge.
+        refreshLayout.setProgressViewOffset(false, headerHeight, headerHeight + activity.dp(REFRESH_SPINNER_END_DP))
         (stickyDate.layoutParams as FrameLayout.LayoutParams).apply {
             topMargin = headerHeight + activity.dp(8)
             marginStart = activity.dp(8) +
@@ -631,6 +647,7 @@ internal class GalleryScreen(
         val onTabSelected: (GalleryTab) -> Unit,
         val onFilterSelected: (GalleryDestination) -> Unit,
         val onDeleteSelection: () -> Unit,
+        val onRefresh: () -> Unit,
     )
 
     private data class EmptyPanel(
@@ -669,6 +686,7 @@ internal class GalleryScreen(
         const val SELECTION_BAR_HEIGHT_DP = 60
         private const val TITLE_ROW_HEIGHT_DP = 40
         private const val CHIP_HEIGHT_DP = 38
+        private const val REFRESH_SPINNER_END_DP = 56
         private const val SCROLL_TO_TOP_JUMP_ROWS = 12
     }
 }

@@ -52,6 +52,8 @@ internal class GalleryListView
 
         override fun dispatchTouchEvent(event: MotionEvent): Boolean {
             if (event.actionMasked == MotionEvent.ACTION_DOWN) fastScroller.begin(event)
+            // A handle drag must not be mistaken for a pull-to-refresh by the parent.
+            if (fastScroller.isDragging) parent?.requestDisallowInterceptTouchEvent(true)
             if (fastScroller.isDragging) return fastScroller.handle(event)
             return super.dispatchTouchEvent(event)
         }

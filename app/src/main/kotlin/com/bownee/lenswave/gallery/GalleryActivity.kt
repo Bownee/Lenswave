@@ -187,6 +187,7 @@ class GalleryActivity :
                         onTabSelected = ::selectTab,
                         onFilterSelected = ::selectFilter,
                         onDeleteSelection = ::deleteSelectedPhotos,
+                        onRefresh = { viewModel.requestRefresh(manual = true) },
                     ),
             )
         setContentView(screen.root)
@@ -221,6 +222,7 @@ class GalleryActivity :
             pendingScrollRestore = state.destination
         }
         currentUiState = state
+        screen.setRefreshing(state.isRefreshing)
         notificationPermissionPrompter.requestIfNeeded(protonConnected = state.isProtonConnected)
         updateThumbnailCacheIdentity(state.currentUserId)
         renderedDestination = state.destination
