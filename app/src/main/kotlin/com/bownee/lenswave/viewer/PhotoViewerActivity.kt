@@ -664,15 +664,44 @@ class PhotoViewerActivity :
                         async(Dispatchers.IO) { runCatching { originalMedia.prepareCachedOriginal(userId, nodeUid) } }
                     }
                 try {
-                    if (!thumbnailShown) loadProtonThumbnail(requestedPhoto)
+                    // A photo's thumbnail read races the cached-original probe instead of holding
+                    // it up: a prefetched neighbour, the common case after a swipe, hits the probe
+                    // in a few milliseconds and its thumbnail would only flash before the picture.
+                    // The read installs the thumbnail only while no cached original has been found.
+                    var cachedOriginalFound = false
+                    val thumbnailLoad =
+                        when {
+                            thumbnailShown -> {
+                                null
+                            }
+
+                            cachedOriginalPreparation == null -> {
+                                loadProtonThumbnail(requestedPhoto)
+                                null
+                            }
+
+                            else -> {
+                                launch {
+                                    val bitmap = readThumbnail(requestedPhoto)
+                                    if (cachedOriginalFound || bitmap == null) return@launch
+                                    if (!PhotoPreviewPolicy.canShow(requestedPhoto.stableId, request.stableId, true)) {
+                                        return@launch
+                                    }
+                                    installThumbnailPreview(requestedPhoto, bitmap)
+                                }
+                            }
+                        }
                     // Photos load the original quietly behind the preview; the spinner only appears
-                    // when there is nothing at all to show. Videos keep their download progress.
+                    // when there is nothing at all to show, and a thumbnail arriving within the
+                    // delay withdraws it. Videos keep their download progress.
                     if (requestedPhoto.mediaKind == MediaKind.VIDEO || !thumbnailPreview.isVisible) {
                         scheduleLoadingPanel()
                     }
                     val cachedOriginal = cachedOriginalPreparation?.await()?.getOrThrow()
                     if (request.stableId != requestedPhoto.stableId) return@launch
                     if (cachedOriginal != null) {
+                        cachedOriginalFound = true
+                        thumbnailLoad?.cancel()
                         showMedia(Uri.fromFile(cachedOriginal))
                         return@launch
                     }
