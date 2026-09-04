@@ -513,7 +513,7 @@ class PhotoViewerActivity : FragmentActivity() {
     private fun showPhoto(uri: Uri) {
         val requestedStableId = request.stableId
         resolvedUri = uri
-        video.release()
+        video.stop()
         playerView.visibility = View.GONE
         photoView.visibility = View.VISIBLE
         if (details.shown) details.ensureMetadataLoaded()
@@ -626,7 +626,7 @@ class PhotoViewerActivity : FragmentActivity() {
     }
 
     private fun resetPhotoStateForNavigation() {
-        video.release()
+        video.stop()
         playerView.visibility = View.GONE
         clearThumbnailPreview()
         photoView.clear()
@@ -663,7 +663,7 @@ class PhotoViewerActivity : FragmentActivity() {
         navigationFallback = null
         if (fallback != null) {
             clearThumbnailPreview()
-            video.release()
+            video.stop()
             setCurrentRequest(fallback.request)
             updateMediaTitle()
             resolvedUri = null
@@ -682,7 +682,7 @@ class PhotoViewerActivity : FragmentActivity() {
             return
         }
         photoTransitioning = false
-        video.release()
+        video.stop()
         photoView.translationX = 0f
         photoView.alpha = 1f
         playerView.translationX = 0f
