@@ -87,18 +87,24 @@ class ProtonOriginalStream(
             ProtonOriginalReadState(availableBytes, downloadComplete)
         }
 
+    /**
+     * Emits only when the change is one a reader would notice: a StateFlow value per channel
+     * write would wake the collector for every few kilobytes of a multi-megabyte transfer.
+     * The condition variable for readers is signalled by the callers regardless.
+     */
     private fun publish(
         downloadedBytes: Long,
         totalBytes: Long? = mutableProgress.value.totalBytes,
         complete: Boolean = false,
     ) {
         val validTotal = totalBytes?.takeIf { total -> total > 0L }
-        mutableProgress.value =
+        val next =
             ProtonOriginalDownloadProgress(
                 downloadedBytes = downloadedBytes.coerceAtLeast(0L),
                 totalBytes = validTotal,
                 complete = complete,
             )
+        if (ProtonOriginalProgressPolicy.shouldPublish(mutableProgress.value, next)) mutableProgress.value = next
     }
 }
 
@@ -106,3 +112,21 @@ data class ProtonOriginalReadState(
     val availableBytes: Long,
     val complete: Boolean,
 )
+
+/** Which progress updates are worth publishing to the viewer. */
+internal object ProtonOriginalProgressPolicy {
+    /** With no total to compute a percentage from, publish every this many bytes. */
+    const val MIN_BYTE_DELTA = 256L * 1_024L
+
+    fun shouldPublish(
+        previous: ProtonOriginalDownloadProgress,
+        next: ProtonOriginalDownloadProgress,
+    ): Boolean =
+        when {
+            next.complete != previous.complete -> true
+            next.totalBytes != previous.totalBytes -> true
+            next.downloadedBytes < previous.downloadedBytes -> true
+            next.percent != null -> next.percent != previous.percent
+            else -> next.downloadedBytes - previous.downloadedBytes >= MIN_BYTE_DELTA
+        }
+}
