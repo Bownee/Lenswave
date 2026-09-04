@@ -523,7 +523,8 @@ class FullResolutionPhotoView
                     duration = DOUBLE_TAP_ZOOM_DURATION_MILLIS
                     interpolator = PathInterpolator(0.2f, 0f, 0f, 1f)
                     addUpdateListener { animator ->
-                        val progress = animator.animatedValue as Float
+                        // The fraction is a primitive; animatedValue would box a Float per frame.
+                        val progress = animator.animatedFraction
                         scale = startScale + (targetScale - startScale) * progress
                         offsetX = startOffsetX + (targetOffsetX - startOffsetX) * progress
                         offsetY = startOffsetY + (targetOffsetY - startOffsetY) * progress

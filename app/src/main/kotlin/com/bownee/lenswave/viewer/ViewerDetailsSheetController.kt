@@ -208,11 +208,13 @@ internal class ViewerDetailsSheetController(
                 resources.displayMetrics.density,
             )
         detailsScrollAnimator =
-            ValueAnimator.ofInt(startOffset, boundedTarget).apply {
+            ValueAnimator.ofFloat(0f, 1f).apply {
                 this.duration = duration
                 interpolator = ViewerVerticalSettle.interpolator
                 addUpdateListener { animator ->
-                    setDetailsOffset(animator.animatedValue as Int, initialOffset, maximumOffset)
+                    // Interpolated by hand from the fraction: animatedValue would box an Int per frame.
+                    val offset = startOffset + ((boundedTarget - startOffset) * animator.animatedFraction).roundToInt()
+                    setDetailsOffset(offset, initialOffset, maximumOffset)
                 }
                 start()
             }
