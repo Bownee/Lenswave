@@ -117,5 +117,6 @@ class AppUpdateCheckerTest {
 
     private object DirectDispatchers : LenswaveDispatchers {
         override val io = Dispatchers.Unconfined
+        override val default = Dispatchers.Unconfined
     }
 }

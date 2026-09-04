@@ -5,7 +5,11 @@ import androidx.core.content.edit
 import com.bownee.lenswave.LenswaveDiagnostics
 import com.bownee.lenswave.LenswaveOperation
 import com.bownee.lenswave.storage.AtomicFileStore
+import dagger.Binds
+import dagger.Module
+import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
+import dagger.hilt.components.SingletonComponent
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -37,8 +41,30 @@ import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 
+/**
+ * Hands out the SDK client of one account at a time; [ProtonSdkPhotosClientProvider] in
+ * production. The interface lets the repositories and the gateway run against a fake that never
+ * reaches the SDK or an Android context.
+ */
+interface ProtonPhotosClientProvider {
+    suspend fun get(userId: UserId): ProtonPhotosClient
+
+    suspend fun disconnect(userId: UserId)
+
+    suspend fun downloadTo(
+        userId: UserId,
+        nodeUid: String,
+        output: WritableByteChannel,
+        onProgress: (ProgressUpdate) -> Unit = {},
+    )
+
+    companion object {
+        const val BASE_URL = "https://drive-api.proton.me/"
+    }
+}
+
 @Singleton
-class ProtonPhotosClientProvider
+internal class ProtonSdkPhotosClientProvider
     @Inject
     constructor(
         @param:ApplicationContext private val context: Context,
@@ -46,14 +72,14 @@ class ProtonPhotosClientProvider
         private val cryptoContext: CryptoContext,
         private val userAddressRepository: UserAddressRepository,
         private val publicAddressRepository: PublicAddressRepository,
-    ) {
+    ) : ProtonPhotosClientProvider {
         private val clientScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         private val mutex = Mutex()
         private var clientUserId: UserId? = null
         private var client: ProtonPhotosClient? = null
         private var loggerProvider: LoggerProvider? = null
 
-        suspend fun get(userId: UserId): ProtonPhotosClient =
+        override suspend fun get(userId: UserId): ProtonPhotosClient =
             try {
                 mutex.withLock {
                     client?.takeIf { clientUserId == userId } ?: create(userId).also { created ->
@@ -69,7 +95,7 @@ class ProtonPhotosClientProvider
                 throw error
             }
 
-        suspend fun disconnect(userId: UserId) =
+        override suspend fun disconnect(userId: UserId) =
             mutex.withLock {
                 if (clientUserId != userId) return@withLock
                 // SDK work launched on the shared scope belongs to this client; a closed client must not
@@ -83,11 +109,11 @@ class ProtonPhotosClientProvider
                 }
             }
 
-        suspend fun downloadTo(
+        override suspend fun downloadTo(
             userId: UserId,
             nodeUid: String,
             output: WritableByteChannel,
-            onProgress: (ProgressUpdate) -> Unit = {},
+            onProgress: (ProgressUpdate) -> Unit,
         ) {
             get(userId).downloader(PhotosDownloaderRequest(NodeUid(nodeUid))).use { downloader ->
                 downloader.downloadToStream(clientScope, output).use { controller ->
@@ -134,7 +160,7 @@ class ProtonPhotosClientProvider
                 apiProvider = apiProvider,
                 request =
                     ClientCreateRequest(
-                        baseUrl = BASE_URL,
+                        baseUrl = ProtonPhotosClientProvider.BASE_URL,
                         loggerProvider = logger,
                         bindingsLanguage = "kotlin",
                         uid = clientUid,
@@ -153,10 +179,15 @@ class ProtonPhotosClientProvider
             )
         }
 
-        internal companion object {
-            const val BASE_URL = "https://drive-api.proton.me/"
-            private const val PREFERENCES_NAME = "proton-sdk"
+        private companion object {
+            const val PREFERENCES_NAME = "proton-sdk"
 
-            private fun clientUidKey(userId: UserId): String = "client-uid-${AtomicFileStore.safeName(userId.id)}"
+            fun clientUidKey(userId: UserId): String = "client-uid-${AtomicFileStore.safeName(userId.id)}"
         }
     }
+
+@Module
+@InstallIn(SingletonComponent::class)
+internal abstract class ProtonPhotosClientModule {
+    @Binds abstract fun bindClientProvider(implementation: ProtonSdkPhotosClientProvider): ProtonPhotosClientProvider
+}
