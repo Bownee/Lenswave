@@ -52,7 +52,8 @@ All notable changes to Lenswave. The format follows [Keep a Changelog](https://k
   has no size limit and is cleared on disconnect.
 - Swiping between photos shows the neighbouring photo during the gesture.
 - Build, CI and release tooling were reworked (version catalog, strict checksums, shared CI
-  workflow, test reports and lint SARIF in pull requests); ktlint enforces formatting.
+  workflow, lint SARIF in code scanning, test results in the evidence artifact); ktlint enforces
+  formatting.
 - The gallery header no longer shows status text (counts, loading, or thumbnail progress).
 
 ### Removed

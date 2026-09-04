@@ -80,15 +80,6 @@ jobs:
           scripts/check-apk-size.sh app/build/outputs/apk/release/app-arm64-v8a-release-unsigned.apk \
             | tee reports/apk-sizes.txt
 
-      - name: Publish unit test results
-        if: always()
-        uses: mikepenz/action-junit-report@a9170d5795813c01ab4901ffb045b52bab4ab09d # v6.5.0
-        with:
-          report_paths: app/build/test-results/testDebugUnitTest/*.xml
-          check_name: Unit tests
-          detailed_summary: true
-          include_passed: false
-
       - name: Upload lint findings to code scanning
         if: always()
         uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
