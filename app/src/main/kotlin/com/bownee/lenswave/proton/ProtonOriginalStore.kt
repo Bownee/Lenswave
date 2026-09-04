@@ -32,9 +32,10 @@ internal class ProtonOriginalStore
         private val decrypted = File(context.cacheDir, ProtonStorageLayout.DECRYPTED_DIRECTORY)
 
         /**
-         * Plaintext copies from a previous process are wiped once, on the first session activation,
-         * which runs on an I/O dispatcher. Doing it in the constructor would delete potentially
-         * hundreds of megabytes on the main thread while Hilt builds the object graph.
+         * Plaintext copies from a previous process are wiped once, by the first read or download
+         * target of the process, which run on an I/O dispatcher, so nothing materializes a new
+         * copy next to stale ones. Doing it in the constructor would delete potentially hundreds
+         * of megabytes on the main thread while Hilt builds the object graph.
          */
         @Volatile private var decryptedWiped = false
 
@@ -59,6 +60,7 @@ internal class ProtonOriginalStore
             nodeUid: String,
             shouldContinue: () -> Boolean = { true },
         ): File? {
+            wipeStaleDecryptedCopies()
             val file = file(userId, nodeUid)
             if (!file.isFile || file.length() <= 0L) {
                 deleteTracked(userId, file)
@@ -98,6 +100,7 @@ internal class ProtonOriginalStore
             userId: String,
             nodeUid: String,
         ): Pair<File, File> {
+            wipeStaleDecryptedCopies()
             val target = file(userId, nodeUid)
             val materialized = decryptedFile(userId, nodeUid)
             materialized.parentFile?.mkdirs()
@@ -192,13 +195,15 @@ internal class ProtonOriginalStore
             }
         }
 
-        /** Runs once per process; every later call returns at once. */
-        @Synchronized
+        /** Runs once per process; every later call returns at once, without taking the lock. */
         fun wipeStaleDecryptedCopies() {
             if (decryptedWiped) return
-            decrypted.deleteRecursively()
-            decrypted.mkdirs()
-            decryptedWiped = true
+            synchronized(this) {
+                if (decryptedWiped) return
+                decrypted.deleteRecursively()
+                decrypted.mkdirs()
+                decryptedWiped = true
+            }
         }
 
         private fun trimToLimit(
