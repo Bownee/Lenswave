@@ -347,7 +347,24 @@ internal class ProtonPhotoCache
             thumbnails.maintain(userId)
             previews.maintain(userId)
             originals.maintain(userId)
+            sweepStaleWriteTemporaries(userId)
             forgetRenditions(userId)
+        }
+
+        /**
+         * An atomic write leaves its `.part` file beside the target when the process dies between
+         * the write and the rename, and nothing else ever removes it. Only the directories the
+         * listings, the tag files, the sync stamps and the queues are written to are swept (the
+         * album-photo indexes are swept by [reconcileAlbums]), and only files past the stale TTL,
+         * so a write in progress on another thread is left alone.
+         */
+        private fun sweepStaleWriteTemporaries(userId: String) {
+            val user = userDirectory(userId)
+            listOf(user, File(user, TAGS_DIRECTORY), File(user, SYNC_DIRECTORY)).forEach { directory ->
+                directory.listFiles()?.forEach { file ->
+                    if (file.isFile && isStalePartial(file)) file.delete()
+                }
+            }
         }
 
         override fun reconcilePhotos(
@@ -485,7 +502,7 @@ internal class ProtonPhotoCache
         private fun tagIndexFile(
             userId: String,
             tag: ProtonMediaTag,
-        ): File = File(File(userDirectory(userId), "tags"), "${tag.name.lowercase()}.json")
+        ): File = File(File(userDirectory(userId), TAGS_DIRECTORY), "${tag.name.lowercase()}.json")
 
         private fun albumsIndexFile(userId: String): File = File(userDirectory(userId), "albums.json")
 
@@ -499,7 +516,7 @@ internal class ProtonPhotoCache
         private fun syncMetadataFile(
             userId: String,
             source: String,
-        ): File = File(File(userDirectory(userId), "sync"), "${safeName(source)}.timestamp")
+        ): File = File(File(userDirectory(userId), SYNC_DIRECTORY), "${safeName(source)}.timestamp")
 
         private fun queueFile(
             userId: String,
@@ -624,5 +641,7 @@ internal class ProtonPhotoCache
 
         private companion object {
             const val KEY_ALIAS_FILE = "key-alias"
+            const val TAGS_DIRECTORY = "tags"
+            const val SYNC_DIRECTORY = "sync"
         }
     }
