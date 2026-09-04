@@ -10,6 +10,7 @@ import com.bownee.lenswave.proton.ProtonAccountSessionManager
 import com.bownee.lenswave.proton.ProtonAccountSessionState
 import com.bownee.lenswave.proton.ProtonAlbum
 import com.bownee.lenswave.proton.ProtonAlbumPhotosState
+import com.bownee.lenswave.proton.ProtonAlbumReference
 import com.bownee.lenswave.proton.ProtonAlbumsState
 import com.bownee.lenswave.proton.ProtonGalleryState
 import com.bownee.lenswave.proton.ProtonThumbnailScheduler
@@ -362,9 +363,17 @@ class GalleryViewModel internal constructor(
                     }
                 }
             }
-            (destination as? GalleryDestination.Tag)?.let { selected ->
+            // The page the user is on needs its own listing too, or a restore into it stays blank.
+            val selected = destination
+            if (selected is GalleryDestination.Tag) {
                 withContext(dispatchers.io) {
                     protonRepository.syncTagMetadata(userId, selected.tag)
+                }
+            }
+            if (selected is GalleryDestination.AlbumPhotos) {
+                withContext(dispatchers.io) {
+                    ensureCachedAlbumLoaded(userId, selected.album)
+                    protonRepository.syncAlbumPhotoMetadata(userId, selected.album)
                 }
             }
             if (currentUserId == userId) {
@@ -409,6 +418,7 @@ class GalleryViewModel internal constructor(
 
             is GalleryDestination.AlbumPhotos -> {
                 withContext(dispatchers.io) {
+                    ensureCachedAlbumLoaded(userId, selectedDestination.album)
                     protonRepository.syncAlbumPhotoMetadata(
                         userId,
                         selectedDestination.album,
@@ -418,6 +428,20 @@ class GalleryViewModel internal constructor(
                 protonThumbnailScheduler.enqueue(userId)
             }
         }
+    }
+
+    /**
+     * Puts the album's cached photos on screen before its sync runs. [openAlbum] does this on
+     * the way in; a restored album destination (a recreation, or a cold start into it) has no
+     * such step and would show an empty page until the sync settled.
+     */
+    private suspend fun ensureCachedAlbumLoaded(
+        userId: UserId,
+        album: ProtonAlbumReference,
+    ) {
+        val current = protonRepository.albumPhotosState.value
+        if (current.userId == userId.id && current.albumUid == album.nodeUid && current.hasLoaded) return
+        protonRepository.loadCachedAlbum(userId, album)
     }
 
     private suspend fun refreshProtonSection(

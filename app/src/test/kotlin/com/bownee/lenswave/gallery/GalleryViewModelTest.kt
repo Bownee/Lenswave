@@ -383,6 +383,59 @@ class GalleryViewModelTest {
         }
 
     @Test
+    fun `a restored album destination loads the cached album before syncing it`() =
+        runTest(dispatcher) {
+            savedState["gallery.destination"] = "proton-album"
+            savedState["gallery.album-uid"] = "al"
+            savedState["gallery.album-name"] = "Album al"
+            reader.cachedAlbumPhotos = listOf(photo("al-1", captureTime = 1L))
+
+            // Without any cached metadata (a cold start into the album).
+            val cold = viewModel()
+            backgroundScope.launch { cold.uiState.collect {} }
+            runCurrent()
+            session.value = ProtonAccountSessionState(readyAccount(USER), USER, initialized = true)
+            runCurrent()
+
+            assertEquals(
+                listOf(
+                    "syncTimeline:u:false",
+                    "syncAlbums:u:false",
+                    "loadCachedAlbum:al",
+                    "syncAlbumPhotos:al:false",
+                    "restart:u",
+                ),
+                events,
+            )
+            assertEquals(
+                listOf("al-1"),
+                cold.uiState.value.visibleAssets
+                    .map(GalleryAsset::nodeUid),
+            )
+
+            // With the metadata loaded (a recreation): the startup refresh loads the cached album first.
+            events.clear()
+            reader.state.value = loadedTimeline("p1")
+            reader.albumsState.value = ProtonAlbumsState(userId = USER.id, hasLoaded = true)
+            reader.albumPhotosState.value = ProtonAlbumPhotosState()
+            val recreated = viewModel()
+            backgroundScope.launch { recreated.uiState.collect {} }
+            runCurrent()
+
+            assertEquals(
+                listOf("restart:u", "loadCachedAlbum:al", "syncAlbumPhotos:al:false", "enqueue:u"),
+                events,
+            )
+
+            // A later refresh finds the album loaded and does not read the cache again.
+            events.clear()
+            recreated.requestRefresh(manual = false)
+            runCurrent()
+
+            assertEquals(listOf("syncAlbumPhotos:al:false", "enqueue:u"), events)
+        }
+
+    @Test
     fun `runPeriodicSync checks at the policy interval and skips a transitioning session`() =
         runTest(dispatcher) {
             val viewModel = connectedViewModel()
