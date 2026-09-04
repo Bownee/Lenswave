@@ -1,7 +1,6 @@
 package com.bownee.lenswave
 
 import android.util.Log
-import com.bownee.lenswave.proton.ProtonMediaTag
 import me.proton.drive.sdk.ProtonDriveSdkException
 import me.proton.drive.sdk.ProtonSdkError
 
@@ -23,37 +22,10 @@ internal enum class LenswaveOperation(
     ORIGINAL_NAME_LOAD("original-name-load"),
     PROTON_CLIENT_CREATE("proton-client-create"),
     SESSION_DATABASE_REKEY("session-database-rekey"),
-    TAG_SYNC_FAVORITES("tag-sync-favorites"),
-    TAG_SYNC_SCREENSHOTS("tag-sync-screenshots"),
-    TAG_SYNC_VIDEOS("tag-sync-videos"),
-    TAG_SYNC_LIVE_PHOTOS("tag-sync-live_photos"),
-    TAG_SYNC_MOTION_PHOTOS("tag-sync-motion_photos"),
-    TAG_SYNC_SELFIES("tag-sync-selfies"),
-    TAG_SYNC_PORTRAITS("tag-sync-portraits"),
-    TAG_SYNC_BURSTS("tag-sync-bursts"),
-    TAG_SYNC_PANORAMAS("tag-sync-panoramas"),
-    TAG_SYNC_RAW("tag-sync-raw"),
     THUMBNAIL_DOWNLOAD("thumbnail-download"),
     PREVIEW_DOWNLOAD("preview-download"),
     THUMBNAIL_WORKER("thumbnail-worker"),
     TIMELINE_SYNC("timeline-sync"),
-    ;
-
-    companion object {
-        fun tagSync(tag: ProtonMediaTag): LenswaveOperation =
-            when (tag) {
-                ProtonMediaTag.FAVORITES -> TAG_SYNC_FAVORITES
-                ProtonMediaTag.SCREENSHOTS -> TAG_SYNC_SCREENSHOTS
-                ProtonMediaTag.VIDEOS -> TAG_SYNC_VIDEOS
-                ProtonMediaTag.LIVE_PHOTOS -> TAG_SYNC_LIVE_PHOTOS
-                ProtonMediaTag.MOTION_PHOTOS -> TAG_SYNC_MOTION_PHOTOS
-                ProtonMediaTag.SELFIES -> TAG_SYNC_SELFIES
-                ProtonMediaTag.PORTRAITS -> TAG_SYNC_PORTRAITS
-                ProtonMediaTag.BURSTS -> TAG_SYNC_BURSTS
-                ProtonMediaTag.PANORAMAS -> TAG_SYNC_PANORAMAS
-                ProtonMediaTag.RAW -> TAG_SYNC_RAW
-            }
-    }
 }
 
 /** Emits operation-level diagnostics without messages, URLs, or user/content identifiers. */

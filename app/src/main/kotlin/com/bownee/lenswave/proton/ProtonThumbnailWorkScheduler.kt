@@ -52,7 +52,8 @@ class ProtonThumbnailWorkScheduler
             withContext(Dispatchers.IO) {
                 val workName = ProtonWorkNames.thumbnails(userId)
                 val states = workManager.getWorkInfosForUniqueWork(workName).get().map { work -> work.state }
-                if (!ProtonThumbnailResumePolicy.shouldReplace(states)) return@withContext
+                // A run that is still going keeps its progress; anything else is replaced.
+                if (WorkInfo.State.RUNNING in states) return@withContext
                 replace(workName, userId)
             }
         }
@@ -83,10 +84,6 @@ class ProtonThumbnailWorkScheduler
                 .get()
         }
     }
-
-internal object ProtonThumbnailResumePolicy {
-    fun shouldReplace(states: Collection<WorkInfo.State>): Boolean = WorkInfo.State.RUNNING !in states
-}
 
 @Module
 @InstallIn(SingletonComponent::class)

@@ -85,7 +85,7 @@ class ProtonThumbnailWorker(
                                     publishForeground(foregroundInfoFactory, progress.notificationProgress())
                                 }
                         ) {
-                            ProtonThumbnailQueueStep.Downloaded, ProtonThumbnailQueueStep.Failed -> {}
+                            ProtonThumbnailQueueStep.Processed -> {}
 
                             is ProtonThumbnailQueueStep.Idle -> {
                                 val wait = ProtonBackgroundBatchPolicy.idleWaitMillis(step, MAX_IDLE_WAIT_MILLIS)

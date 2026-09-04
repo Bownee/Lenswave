@@ -1,7 +1,6 @@
 package com.bownee.lenswave.proton
 
 import com.bownee.lenswave.LenswaveClock
-import com.bownee.lenswave.LenswaveOperation
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -11,7 +10,7 @@ import org.junit.Test
 class ProtonSnapshotSyncTest {
     private val metadata = FakeMetadata()
     private val clock = FakeClock(10_000L)
-    private val failures = mutableListOf<Pair<LenswaveOperation, Throwable>>()
+    private val failures = mutableListOf<Pair<String, Throwable>>()
     private val sync =
         ProtonSnapshotSync(ProtonSnapshotCoordinator(metadata, clock)) { operation, error ->
             failures += operation to error
@@ -58,7 +57,7 @@ class ProtonSnapshotSyncTest {
             sync.sync(hasSnapshot = false, enumerate = { throw error })
 
             assertEquals(listOf("syncing", "failed"), events)
-            assertEquals(listOf(LenswaveOperation.TIMELINE_SYNC to error), failures)
+            assertEquals(listOf("timeline-sync" to error), failures)
             assertEquals(0L, metadata.readLastSuccessfulSync("user", KEY))
         }
 
@@ -103,7 +102,7 @@ class ProtonSnapshotSyncTest {
         syncKey = KEY,
         forceRemote = forceRemote,
         hasSnapshot = hasSnapshot,
-        operation = LenswaveOperation.TIMELINE_SYNC,
+        operation = "timeline-sync",
         publishFresh = { events += "fresh" },
         publishSyncing = { events += "syncing" },
         enumerate = enumerate,

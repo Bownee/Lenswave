@@ -8,10 +8,8 @@ All notable changes to Lenswave. The format follows [Keep a Changelog](https://k
 - Previews (~1920 px) of every photo are downloaded in the background after thumbnails, so
   photos open sharp immediately.
 - Pull down on any photo grid or the album list to refresh it from Proton.
-- While the gallery is open it checks for new, changed or deleted media every five minutes and
-  re-enumerates the visible section quietly once its cached listing is older than 15 minutes
-  (30 minutes for the album list). Returning from the background triggers an immediate check.
-
+- While the gallery is open it re-enumerates the visible section quietly about every 15
+  minutes (the album list every 30). Returning from the background triggers an immediate check.
 - Battery: the download worker no longer sleeps inside its foreground service for more than two
   minutes waiting on retries, gives up on a photo after six failed attempts until the next sync,
   re-posts its notification at most every 1.5 seconds, keeps one network callback per run instead

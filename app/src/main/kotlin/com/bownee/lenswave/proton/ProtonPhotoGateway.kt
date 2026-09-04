@@ -353,18 +353,14 @@ class ProtonPhotoGateway
                 // Settling the final result as well guarantees no claimed entry is left behind,
                 // which would otherwise keep the run spinning on a queue it can never drain.
                 progressMutex.withLock { settlePreviewProgress(userId, result) }
-                if (result.failures.isEmpty()) {
-                    ProtonThumbnailQueueStep.Downloaded
-                } else {
-                    ProtonThumbnailQueueStep.Failed
-                }
+                ProtonThumbnailQueueStep.Processed
             } catch (error: CancellationException) {
                 previewQueue.release(userId.id, nodeUids)
                 throw error
             } catch (_: Throwable) {
                 previewQueue.settle(userId.id, emptySet(), nodeUids.toSet())
                 onProgress(thumbnailWorkProgressInActiveSession(userId))
-                ProtonThumbnailQueueStep.Failed
+                ProtonThumbnailQueueStep.Processed
             }
         }
 
@@ -399,18 +395,14 @@ class ProtonPhotoGateway
                             onProgress(thumbnailWorkProgressInActiveSession(userId))
                         }
                     }
-                if (result.failures.isEmpty()) {
-                    ProtonThumbnailQueueStep.Downloaded
-                } else {
-                    ProtonThumbnailQueueStep.Failed
-                }
+                ProtonThumbnailQueueStep.Processed
             } catch (error: CancellationException) {
                 thumbnailQueue.release(userId.id, nodeUids)
                 throw error
             } catch (_: Throwable) {
                 thumbnailQueue.settle(userId.id, emptySet(), nodeUids.toSet())
                 onProgress(thumbnailWorkProgressInActiveSession(userId))
-                ProtonThumbnailQueueStep.Failed
+                ProtonThumbnailQueueStep.Processed
             }
         }
 

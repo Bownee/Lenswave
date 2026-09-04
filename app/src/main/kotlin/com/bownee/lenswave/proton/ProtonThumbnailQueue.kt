@@ -65,9 +65,8 @@ internal data class ProtonThumbnailCandidate(
 )
 
 internal sealed interface ProtonThumbnailQueueStep {
-    data object Downloaded : ProtonThumbnailQueueStep
-
-    data object Failed : ProtonThumbnailQueueStep
+    /** A batch was claimed and settled; successes and failures alike are recorded in the queue. */
+    data object Processed : ProtonThumbnailQueueStep
 
     /** [retryAfterMillis] is how long until a backed-off entry is claimable again, when any is pending. */
     data class Idle(

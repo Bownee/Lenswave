@@ -1,7 +1,6 @@
 package com.bownee.lenswave.proton
 
 import com.bownee.lenswave.LenswaveDiagnostics
-import com.bownee.lenswave.LenswaveOperation
 import kotlinx.coroutines.CancellationException
 import javax.inject.Inject
 
@@ -13,11 +12,11 @@ import javax.inject.Inject
  */
 internal class ProtonSnapshotSync internal constructor(
     private val snapshots: ProtonSnapshotCoordinator,
-    private val reportFailure: (LenswaveOperation, Throwable) -> Unit,
+    private val reportFailure: (String, Throwable) -> Unit,
 ) {
     @Inject
     constructor(snapshots: ProtonSnapshotCoordinator) :
-        this(snapshots, LenswaveDiagnostics::reportFailure)
+        this(snapshots, { operation, error -> LenswaveDiagnostics.reportFailure(operation, error) })
 
     /**
      * Callers read the cached snapshot (and [hasSnapshot]) before calling so those reads stay
@@ -35,7 +34,7 @@ internal class ProtonSnapshotSync internal constructor(
         syncKey: String,
         forceRemote: Boolean,
         hasSnapshot: Boolean,
-        operation: LenswaveOperation,
+        operation: String,
         publishFresh: () -> Unit,
         publishSyncing: () -> Unit,
         enumerate: suspend () -> T,

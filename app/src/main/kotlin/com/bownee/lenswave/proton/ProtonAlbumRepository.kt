@@ -66,7 +66,7 @@ internal class ProtonAlbumRepository
                 syncKey = ProtonSyncKeys.ALBUMS,
                 forceRemote = forceRemote,
                 hasSnapshot = hasCachedSnapshot,
-                operation = LenswaveOperation.ALBUM_SYNC,
+                operation = LenswaveOperation.ALBUM_SYNC.tag,
                 publishFresh = { emitAlbums(userId, existing, syncing = false, hasLoaded = true) },
                 publishSyncing = { emitAlbums(userId, existing, syncing = true, hasLoaded = hasCachedSnapshot) },
                 enumerate = {
@@ -106,7 +106,7 @@ internal class ProtonAlbumRepository
                 syncKey = ProtonSyncKeys.albumPhotos(album.nodeUid),
                 forceRemote = forceRemote,
                 hasSnapshot = hasCachedSnapshot,
-                operation = LenswaveOperation.ALBUM_PHOTO_SYNC,
+                operation = LenswaveOperation.ALBUM_PHOTO_SYNC.tag,
                 publishFresh = { emitAlbumPhotos(userId, album, existing, hasLoaded = true, syncing = false) },
                 publishSyncing = {
                     emitAlbumPhotos(userId, album, existing, hasLoaded = hasCachedSnapshot, syncing = true)

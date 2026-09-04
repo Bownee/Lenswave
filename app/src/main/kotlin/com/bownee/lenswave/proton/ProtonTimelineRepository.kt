@@ -59,7 +59,7 @@ internal class ProtonTimelineRepository
                 syncKey = ProtonSyncKeys.TIMELINE,
                 forceRemote = forceRemote,
                 hasSnapshot = hasCachedSnapshot,
-                operation = LenswaveOperation.TIMELINE_SYNC,
+                operation = LenswaveOperation.TIMELINE_SYNC.tag,
                 publishFresh = { emit(userId, existing, hasLoaded = true, syncing = false) },
                 publishSyncing = { emit(userId, existing, hasLoaded = hasCachedSnapshot, syncing = true) },
                 enumerate = {
@@ -112,7 +112,7 @@ internal class ProtonTimelineRepository
                 syncKey = ProtonSyncKeys.timelineTag(tag),
                 forceRemote = forceRemote,
                 hasSnapshot = hasCachedSnapshot,
-                operation = LenswaveOperation.tagSync(tag),
+                operation = "tag-sync-${tag.name.lowercase()}",
                 publishFresh = { updateTag(tag, ProtonTagState(existing, hasLoaded = true)) },
                 publishSyncing = {
                     updateTag(tag, ProtonTagState(existing, hasLoaded = hasCachedSnapshot, syncing = true))
