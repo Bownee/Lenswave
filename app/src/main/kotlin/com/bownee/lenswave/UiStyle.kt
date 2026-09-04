@@ -28,27 +28,56 @@ import androidx.core.widget.TextViewCompat
 
 /** Colours, typography and the small set of view factories every screen is built from. */
 object UiStyle {
-    private lateinit var applicationContext: Context
+    // The palette has no configuration qualifiers, so every colour, the typeface and the two
+    // state strings are resolved once in initialize() instead of on each property read or bind.
+    var background: Int = 0
+        private set
+    var surface: Int = 0
+        private set
+    var surfaceRaised: Int = 0
+        private set
+    var border: Int = 0
+        private set
+    var text: Int = 0
+        private set
+    var muted: Int = 0
+        private set
+    var accent: Int = 0
+        private set
+    var accentSoft: Int = 0
+        private set
+    var onAccent: Int = 0
+        private set
+    var danger: Int = 0
+        private set
+    var dangerSoft: Int = 0
+        private set
+
+    lateinit var medium: Typeface
+        private set
+
+    private lateinit var selectedDescription: String
+    private lateinit var notSelectedDescription: String
 
     fun initialize(context: Context) {
-        applicationContext = context.applicationContext
+        val applicationContext = context.applicationContext
+
+        fun color(resource: Int): Int = ContextCompat.getColor(applicationContext, resource)
+        background = color(R.color.lenswave_background)
+        surface = color(R.color.lenswave_surface)
+        surfaceRaised = color(R.color.lenswave_surface_raised)
+        border = color(R.color.lenswave_border)
+        text = color(R.color.lenswave_text)
+        muted = color(R.color.lenswave_muted)
+        accent = color(R.color.lenswave_accent)
+        accentSoft = color(R.color.lenswave_accent_soft)
+        onAccent = color(R.color.lenswave_on_accent)
+        danger = color(R.color.lenswave_error)
+        dangerSoft = color(R.color.lenswave_error_soft)
+        medium = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        selectedDescription = applicationContext.getString(R.string.selected)
+        notSelectedDescription = applicationContext.getString(R.string.not_selected)
     }
-
-    val background: Int get() = color(R.color.lenswave_background)
-    val surface: Int get() = color(R.color.lenswave_surface)
-    val surfaceRaised: Int get() = color(R.color.lenswave_surface_raised)
-    val border: Int get() = color(R.color.lenswave_border)
-    val text: Int get() = color(R.color.lenswave_text)
-    val muted: Int get() = color(R.color.lenswave_muted)
-    val accent: Int get() = color(R.color.lenswave_accent)
-    val accentSoft: Int get() = color(R.color.lenswave_accent_soft)
-    val onAccent: Int get() = color(R.color.lenswave_on_accent)
-    val danger: Int get() = color(R.color.lenswave_error)
-    val dangerSoft: Int get() = color(R.color.lenswave_error_soft)
-
-    val medium: Typeface get() = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-
-    private fun color(resource: Int): Int = ContextCompat.getColor(applicationContext, resource)
 
     internal fun withAlpha(
         color: Int,
@@ -174,10 +203,7 @@ object UiStyle {
         selected: Boolean,
     ) {
         view.isSelected = selected
-        ViewCompat.setStateDescription(
-            view,
-            view.context.getString(if (selected) R.string.selected else R.string.not_selected),
-        )
+        ViewCompat.setStateDescription(view, if (selected) selectedDescription else notSelectedDescription)
     }
 
     fun clipRounded(

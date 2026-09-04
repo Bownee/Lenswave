@@ -70,8 +70,8 @@ internal class GalleryListView
             oldTop: Int,
         ) {
             super.onScrollChanged(left, top, oldLeft, oldTop)
-            fastScroller.updateVisibility()
-            invalidate()
+            // The list redraws itself as it scrolls; only the handle's own strip needs marking.
+            fastScroller.onListScrolled()
         }
 
         override fun onLayout(

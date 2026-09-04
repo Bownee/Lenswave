@@ -3,9 +3,7 @@ package com.bownee.lenswave.gallery
 import com.bownee.lenswave.R
 import com.bownee.lenswave.proton.ProtonAlbumPhotosState
 import com.bownee.lenswave.proton.ProtonAlbumsState
-import com.bownee.lenswave.proton.ProtonGalleryPhoto
 import com.bownee.lenswave.proton.ProtonGalleryState
-import com.bownee.lenswave.proton.ProtonMediaTag
 import com.bownee.lenswave.proton.ProtonTagState
 import me.proton.core.domain.entity.UserId
 
@@ -44,6 +42,8 @@ internal data class GalleryUiInputs(
 internal class GalleryUiStateFactory(
     private val text: GalleryText,
 ) {
+    private val memo = GalleryAssetMemo()
+
     fun create(inputs: GalleryUiInputs): GalleryUiState =
         when (val destination = inputs.destination) {
             GalleryDestination.Timeline -> timeline(inputs)
@@ -54,11 +54,10 @@ internal class GalleryUiStateFactory(
 
     private fun timeline(inputs: GalleryUiInputs): GalleryUiState {
         protonUnavailable(inputs)?.let { return it }
-        val tagIndex = inputs.protonGallery.tagIndex()
-        val assets = inputs.protonGallery.photos.map { it.toGalleryAsset(tagIndex) }
+        val content = memo.photos(inputs.protonGallery.photos, memo.tagIndex(inputs.protonGallery.tags))
         val emptyState =
             when {
-                assets.isNotEmpty() -> {
+                content.assets.isNotEmpty() -> {
                     null
                 }
 
@@ -80,7 +79,7 @@ internal class GalleryUiStateFactory(
                     )
                 }
             }
-        return base(inputs, GalleryContent.Photos(assets), emptyState)
+        return base(inputs, content, emptyState)
     }
 
     private fun tag(
@@ -89,12 +88,11 @@ internal class GalleryUiStateFactory(
     ): GalleryUiState {
         protonUnavailable(inputs)?.let { return it }
         val state = inputs.protonGallery.tags[destination.tag] ?: ProtonTagState()
-        val tagIndex = inputs.protonGallery.tagIndex()
-        val assets = state.photos.map { it.toGalleryAsset(tagIndex) }
+        val content = memo.photos(state.photos, memo.tagIndex(inputs.protonGallery.tags))
         val label = text.string(destination.tag.labelRes)
         val emptyState =
             when {
-                assets.isNotEmpty() -> {
+                content.assets.isNotEmpty() -> {
                     null
                 }
 
@@ -116,7 +114,7 @@ internal class GalleryUiStateFactory(
                     )
                 }
             }
-        return base(inputs, GalleryContent.Photos(assets), emptyState)
+        return base(inputs, content, emptyState)
     }
 
     private fun library(inputs: GalleryUiInputs): GalleryUiState {
@@ -209,11 +207,10 @@ internal class GalleryUiStateFactory(
         val albumState =
             inputs.protonAlbumPhotos.takeIf { it.albumUid == destination.album.nodeUid }
                 ?: ProtonAlbumPhotosState()
-        val tagIndex = inputs.protonGallery.tagIndex()
-        val assets = albumState.photos.map { it.toGalleryAsset(tagIndex) }
+        val content = memo.photos(albumState.photos, memo.tagIndex(inputs.protonGallery.tags))
         val emptyState =
             when {
-                assets.isNotEmpty() || !albumState.hasLoaded -> {
+                content.assets.isNotEmpty() || !albumState.hasLoaded -> {
                     null
                 }
 
@@ -231,7 +228,7 @@ internal class GalleryUiStateFactory(
                     )
                 }
             }
-        return base(inputs, GalleryContent.Photos(assets), emptyState)
+        return base(inputs, content, emptyState)
     }
 
     private fun protonUnavailable(inputs: GalleryUiInputs): GalleryUiState? =
@@ -275,26 +272,20 @@ internal class GalleryUiStateFactory(
             protonGallery.userId != null &&
             (currentUserId == null || protonGallery.userId == currentUserId.id)
 
+    /** Photo pages come from [memo] newest first, so every consumer sees the same order as the grid. */
     private fun base(
         inputs: GalleryUiInputs,
-        content: GalleryContent = GalleryContent.Photos(emptyList()),
+        content: GalleryContent = NO_PHOTOS,
         emptyState: GalleryEmptyState? = null,
     ) = GalleryUiState(
         destination = inputs.destination,
         title = title(inputs.destination),
-        content = content.sorted(),
+        content = content,
         emptyState = emptyState,
         currentUserId = inputs.currentUserId,
         isProtonConnected = inputs.currentUserId != null,
         isRefreshing = inputs.isRefreshing,
     )
-
-    /** Photo pages are published newest first so every consumer sees the same order as the grid. */
-    private fun GalleryContent.sorted(): GalleryContent =
-        when (this) {
-            is GalleryContent.Photos -> GalleryContent.Photos(GalleryGrouping.sortPhotos(assets))
-            is GalleryContent.Library -> this
-        }
 
     private fun title(destination: GalleryDestination): String =
         when (destination) {
@@ -304,18 +295,7 @@ internal class GalleryUiStateFactory(
             is GalleryDestination.AlbumPhotos -> destination.album.name
         }
 
-    private fun ProtonGalleryPhoto.toGalleryAsset(tagIndex: Map<String, Set<ProtonMediaTag>>): GalleryAsset {
-        val tags = tagIndex[nodeUid].orEmpty()
-        return toGalleryAsset(
-            mediaKind = if (ProtonMediaTag.VIDEOS in tags) MediaKind.VIDEO else MediaKind.IMAGE,
-            tags = tags,
-        )
+    private companion object {
+        val NO_PHOTOS = GalleryContent.Photos(emptyList())
     }
-
-    private fun ProtonGalleryState.tagIndex(): Map<String, Set<ProtonMediaTag>> =
-        buildMap {
-            tags.forEach { (tag, state) ->
-                state.photos.forEach { photo -> put(photo.nodeUid, get(photo.nodeUid).orEmpty() + tag) }
-            }
-        }
 }

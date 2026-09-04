@@ -3,6 +3,7 @@ package com.bownee.lenswave.gallery
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Rect
+import android.os.SystemClock
 import android.view.MotionEvent
 import android.view.View
 import androidx.core.content.res.ResourcesCompat
@@ -43,9 +44,25 @@ internal class GalleryFastScroller(
     private var topInset = 0
     private var bottomInset = 0
     private var pointerOffset = 0f
+    private var lastScrollUptimeMillis = 0L
+    private var hidePosted = false
+
+    // One pending callback re-checks the last scroll time, so scrolling only stamps a timestamp
+    // instead of removing and re-posting a callback on every scroll event.
     private val hideHandle =
         Runnable {
+            hidePosted = false
             if (isDragging) return@Runnable
+            val remaining =
+                GalleryFastScrollLayoutPolicy.remainingHideDelay(
+                    lastScrollAt = lastScrollUptimeMillis,
+                    now = SystemClock.uptimeMillis(),
+                    hideDelay = HIDE_DELAY_MILLIS,
+                )
+            if (remaining > 0) {
+                postHide(remaining)
+                return@Runnable
+            }
             isVisible = false
             listView.invalidate()
         }
@@ -80,7 +97,7 @@ internal class GalleryFastScroller(
         updateHandleBounds()
         if (!isVisible || !isInsideTouchTarget(event)) return false
         isDragging = true
-        listView.removeCallbacks(hideHandle)
+        cancelHide()
         pointerOffset = (event.y - handleBounds.top).coerceIn(0f, handleSize.toFloat())
         interactionListener?.invoke(true)
         listView.invalidate()
@@ -119,8 +136,19 @@ internal class GalleryFastScroller(
         scheduleHide()
     }
 
+    /**
+     * Follows a list scroll. The list repaints itself for every scroll step and draws the handle
+     * in that pass, so this only invalidates when the handle appears or disappears (through
+     * [updateVisibility]); a handle that merely moves costs no extra invalidation. (Partial
+     * invalidation is a no-op on hardware-accelerated views, so a handle-rect invalidate would
+     * not be cheaper than none.)
+     */
+    fun onListScrolled() {
+        updateVisibility()
+    }
+
     fun detach() {
-        listView.removeCallbacks(hideHandle)
+        cancelHide()
     }
 
     fun draw(canvas: Canvas) {
@@ -140,7 +168,7 @@ internal class GalleryFastScroller(
     }
 
     private fun hideNow() {
-        listView.removeCallbacks(hideHandle)
+        cancelHide()
         if (isDragging) end()
         if (!isVisible) return
         isVisible = false
@@ -148,8 +176,18 @@ internal class GalleryFastScroller(
     }
 
     private fun scheduleHide() {
+        lastScrollUptimeMillis = SystemClock.uptimeMillis()
+        if (!hidePosted) postHide(HIDE_DELAY_MILLIS)
+    }
+
+    private fun postHide(delayMillis: Long) {
+        hidePosted = true
+        listView.postDelayed(hideHandle, delayMillis)
+    }
+
+    private fun cancelHide() {
         listView.removeCallbacks(hideHandle)
-        listView.postDelayed(hideHandle, HIDE_DELAY_MILLIS)
+        hidePosted = false
     }
 
     private fun scrollFromPointer(pointerY: Float) {
