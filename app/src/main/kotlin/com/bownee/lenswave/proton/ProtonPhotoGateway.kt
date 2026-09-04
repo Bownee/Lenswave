@@ -325,21 +325,40 @@ class ProtonPhotoGateway
                 }
         }
 
+        /**
+         * A stored thumbnail that no longer decodes is dropped, hidden from every listing, and
+         * queued again at the front. The grid asks about one cell at a time while it scrolls, so
+         * the listing lookups are memoized per state snapshot and the queue write is left to the
+         * queue's own debounce rather than persisted per item.
+         */
         private suspend fun invalidateThumbnailInActiveSession(
             userId: UserId,
             nodeUid: String,
         ) {
-            val sources = thumbnailSources(nodeUid)
+            val timelinePhoto = timelinePhotoIndex.of(timeline.state.value.photos)[nodeUid]
+            val albumPhotosState = albums.albumPhotosState.value
+            val albumPhoto = albumPhotoIndex.of(albumPhotosState.photos)[nodeUid]
+            val isAlbumCover = nodeUid in albumCoverIndex.of(albums.albumsState.value.albums)
+            val sources =
+                buildSet {
+                    if (timelinePhoto != null) add(ProtonSyncKeys.QueueSource.TIMELINE)
+                    if (isAlbumCover) add(ProtonSyncKeys.QueueSource.ALBUM_COVERS)
+                    if (albumPhoto != null) {
+                        albumPhotosState.albumUid?.let { albumUid ->
+                            add(ProtonSyncKeys.QueueSource.albumPhotos(albumUid))
+                        }
+                    }
+                }
+            val captureTime =
+                listOfNotNull(timelinePhoto, albumPhoto)
+                    .maxOfOrNull(ProtonGalleryPhoto::captureTimeEpochSeconds)
+                    ?: UNKNOWN_CAPTURE_TIME
             renditions.removeThumbnail(userId, nodeUid)
             val nodeUids = setOf(nodeUid)
             timeline.markThumbnailsUnavailable(userId, nodeUids)
             albums.markCoverThumbnailsUnavailable(userId, nodeUids)
             albums.markAlbumPhotoThumbnailsUnavailable(userId, nodeUids)
-            thumbnailQueue.retryNow(
-                userId.id,
-                ProtonThumbnailCandidate(nodeUid, thumbnailCaptureTime(nodeUid)),
-                sources,
-            )
+            thumbnailQueue.retryNow(userId.id, ProtonThumbnailCandidate(nodeUid, captureTime), sources)
         }
 
         private suspend fun reconcileTimelineThumbnailQueue(userId: UserId) {
@@ -413,34 +432,9 @@ class ProtonPhotoGateway
                 }
         }
 
-        private fun thumbnailCaptureTime(nodeUid: String): Long =
-            listOfNotNull(
-                timeline.state.value.photos
-                    .firstOrNull { photo -> photo.nodeUid == nodeUid }
-                    ?.captureTimeEpochSeconds,
-                albums.albumPhotosState.value.photos
-                    .firstOrNull { photo -> photo.nodeUid == nodeUid }
-                    ?.captureTimeEpochSeconds,
-            ).maxOrNull() ?: UNKNOWN_CAPTURE_TIME
-
-        private fun thumbnailSources(nodeUid: String): Set<String> =
-            buildSet {
-                if (timeline.state.value.photos
-                        .any { photo -> photo.nodeUid == nodeUid }
-                ) {
-                    add(ProtonSyncKeys.QueueSource.TIMELINE)
-                }
-                if (albums.albumsState.value.albums
-                        .any { album -> album.coverPhotoNodeUid == nodeUid }
-                ) {
-                    add(ProtonSyncKeys.QueueSource.ALBUM_COVERS)
-                }
-                albums.albumPhotosState.value.let { state ->
-                    if (state.photos.any { photo -> photo.nodeUid == nodeUid }) {
-                        state.albumUid?.let { albumUid -> add(ProtonSyncKeys.QueueSource.albumPhotos(albumUid)) }
-                    }
-                }
-            }
+        private val timelinePhotoIndex = ProtonNodeUidIndex(ProtonGalleryPhoto::nodeUid)
+        private val albumPhotoIndex = ProtonNodeUidIndex(ProtonGalleryPhoto::nodeUid)
+        private val albumCoverIndex = ProtonNodeUidIndex(ProtonAlbum::coverPhotoNodeUid)
 
         private companion object {
             const val UNKNOWN_CAPTURE_TIME = Long.MIN_VALUE
