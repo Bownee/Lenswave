@@ -243,7 +243,8 @@ class FullResolutionPhotoView
                             mimeType = loaded.mimeType
                             // A placeholder may already be zoomed; the original takes over the same
                             // rendered geometry so the picture does not jump when it arrives. Both
-                            // are in oriented axes: the preview was decoded with its EXIF applied.
+                            // sizes are in oriented axes: the placeholder's were swapped for its
+                            // orientation when it was shown.
                             val keepGeometry = basePlaceholder && imageWidth > 0 && width > 0 && height > 0
                             val renderedWidth = imageWidth * scale
                             imageWidth = if (rotationDegrees % 180 == 0) rawWidth else rawHeight
@@ -273,11 +274,16 @@ class FullResolutionPhotoView
         }
 
         /**
-         * Shows [bitmap] (a screen-sized preview, already oriented as [ProtonPreviewCodec] decodes
-         * it) with full zoom and pan while the original is still being decoded. The bitmap is not
-         * owned by this view and is never recycled here.
+         * Shows [bitmap] (a screen-sized preview holding its pixels as stored, to be shown under
+         * the EXIF [orientation]) with full zoom and pan while the original is still being
+         * decoded. It is drawn through the same matrix as a decoded original, so a rotated
+         * preview costs no rotated copy. The bitmap is not owned by this view and is never
+         * recycled here.
          */
-        fun showPlaceholder(bitmap: Bitmap) {
+        fun showPlaceholder(
+            bitmap: Bitmap,
+            orientation: Int = ExifInterface.ORIENTATION_NORMAL,
+        ) {
             zoomAnimator?.cancel()
             zoomAnimator = null
             if (!basePlaceholder) baseBitmap?.recycle()
@@ -285,13 +291,13 @@ class FullResolutionPhotoView
             baseBitmap = bitmap
             rawWidth = bitmap.width
             rawHeight = bitmap.height
-            rotationDegrees = 0
-            exifOrientation = ExifInterface.ORIENTATION_NORMAL
-            orientationMatrix = null
+            rotationDegrees = ExifOrientation.degrees(orientation)
+            exifOrientation = orientation
+            orientationMatrix = ExifOrientation.matrix(orientation)
             loadedUri = null
             mimeType = null
-            imageWidth = bitmap.width
-            imageHeight = bitmap.height
+            imageWidth = if (rotationDegrees % 180 == 0) rawWidth else rawHeight
+            imageHeight = if (rotationDegrees % 180 == 0) rawHeight else rawWidth
             resetTransform()
             invalidate()
         }

@@ -43,6 +43,7 @@ import com.bownee.lenswave.gallery.StoredGalleryNavigation
 import com.bownee.lenswave.gallery.TrashConfirmationDialogFragment
 import com.bownee.lenswave.metadata.PhotoMetadataHints
 import com.bownee.lenswave.metadata.PhotoMetadataReader
+import com.bownee.lenswave.proton.ProtonPreviewOrientation
 import com.bownee.lenswave.proton.ProtonSessionChangedException
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CancellationException
@@ -832,7 +833,7 @@ class PhotoViewerActivity :
         hideLoadingPanel()
         photoView.animate().cancel()
         photoView.visibility = View.VISIBLE
-        photoView.showPlaceholder(bitmap)
+        photoView.showPlaceholder(bitmap, ProtonPreviewOrientation.of(bitmap))
         if (thumbnailPreview.isVisible) photoView.translationX = thumbnailPreview.translationX
         photoView.alpha = 1f
         clearThumbnailPreview()
