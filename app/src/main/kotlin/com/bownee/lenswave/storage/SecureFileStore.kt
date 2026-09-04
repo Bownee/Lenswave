@@ -3,6 +3,8 @@ package com.bownee.lenswave.storage
 import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
+import com.bownee.lenswave.LenswaveDiagnostics
+import com.bownee.lenswave.LenswaveOperation
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
@@ -14,6 +16,7 @@ import java.nio.ByteBuffer
 import java.security.KeyStore
 import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
+import javax.crypto.AEADBadTagException
 import javax.crypto.Cipher
 import javax.crypto.CipherInputStream
 import javax.crypto.KeyGenerator
@@ -236,19 +239,48 @@ class SecureFileStore(
         return synchronized(lockFor(alias)) {
             dataKeys[alias] ?: run {
                 val file = wrappedKeyFile(alias)
-                val raw =
-                    if (file.isFile) {
-                        unwrap(scope, file.readBytes())
-                    } else {
-                        ByteArray(DATA_KEY_BYTES).also { bytes ->
-                            SecureRandom().nextBytes(bytes)
-                            AtomicFileStore.write(file, wrap(scope, bytes), "Could not store data key")
-                        }
-                    }
+                val raw = (if (file.isFile) unwrapOrDiscard(scope, file) else null) ?: generateDataKey(scope, file)
                 SecretKeySpec(raw, KeyProperties.KEY_ALGORITHM_AES).also { key -> dataKeys[alias] = key }
             }
         }
     }
+
+    /**
+     * The stored data key, or null once it is discarded because it can no longer be unwrapped.
+     *
+     * The Keystore entry can disappear while the wrapped file stays: a Keystore reset, a
+     * restored backup, a device migration. [keystoreKey] then quietly generates a fresh entry
+     * and the old wrapper fails its tag; before this every launch crashed here with no way out.
+     * Discarding the wrapper lets [dataKey] mint a new key. Everything this scope encrypted
+     * before is unreadable from now on: readers see a bad tag and treat those files as corrupt
+     * or absent, and the caches refill. A Keystore that merely fails to answer is not handled
+     * here, because discarding the wrapper over a hiccup would lose a perfectly good key.
+     */
+    private fun unwrapOrDiscard(
+        scope: String,
+        file: File,
+    ): ByteArray? {
+        val failure =
+            try {
+                return unwrap(scope, file.readBytes())
+            } catch (error: AEADBadTagException) {
+                error
+            } catch (error: IllegalArgumentException) {
+                error
+            }
+        LenswaveDiagnostics.reportFailure(LenswaveOperation.DATA_KEY_RECOVERY, failure)
+        check(file.delete() || !file.exists()) { "Could not discard the unreadable data key" }
+        return null
+    }
+
+    private fun generateDataKey(
+        scope: String,
+        file: File,
+    ): ByteArray =
+        ByteArray(DATA_KEY_BYTES).also { bytes ->
+            SecureRandom().nextBytes(bytes)
+            AtomicFileStore.write(file, wrap(scope, bytes), "Could not store data key")
+        }
 
     private fun wrap(
         scope: String,

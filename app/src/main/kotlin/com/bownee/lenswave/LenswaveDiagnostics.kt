@@ -25,6 +25,7 @@ internal enum class LenswaveOperation(
     ORIGINAL_NAME_LOAD("original-name-load"),
     PROTON_CLIENT_CREATE("proton-client-create"),
     SESSION_DATABASE_REKEY("session-database-rekey"),
+    DATA_KEY_RECOVERY("data-key-recovery"),
     SESSION_HOUSEKEEPING("session-housekeeping"),
     THUMBNAIL_DOWNLOAD("thumbnail-download"),
     PREVIEW_DOWNLOAD("preview-download"),
