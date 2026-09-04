@@ -1,6 +1,7 @@
 package com.bownee.lenswave.viewer
 
 import android.animation.ValueAnimator
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -14,6 +15,7 @@ import com.bownee.lenswave.metadata.PhotoMetadataItem
 import com.bownee.lenswave.metadata.PhotoMetadataReader
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
@@ -63,11 +65,25 @@ internal class ViewerDetailsSheetController(
 
     var shown = false
         private set
+
+    /** True once the rows for the current photo were read successfully. */
     private var metadataLoaded = false
+    private var metadataJob: Job? = null
     private var detailsScrollAnimator: ValueAnimator? = null
     private var detailsDragStartOffset: Int? = null
     private var detailsDragStartedShown = false
     private var detailsSheetAttachmentOffset = 0
+
+    /** Resolved once: a resource lookup per animation frame is a needless trip through the resource table. */
+    private val sheetOverlap = resources.getDimensionPixelSize(R.dimen.photo_details_sheet_overlap)
+
+    /**
+     * The offsets a drag or settle animation moves between, fixed when it starts. The fitted
+     * image, the sheet's measured height and the attachment do not change while the finger or
+     * the animator drives the offset, so recomputing them for every frame only cost time.
+     */
+    private var motionInitialOffset = 0
+    private var motionMaximumOffset = 0
 
     fun handleDetailsDrag(
         distance: Float,
@@ -86,8 +102,9 @@ internal class ViewerDetailsSheetController(
                     detailsDragStartOffset = it
                     detailsDragStartedShown = shown
                     detailsScrollAnimator?.cancel()
+                    beginMotion()
                 }
-            setDetailsOffset((startOffset + distance).roundToInt())
+            setDetailsOffset((startOffset + distance).roundToInt(), motionInitialOffset, motionMaximumOffset)
             return
         }
 
@@ -142,11 +159,20 @@ internal class ViewerDetailsSheetController(
         animateDetailsOffset(0, velocity)
     }
 
-    private fun setDetailsOffset(offset: Int) {
-        val boundedOffset = offset.coerceIn(0, maximumDetailsOffset())
+    /** Fixes the offsets a drag or animation will move between. */
+    private fun beginMotion() {
+        motionMaximumOffset = maximumDetailsOffset()
+        motionInitialOffset = initialDetailsOffset()
+    }
+
+    private fun setDetailsOffset(
+        offset: Int,
+        initialOffset: Int,
+        maximumOffset: Int,
+    ) {
+        val boundedOffset = offset.coerceIn(0, maximumOffset)
         photoDetailsScroll.scrollTo(0, boundedOffset)
-        val initialOffset = initialDetailsOffset().coerceAtLeast(1)
-        val sheetProgress = (boundedOffset.toFloat() / initialOffset).coerceIn(0f, 1f)
+        val sheetProgress = (boundedOffset.toFloat() / initialOffset.coerceAtLeast(1)).coerceIn(0f, 1f)
         detailsSheet.alpha = sheetProgress
         detailsSheet.visibility = if (sheetProgress > 0f || shown) View.VISIBLE else View.INVISIBLE
         if (sheetProgress < 1f) actions.visibility = View.VISIBLE
@@ -160,7 +186,10 @@ internal class ViewerDetailsSheetController(
         velocity: Float,
     ) {
         detailsScrollAnimator?.cancel()
-        val boundedTarget = targetOffset.coerceIn(0, maximumDetailsOffset())
+        beginMotion()
+        val initialOffset = motionInitialOffset
+        val maximumOffset = motionMaximumOffset
+        val boundedTarget = targetOffset.coerceIn(0, maximumOffset)
         val startOffset = photoDetailsScroll.scrollY
         val duration =
             ViewerVerticalSettle.duration(
@@ -172,18 +201,22 @@ internal class ViewerDetailsSheetController(
             ValueAnimator.ofInt(startOffset, boundedTarget).apply {
                 this.duration = duration
                 interpolator = ViewerVerticalSettle.interpolator
-                addUpdateListener { animator -> setDetailsOffset(animator.animatedValue as Int) }
+                addUpdateListener { animator ->
+                    setDetailsOffset(animator.animatedValue as Int, initialOffset, maximumOffset)
+                }
                 start()
             }
     }
 
-    private fun initialDetailsOffset(): Int =
+    private fun initialDetailsOffset(): Int = initialDetailsOffset(maximumDetailsOffset())
+
+    private fun initialDetailsOffset(maximumOffset: Int): Int =
         PhotoDetailsLayoutPolicy.initialOffset(
             mediaHeight = mediaFrame.height,
             fittedImageBottom = host.fittedMediaBottom(),
-            overlap = resources.getDimensionPixelSize(R.dimen.photo_details_sheet_overlap),
+            overlap = sheetOverlap,
             fallbackOffset = (root.height * DETAILS_FALLBACK_OFFSET_FRACTION).roundToInt(),
-            maximumOffset = maximumDetailsOffset(),
+            maximumOffset = maximumOffset,
         )
 
     private fun updateDetailsSheetAttachment(): Int {
@@ -192,7 +225,7 @@ internal class ViewerDetailsSheetController(
             PhotoDetailsLayoutPolicy.attachmentOffset(
                 mediaHeight = mediaFrame.height,
                 fittedImageBottom = host.fittedMediaBottom(),
-                overlap = resources.getDimensionPixelSize(R.dimen.photo_details_sheet_overlap),
+                overlap = sheetOverlap,
             )
         detailsSheet.translationY = -detailsSheetAttachmentOffset.toFloat()
         return detailsSheetAttachmentOffset - previousOffset
@@ -202,13 +235,10 @@ internal class ViewerDetailsSheetController(
     fun synchronizeWithImage() {
         val attachmentChange = updateDetailsSheetAttachment()
         val adjustedOffset = photoDetailsScroll.scrollY - attachmentChange
-        val target =
-            if (shown) {
-                adjustedOffset.coerceAtLeast(initialDetailsOffset())
-            } else {
-                0
-            }
-        setDetailsOffset(target.coerceAtMost(maximumDetailsOffset()))
+        val maximumOffset = maximumDetailsOffset()
+        val initialOffset = initialDetailsOffset(maximumOffset)
+        val target = if (shown) adjustedOffset.coerceAtLeast(initialOffset) else 0
+        setDetailsOffset(target.coerceAtMost(maximumOffset), initialOffset, maximumOffset)
     }
 
     private fun maximumDetailsOffset(): Int {
@@ -223,6 +253,8 @@ internal class ViewerDetailsSheetController(
     /** Clears the rows and the attachment for the next photo; `shown` is deliberately kept. */
     fun resetForNavigation() {
         metadataLoaded = false
+        metadataJob?.cancel()
+        metadataJob = null
         screen.hideDetailsRows()
         detailsProgress.visibility = View.VISIBLE
         detailsSheetAttachmentOffset = 0
@@ -231,43 +263,51 @@ internal class ViewerDetailsSheetController(
         detailsSheet.visibility = View.INVISIBLE
     }
 
+    /**
+     * Reads the rows for the current photo unless they are already there or being read. A read
+     * that failed does not latch, so the next call (the original arriving, the sheet reopening)
+     * tries again.
+     */
     fun ensureMetadataLoaded() {
-        if (metadataLoaded) return
+        if (metadataLoaded || metadataJob?.isActive == true) return
         val uri = host.resolvedUri ?: return
         loadMetadata(uri)
     }
 
     private fun loadMetadata(uri: Uri) {
-        if (metadataLoaded) return
-        metadataLoaded = true
         val metadataRequest = host.request
-        val hints = host.metadataHints(uri)
-        scope.launch {
-            val result =
-                withContext(Dispatchers.IO) {
-                    runCatching {
-                        metadataReader.read(
-                            context,
-                            uri,
-                            metadataRequest.displayName,
-                            metadataRequest.capturedAt,
-                            hints,
+        metadataJob =
+            scope.launch {
+                // Resolved here rather than at the call: by the time this coroutine runs the
+                // photo view may have finished its decode, and its hints spare the reader a
+                // second bounds parse of the file.
+                val hints = host.metadataHints(uri)
+                val result =
+                    withContext(Dispatchers.IO) {
+                        runCatching {
+                            metadataReader.read(
+                                context,
+                                uri,
+                                metadataRequest.displayName,
+                                metadataRequest.capturedAt,
+                                hints,
+                            )
+                        }
+                    }
+                if (host.request.stableId != metadataRequest.stableId) return@launch
+                detailsProgress.visibility = View.GONE
+                val items =
+                    result.getOrElse {
+                        listOf(
+                            PhotoMetadataItem(
+                                context.getString(R.string.error),
+                                context.getString(R.string.could_not_read_metadata),
+                            ),
                         )
                     }
-                }
-            if (host.request.stableId != metadataRequest.stableId) return@launch
-            detailsProgress.visibility = View.GONE
-            val items =
-                result.getOrElse {
-                    listOf(
-                        PhotoMetadataItem(
-                            context.getString(R.string.error),
-                            context.getString(R.string.could_not_read_metadata),
-                        ),
-                    )
-                }
-            screen.bindDetailsRows(items, ::openMap)
-        }
+                metadataLoaded = result.isSuccess
+                screen.bindDetailsRows(items, ::openMap)
+            }
     }
 
     private fun openMap(action: PhotoMetadataAction.OpenMap) {
@@ -277,16 +317,20 @@ internal class ViewerDetailsSheetController(
                 Intent.ACTION_VIEW,
                 "geo:$coordinates?q=$coordinates".toUri(),
             )
-        if (intent.resolveActivity(context.packageManager) == null) {
+        // resolveActivity is a package-manager round trip on the main thread; starting and
+        // catching the absence costs nothing on the common path.
+        try {
+            context.startActivity(intent)
+        } catch (_: ActivityNotFoundException) {
             Toast.makeText(context, R.string.no_maps_app, Toast.LENGTH_SHORT).show()
-            return
         }
-        context.startActivity(intent)
     }
 
-    /** Stops the settle animation; call from the Activity's onDestroy. */
+    /** Stops the settle animation and any metadata read; call from the Activity's onDestroy. */
     fun release() {
         detailsScrollAnimator?.cancel()
+        metadataJob?.cancel()
+        metadataJob = null
     }
 
     private companion object {

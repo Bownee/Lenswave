@@ -531,7 +531,8 @@ class PhotoViewerActivity : FragmentActivity() {
         video.stop()
         playerView.visibility = View.GONE
         photoView.visibility = View.VISIBLE
-        if (details.shown) details.ensureMetadataLoaded()
+        // The metadata read waits for the decode: the photo view's hints then spare it a second
+        // bounds parse of the file, which with the sheet open used to happen on every swipe.
         photoView.load(uri) { result ->
             if (request.stableId != requestedStableId) return@load
             result
@@ -564,6 +565,8 @@ class PhotoViewerActivity : FragmentActivity() {
                     }
                     prefetchAdjacentOriginals(requestedStableId)
                 }.onFailure { error ->
+                    // An open sheet still gets its rows, read without hints.
+                    if (details.shown) details.ensureMetadataLoaded()
                     handlePhotoLoadFailure(error, getString(R.string.could_not_display_photo))
                 }
         }
