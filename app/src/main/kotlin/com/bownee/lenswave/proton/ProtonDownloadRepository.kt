@@ -331,6 +331,7 @@ internal class ProtonDownloadRepository
             val successful = mutableSetOf<String>()
             val unreportedSuccessful = mutableSetOf<String>()
             val failures = mutableMapOf<String, ThumbnailFailureKind>()
+            val reportedKinds = mutableSetOf<ThumbnailFailureKind>()
 
             suspend fun publishSuccessful() {
                 if (unreportedSuccessful.isEmpty()) return
@@ -360,12 +361,13 @@ internal class ProtonDownloadRepository
                                     }
                                 },
                                 onFailure = { error ->
-                                    // One sample per pass keeps the log readable while still
-                                    // showing why a rendition is refused.
-                                    if (type == ThumbnailType.PREVIEW && failures.isEmpty()) {
+                                    val kind = ThumbnailFailureClassifier.classify(error)
+                                    // One sample per failure kind and pass keeps the log readable
+                                    // while still showing why each rendition is refused.
+                                    if (type == ThumbnailType.PREVIEW && reportedKinds.add(kind)) {
                                         LenswaveDiagnostics.reportFailure(LenswaveOperation.PREVIEW_DOWNLOAD, error)
                                     }
-                                    failures.record(nodeUid, ThumbnailFailureClassifier.classify(error))
+                                    failures.record(nodeUid, kind)
                                 },
                             )
                             if (ThumbnailPassCompletionPolicy.hasResponseForEveryNode(
@@ -392,9 +394,19 @@ internal class ProtonDownloadRepository
                 }
             publishSuccessful()
             if (completed == null) {
-                requested
-                    .filterNot(successful::contains)
-                    .forEach { nodeUid -> failures.record(nodeUid, ThumbnailFailureKind.NETWORK) }
+                val unanswered = requested.filterNot { nodeUid -> nodeUid in successful || nodeUid in failures }
+                // A pass the SDK never finishes is otherwise invisible in the log.
+                LenswaveDiagnostics.reportFailure(
+                    if (type ==
+                        ThumbnailType.PREVIEW
+                    ) {
+                        LenswaveOperation.PREVIEW_DOWNLOAD
+                    } else {
+                        LenswaveOperation.THUMBNAIL_DOWNLOAD
+                    },
+                    ThumbnailPassTimeoutException(unanswered.size, requested.size),
+                )
+                unanswered.forEach { nodeUid -> failures.record(nodeUid, ThumbnailFailureKind.NETWORK) }
             }
             return ThumbnailBatchResult(successful, failures.filterKeys { nodeUid -> nodeUid !in successful })
         }
@@ -454,6 +466,12 @@ internal object ThumbnailPassCompletionPolicy {
 }
 
 private class ThumbnailPassCompleteException : CancellationException()
+
+/** The SDK delivered no result for [unanswered] of [requested] nodes before the pass timed out. */
+internal class ThumbnailPassTimeoutException(
+    val unanswered: Int,
+    val requested: Int,
+) : RuntimeException("Thumbnail pass timed out with $unanswered of $requested nodes unanswered")
 
 internal enum class ThumbnailFailureKind(
     val priority: Int,
