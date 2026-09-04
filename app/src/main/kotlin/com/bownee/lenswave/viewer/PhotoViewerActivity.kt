@@ -358,6 +358,11 @@ class PhotoViewerActivity :
         super.onDestroy()
     }
 
+    override fun onStart() {
+        super.onStart()
+        video.resume()
+    }
+
     override fun onStop() {
         video.pause()
         super.onStop()

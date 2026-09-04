@@ -1,0 +1,22 @@
+package com.bownee.lenswave.viewer
+
+/**
+ * How a video's "playing" state survives the viewer leaving the screen. The Activity pauses the
+ * player in onStop, but its state is saved after onStop, so a video playing when the user left
+ * must still be saved as playing. The mark only lives until the viewer is back on screen: from
+ * then on the player's own state is the truth, and a rotation of a video the user has since
+ * paused must not start it again.
+ */
+internal object ViewerPlaybackPausePolicy {
+    /** Whether a pause forced by leaving the screen should be remembered as "was playing". */
+    fun remembersPlaying(playWhenReady: Boolean): Boolean = playWhenReady
+
+    /** The play state to save: the player's own, or the remembered one while the viewer is off screen. */
+    fun savedPlayWhenReady(
+        playWhenReady: Boolean,
+        pausedWhilePlaying: Boolean,
+    ): Boolean = playWhenReady || pausedWhilePlaying
+
+    /** Whether coming back on screen should start the video again; the mark is spent either way. */
+    fun resumesOnReturn(pausedWhilePlaying: Boolean): Boolean = pausedWhilePlaying
+}

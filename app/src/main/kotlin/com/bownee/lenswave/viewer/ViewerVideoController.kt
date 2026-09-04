@@ -154,10 +154,22 @@ internal class ViewerVideoController(
             }
     }
 
+    /** Pauses for the viewer leaving the screen; call from the Activity's onStop. */
     fun pause() {
         val active = player ?: return
-        if (active.playWhenReady) pausedWhilePlaying = true
+        if (ViewerPlaybackPausePolicy.remembersPlaying(active.playWhenReady)) pausedWhilePlaying = true
         active.pause()
+    }
+
+    /**
+     * The viewer is back on screen: a video [pause] stopped goes on playing, and the mark is
+     * spent either way. Left set, it would make a rotation start a video the user had since
+     * paused. Call from the Activity's onStart.
+     */
+    fun resume() {
+        val resumes = ViewerPlaybackPausePolicy.resumesOnReturn(pausedWhilePlaying)
+        pausedWhilePlaying = false
+        if (resumes) player?.play()
     }
 
     /**
@@ -169,7 +181,7 @@ internal class ViewerVideoController(
         if (activeStableId == null) return null
         return ViewerPlaybackState(
             positionMillis = active.currentPosition,
-            playWhenReady = active.playWhenReady || pausedWhilePlaying,
+            playWhenReady = ViewerPlaybackPausePolicy.savedPlayWhenReady(active.playWhenReady, pausedWhilePlaying),
         )
     }
 
