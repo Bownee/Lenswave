@@ -20,6 +20,8 @@
     <string name="connect_proton">Connect Proton</string>
     <string name="connect_proton_photos">Connect Proton Photos</string>
     <string name="connect_proton_message">Sign in securely to browse your Proton photo library. Lenswave is not an official Proton app.</string>
+    <string name="signed_out">Signed out</string>
+    <string name="signed_out_message">Your Proton session ended. Connect again to keep browsing your photos.</string>
     <string name="photos">Photos</string>
     <string name="all_photos">All</string>
     <string name="proton_tag_favorites">Favorites</string>

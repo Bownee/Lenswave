@@ -37,6 +37,8 @@ internal data class GalleryUiInputs(
     val currentUserId: UserId? = null,
     val protonAccountStatus: ProtonAccountStatus = ProtonAccountStatus.DISCONNECTED,
     val isRefreshing: Boolean = false,
+    /** The account went away on its own (an expired session), not through the user's disconnect. */
+    val signedOut: Boolean = false,
 )
 
 internal class GalleryUiStateFactory(
@@ -248,12 +250,21 @@ internal class GalleryUiStateFactory(
                 base(
                     inputs = inputs,
                     emptyState =
-                        GalleryEmptyState(
-                            title = text.string(R.string.connect_proton_photos),
-                            message = text.string(R.string.connect_proton_message),
-                            actionLabel = text.string(R.string.connect_proton),
-                            action = GalleryEmptyAction.CONNECT_PROTON,
-                        ),
+                        if (inputs.signedOut) {
+                            GalleryEmptyState(
+                                title = text.string(R.string.signed_out),
+                                message = text.string(R.string.signed_out_message),
+                                actionLabel = text.string(R.string.connect_proton),
+                                action = GalleryEmptyAction.CONNECT_PROTON,
+                            )
+                        } else {
+                            GalleryEmptyState(
+                                title = text.string(R.string.connect_proton_photos),
+                                message = text.string(R.string.connect_proton_message),
+                                actionLabel = text.string(R.string.connect_proton),
+                                action = GalleryEmptyAction.CONNECT_PROTON,
+                            )
+                        },
                 )
             }
 

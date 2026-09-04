@@ -101,6 +101,10 @@ class GalleryViewModel internal constructor(
             ?: GalleryDestination.Timeline
     private var currentUserId: UserId? = null
     private var sessionTransitioning = false
+
+    /** Set by [disconnectProton], so the removal that follows is not reported as a lost session. */
+    private var explicitDisconnect = false
+    private var signedOut = false
     private var manualRefreshGeneration = 0
     private var lastPeriodicCheckMillis: Long? = null
 
@@ -298,6 +302,7 @@ class GalleryViewModel internal constructor(
 
     fun disconnectProton() {
         val userId = currentUserId ?: return
+        explicitDisconnect = true
         viewModelScope.launch {
             accountManager.removeAccount(userId)
             destination = GalleryNavigationPolicy.withoutAccount(destination)
@@ -327,6 +332,15 @@ class GalleryViewModel internal constructor(
         if (state.transitioning) {
             publishUiState(accountStatus)
             return
+        }
+        if (nextUserId != null) {
+            // Back with an account: the notice has done its job, and a later removal is a new event.
+            explicitDisconnect = false
+            signedOut = false
+        } else if (userChanged && !explicitDisconnect) {
+            // The account was removed underneath the app (an expired session); say so rather than
+            // fall back to the first-launch invitation as if the user had never connected.
+            signedOut = true
         }
         if (readyAccount == null) {
             val fallback = GalleryNavigationPolicy.withoutAccount(destination)
@@ -459,6 +473,7 @@ class GalleryViewModel internal constructor(
                 destination = destination,
                 currentUserId = currentUserId,
                 accountStatus = accountStatus ?: inputs.accountStatus,
+                signedOut = signedOut,
             )
         }
     }
@@ -472,6 +487,7 @@ class GalleryViewModel internal constructor(
         val currentUserId: UserId?,
         val accountStatus: ProtonAccountStatus,
         val isRefreshing: Boolean,
+        val signedOut: Boolean = false,
     )
 
     private fun saveDestination() {
@@ -530,6 +546,7 @@ class GalleryViewModel internal constructor(
             currentUserId = local.currentUserId,
             protonAccountStatus = local.accountStatus,
             isRefreshing = local.isRefreshing,
+            signedOut = local.signedOut,
         )
 
         fun restoreNavigation(state: SavedStateHandle): GalleryDestination? =

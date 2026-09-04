@@ -323,6 +323,36 @@ class GalleryViewModelTest {
         }
 
     @Test
+    fun `an account removed underneath the app is reported as signed out, an explicit disconnect is not`() =
+        runTest(dispatcher) {
+            val viewModel = connectedViewModel()
+
+            session.value = ProtonAccountSessionState(initialized = true)
+            runCurrent()
+
+            assertEquals(
+                "${R.string.signed_out}()",
+                viewModel.uiState.value.emptyState
+                    ?.title,
+            )
+
+            session.value = ProtonAccountSessionState(readyAccount(USER), USER, initialized = true)
+            runCurrent()
+            assertNull(viewModel.uiState.value.emptyState)
+
+            viewModel.disconnectProton()
+            runCurrent()
+            session.value = ProtonAccountSessionState(initialized = true)
+            runCurrent()
+
+            assertEquals(
+                "${R.string.connect_proton_photos}()",
+                viewModel.uiState.value.emptyState
+                    ?.title,
+            )
+        }
+
+    @Test
     fun `a transitioning session publishes connecting without refreshing`() =
         runTest(dispatcher) {
             // Without a cached timeline, connected shows nothing yet while connecting shows the loading panel.
