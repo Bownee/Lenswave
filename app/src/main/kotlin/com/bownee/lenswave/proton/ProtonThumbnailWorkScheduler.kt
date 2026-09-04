@@ -122,6 +122,7 @@ internal class ProtonThumbnailWorkScheduler
                     userId,
                     requiresCharging = followUp.requiresCharging,
                     initialDelayMillis = followUp.initialDelayMillis,
+                    networkWaitAttempt = followUp.networkWaitAttempt,
                 ),
             )
         }

@@ -108,7 +108,9 @@ class ProtonThumbnailWorker(
                                 }
                             }
                         when (step) {
-                            ProtonThumbnailQueueStep.Processed -> {}
+                            ProtonThumbnailQueueStep.Processed -> {
+                                run.processedBatch = true
+                            }
 
                             is ProtonThumbnailQueueStep.Idle -> {
                                 // Every idle step is remembered, the one before a sleep too: a
@@ -163,6 +165,12 @@ class ProtonThumbnailWorker(
         private val userId: UserId,
     ) {
         val repository = entryPoint.thumbnailWork()
+
+        /** The network backoff ladder this run was started on; see [ProtonThumbnailFollowUpPolicy]. */
+        private val networkWaitAttempt = inputData.getInt(KEY_NETWORK_WAIT_ATTEMPT, 0)
+
+        /** A run that got a batch through resets the network backoff ladder. */
+        var processedBatch = false
         val transferCoordinator = entryPoint.transferCoordinator()
         private val followUps = entryPoint.followUpScheduler()
 
@@ -183,6 +191,7 @@ class ProtonThumbnailWorker(
                     previewsDeferred =
                         lastIdle?.previewsDeferred == true || (!allowPreviews && progress.previewsPending > 0),
                     retryAfterMillis = lastIdle?.retryAfterMillis,
+                    networkWaitAttempt = if (processedBatch) 0 else networkWaitAttempt,
                 )
             if (followUp != null) followUps.enqueueFollowUp(userId, followUp)
             return finish(outcome)
@@ -281,6 +290,7 @@ class ProtonThumbnailWorker(
 
     companion object {
         const val KEY_USER_ID = "user-id"
+        const val KEY_NETWORK_WAIT_ATTEMPT = "network-wait-attempt"
         private const val SESSION_READY_TIMEOUT_MILLIS = 30_000L
         private const val NETWORK_READY_TIMEOUT_MILLIS = 5_000L
         private const val FOREGROUND_YIELD_TIMEOUT_MILLIS = 5_000L
@@ -290,9 +300,10 @@ class ProtonThumbnailWorker(
             userId: UserId,
             requiresCharging: Boolean = false,
             initialDelayMillis: Long = 0L,
+            networkWaitAttempt: Int = 0,
         ): OneTimeWorkRequest =
             OneTimeWorkRequestBuilder<ProtonThumbnailWorker>()
-                .setInputData(workDataOf(KEY_USER_ID to userId.id))
+                .setInputData(workDataOf(KEY_USER_ID to userId.id, KEY_NETWORK_WAIT_ATTEMPT to networkWaitAttempt))
                 .setConstraints(
                     Constraints
                         .Builder()
