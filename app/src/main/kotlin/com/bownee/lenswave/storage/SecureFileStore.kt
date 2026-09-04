@@ -70,7 +70,9 @@ class SecureFileStore(
         bytes: ByteArray,
         failureMessage: String,
     ) {
-        AtomicFileStore.write(file, encrypt(scope, bytes), failureMessage)
+        val key = dataKey(scope)
+        val payload = encrypt(key, bytes)
+        commitWith(scope, key) { AtomicFileStore.write(file, payload, failureMessage) }
     }
 
     fun writeText(
@@ -97,7 +99,7 @@ class SecureFileStore(
                 output.write(SEGMENTED_VERSION.toInt())
                 FileInputStream(plaintext).use { input -> SegmentedEnvelope.encrypt(key, input, output) }
             }
-            AtomicFileStore.commit(temporary, target, failureMessage)
+            commitWith(scope, key) { AtomicFileStore.commit(temporary, target, failureMessage) }
         } finally {
             temporary.delete()
         }
@@ -138,6 +140,11 @@ class SecureFileStore(
         }
     }
 
+    /**
+     * Forgets the scope's keys; everything they encrypted is unreadable from here on. Runs under
+     * the alias lock so a write that already holds the old key cannot commit after this, see
+     * [commitWith].
+     */
     fun deleteKey(scope: String) {
         val alias = alias(scope)
         synchronized(lockFor(alias)) {
@@ -145,6 +152,26 @@ class SecureFileStore(
             keyReferences.remove(alias)
             dataKeys.remove(alias)
             wrappedKeyFile(alias).delete()
+        }
+    }
+
+    /**
+     * Runs [commit] only while [key] is still the live data key of [scope].
+     *
+     * [dataKey] hands keys out without a lock, so a writer that fetched its key just before
+     * [deleteKey] could otherwise finish encrypting and land a file after the scope was wiped,
+     * one that no key will ever read again. The check and the commit share the alias lock with
+     * [deleteKey], so either the write lands before the key goes or it does not land at all.
+     */
+    private fun <T> commitWith(
+        scope: String,
+        key: SecretKey,
+        commit: () -> T,
+    ): T {
+        val alias = alias(scope)
+        return synchronized(lockFor(alias)) {
+            check(dataKeys[alias] === key) { "Data key was deleted before the write completed" }
+            commit()
         }
     }
 
@@ -175,11 +202,11 @@ class SecureFileStore(
     }
 
     private fun encrypt(
-        scope: String,
+        key: SecretKey,
         plaintext: ByteArray,
     ): ByteArray {
         val cipher = Cipher.getInstance(TRANSFORMATION)
-        cipher.init(Cipher.ENCRYPT_MODE, dataKey(scope))
+        cipher.init(Cipher.ENCRYPT_MODE, key)
         val encrypted = cipher.doFinal(plaintext)
         return ByteBuffer
             .allocate(MAGIC.size + 1 + 1 + cipher.iv.size + encrypted.size)
@@ -226,7 +253,7 @@ class SecureFileStore(
         file: File,
         plaintext: ByteArray,
     ) {
-        runCatching { AtomicFileStore.write(file, encrypt(scope, plaintext), "Could not upgrade encrypted file") }
+        runCatching { write(scope, file, plaintext, "Could not upgrade encrypted file") }
     }
 
     /**
