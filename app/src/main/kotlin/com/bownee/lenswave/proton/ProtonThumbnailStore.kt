@@ -44,16 +44,18 @@ internal class ProtonThumbnailStore
         fun exists(
             userId: String,
             nodeUid: String,
-        ): Boolean = file(userId, nodeUid).let { file -> file.isFile && file.length() > 0L }
+        ): Boolean = isStoredThumbnail(file(userId, nodeUid))
 
         /**
          * File names (without extension) of every stored thumbnail, from a single directory
-         * listing. Writes are atomic renames, so a listed name is a complete file.
+         * listing. Writes are atomic renames, so a listed name is a complete file; a zero-length
+         * file (a rename that hit the disk before its data did) is judged exactly as [exists] and
+         * [count] judge it, so a photo listed here is one the grid can actually load.
          */
         fun storedNames(userId: String): Set<String> =
             directory(userId)
-                .list()
-                ?.mapNotNullTo(HashSet()) { name -> name.removeSuffix(".thumb").takeIf { it != name } }
+                .listFiles()
+                ?.mapNotNullTo(HashSet()) { file -> file.nameWithoutExtension.takeIf { isStoredThumbnail(file) } }
                 .orEmpty()
 
         /** The decoded bitmap when it is already in memory; never touches disk or blocks on a decode. */
@@ -131,10 +133,7 @@ internal class ProtonThumbnailStore
 
         fun count(userId: String): Int =
             counts.getOrPut(userId) {
-                directory(userId)
-                    .listFiles()
-                    ?.count { file -> file.isFile && file.extension == "thumb" && file.length() > 0L }
-                    ?: 0
+                directory(userId).listFiles()?.count(::isStoredThumbnail) ?: 0
             }
 
         private fun adjustCount(
@@ -144,8 +143,9 @@ internal class ProtonThumbnailStore
             counts.computeIfPresent(userId) { _, count -> (count + delta).coerceAtLeast(0) }
         }
 
+        /** Drops abandoned partial writes and zero-length files, which can never be loaded or re-fetched otherwise. */
         fun maintain(userId: String) {
-            sweep(userId) { file -> isStalePartial(file) }
+            sweep(userId) { file -> isStalePartial(file) || isEmptyRendition(file) }
         }
 
         /** [retainedNames] are file names without extension, as [AtomicFileStore.safeName] produces them. */
@@ -154,7 +154,9 @@ internal class ProtonThumbnailStore
             retainedNames: Set<String>,
         ) {
             sweep(userId) { file ->
-                isStalePartial(file) || (file.extension != "part" && file.nameWithoutExtension !in retainedNames)
+                isStalePartial(file) ||
+                    isEmptyRendition(file) ||
+                    (file.extension != "part" && file.nameWithoutExtension !in retainedNames)
             }
         }
 
@@ -173,7 +175,7 @@ internal class ProtonThumbnailStore
             files.forEach { file ->
                 if (prunable(file)) {
                     file.delete()
-                } else if (file.isFile && file.extension == "thumb" && file.length() > 0L) {
+                } else if (isStoredThumbnail(file)) {
                     remaining++
                     remainingNames += file.nameWithoutExtension
                 }
@@ -269,6 +271,14 @@ internal class ProtonThumbnailStore
 
         private fun isStalePartial(file: File): Boolean =
             file.extension == "part" && isExpired(file, ProtonStorageLayout.STALE_PART_TTL_MILLIS)
+
+        /** A completed file with no bytes; partial writes are left to [isStalePartial]. */
+        private fun isEmptyRendition(file: File): Boolean =
+            file.extension != "part" && file.isFile && file.length() == 0L
+
+        /** The single definition of "stored" shared by [exists], [count], [storedNames] and the sweeps. */
+        private fun isStoredThumbnail(file: File): Boolean =
+            file.extension == "thumb" && file.isFile && file.length() > 0L
 
         /** The only decoded-thumbnail cache in the process, so it must hold a whole gallery screen. */
         private fun bitmapCacheSize(): Int =

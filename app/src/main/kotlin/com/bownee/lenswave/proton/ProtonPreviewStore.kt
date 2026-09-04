@@ -45,13 +45,18 @@ internal class ProtonPreviewStore
         fun exists(
             userId: String,
             nodeUid: String,
-        ): Boolean = file(userId, nodeUid).let { file -> file.isFile && file.length() > 0L }
+        ): Boolean = isStoredPreview(file(userId, nodeUid))
 
-        /** File names (without extension) of every stored preview, from a single directory listing. */
+        /**
+         * File names (without extension) of every stored preview, from a single directory listing.
+         * A zero-length file is excluded exactly as [exists] and [count] exclude it, so the timeline
+         * never marks a preview as stored that the viewer cannot load and the queue would never
+         * fetch again.
+         */
         fun storedNames(userId: String): Set<String> =
             directory(userId)
-                .list()
-                ?.mapNotNullTo(HashSet()) { name -> name.removeSuffix(".$EXTENSION").takeIf { it != name } }
+                .listFiles()
+                ?.mapNotNullTo(HashSet()) { file -> file.nameWithoutExtension.takeIf { isStoredPreview(file) } }
                 .orEmpty()
 
         /**
@@ -92,7 +97,8 @@ internal class ProtonPreviewStore
             return synchronized(lock(userId, nodeUid)) {
                 peek(userId, nodeUid, targetLongEdge)?.let { return it }
                 val file = file(userId, nodeUid)
-                if (!file.isFile || file.length() <= 0L) {
+                if (!isStoredPreview(file)) {
+                    // A zero-length file was never counted (see [count]), so there is nothing to adjust.
                     file.delete()
                     return null
                 }
@@ -131,16 +137,12 @@ internal class ProtonPreviewStore
 
         fun count(userId: String): Int =
             counts.getOrPut(userId) {
-                directory(userId)
-                    .listFiles()
-                    ?.count { file -> file.isFile && file.extension == EXTENSION && file.length() > 0L }
-                    ?: 0
+                directory(userId).listFiles()?.count(::isStoredPreview) ?: 0
             }
 
+        /** Drops abandoned partial writes and zero-length files, which can never be loaded or re-fetched otherwise. */
         fun maintain(userId: String) {
-            directory(userId).listFiles()?.filter(::isStalePartial)?.forEach(File::delete)
-            counts.remove(userId)
-            dropDecoded { key -> key.userId == userId }
+            sweep(userId) { file -> isStalePartial(file) || isEmptyRendition(file) }
         }
 
         /** [retainedNames] are file names without extension, as [AtomicFileStore.safeName] produces them. */
@@ -148,13 +150,38 @@ internal class ProtonPreviewStore
             userId: String,
             retainedNames: Set<String>,
         ) {
-            directory(userId).listFiles()?.forEach { file ->
-                if (isStalePartial(file) || (file.extension != "part" && file.nameWithoutExtension !in retainedNames)) {
-                    file.delete()
+            sweep(userId) { file ->
+                isStalePartial(file) ||
+                    isEmptyRendition(file) ||
+                    (file.extension != "part" && file.nameWithoutExtension !in retainedNames)
+            }
+        }
+
+        /**
+         * One directory listing serves the deletion and the refreshed count, so the next
+         * [count] does not list the directory again. Only the previews actually deleted leave
+         * the decoded cache: dropping the whole user would evict the preview the viewer is
+         * showing every time housekeeping runs.
+         */
+        private fun sweep(
+            userId: String,
+            prunable: (File) -> Boolean,
+        ) {
+            val files = directory(userId).listFiles().orEmpty()
+            var remaining = 0
+            val deletedNames = HashSet<String>()
+            files.forEach { file ->
+                val stored = isStoredPreview(file)
+                if (prunable(file) && file.delete()) {
+                    if (stored) deletedNames += file.nameWithoutExtension
+                } else if (stored) {
+                    remaining++
                 }
             }
-            counts.remove(userId)
-            dropDecoded { key -> key.userId == userId }
+            counts[userId] = remaining
+            if (deletedNames.isNotEmpty()) {
+                dropDecoded { key -> key.userId == userId && AtomicFileStore.safeName(key.nodeUid) in deletedNames }
+            }
         }
 
         /** Drops memoized state for a user whose directory was deleted. */
@@ -204,6 +231,14 @@ internal class ProtonPreviewStore
                     file.lastModified() <= 0L ||
                         clock.nowMillis() - file.lastModified() > ProtonStorageLayout.STALE_PART_TTL_MILLIS
                 )
+
+        /** A completed file with no bytes; partial writes are left to [isStalePartial]. */
+        private fun isEmptyRendition(file: File): Boolean =
+            file.extension != "part" && file.isFile && file.length() == 0L
+
+        /** The single definition of "stored" shared by [exists], [count], [storedNames] and the sweeps. */
+        private fun isStoredPreview(file: File): Boolean =
+            file.extension == EXTENSION && file.isFile && file.length() > 0L
 
         private data class PreviewKey(
             val userId: String,
