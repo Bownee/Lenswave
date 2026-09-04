@@ -104,9 +104,12 @@ internal object LenswaveDiagnostics {
                 val sdkError = sdkException.error
                 if (sdkError == null) {
                     // Some SDK failures carry no structured error; the message is the only clue.
-                    sdkException.message?.let { message ->
+                    // It is kept only when it is a single safe token, like an error type: a
+                    // free-form message carries URLs, paths and node uids, and replacing the odd
+                    // character would still log them nearly verbatim.
+                    sdkException.message?.safeDiagnosticValue()?.let { message ->
                         append(" sdkMessage=")
-                        append(message.sanitizedDiagnosticText())
+                        append(message)
                     }
                     sdkException.cause?.let { cause ->
                         append(" sdkCause=")
@@ -124,10 +127,6 @@ internal object LenswaveDiagnostics {
                 }
             }
         }
-
-    /** Keeps letters, digits and basic punctuation so a free-form message cannot smuggle secrets or newlines. */
-    private fun String.sanitizedDiagnosticText(): String =
-        replace(Regex("[^A-Za-z0-9 _.:,()/-]"), "_").take(MAX_MESSAGE_LENGTH)
 
     private fun StringBuilder.appendSdkError(
         prefix: String,
@@ -173,7 +172,6 @@ internal object LenswaveDiagnostics {
 
     private const val TAG = "Lenswave"
     private const val MAX_STACK_FRAMES = 4
-    private const val MAX_MESSAGE_LENGTH = 160
     private const val MAX_DIAGNOSTIC_VALUE_LENGTH = 64
     private val SAFE_DIAGNOSTIC_VALUE = Regex("[A-Za-z0-9_.-]{1,$MAX_DIAGNOSTIC_VALUE_LENGTH}")
     private val UNSAFE_DIAGNOSTIC_CHARACTER = Regex("[^A-Za-z0-9_.-]")
