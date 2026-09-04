@@ -3,6 +3,7 @@ package com.bownee.lenswave.proton
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.util.LruCache
 import com.bownee.lenswave.LenswaveClock
 import com.bownee.lenswave.storage.AtomicFileStore
 import com.bownee.lenswave.storage.SecureFileStore
@@ -17,8 +18,8 @@ import kotlin.math.max
  * Encrypted on-disk store for Proton's screen-sized "preview" rendition (about 1920 px).
  *
  * Previews are a few hundred kilobytes each and are only ever shown one at a time in the viewer,
- * so unlike [ProtonThumbnailStore] there is no decoded-bitmap cache: each read decrypts the file
- * and decodes it down-sampled to the caller's display size.
+ * so the decoded-bitmap cache is tiny: the current photo and its neighbours. Any other read decrypts
+ * the file and decodes it down-sampled to the caller's display size.
  */
 @Singleton
 internal class ProtonPreviewStore
@@ -33,6 +34,13 @@ internal class ProtonPreviewStore
 
         /** Stored-preview counts per user; listing a large directory on every progress tick is too slow. */
         private val counts = ConcurrentHashMap<String, Int>()
+
+        /**
+         * The last few decoded previews, so a swipe back (or the same photo opened again) skips
+         * the decrypt and decode. Evicted bitmaps are not recycled: the viewer may still be drawing
+         * one as its placeholder, and the garbage collector reclaims them soon enough.
+         */
+        private val decoded = LruCache<PreviewKey, Bitmap>(DECODED_CACHE_ENTRIES)
 
         fun exists(
             userId: String,
@@ -57,6 +65,7 @@ internal class ProtonPreviewStore
         ) {
             require(ProtonPreviewCodec.isDecodable(bytes)) { "Proton returned an invalid preview image" }
             synchronized(lock(userId, nodeUid)) {
+                dropDecoded { key -> key.userId == userId && key.nodeUid == nodeUid }
                 val target = file(userId, nodeUid)
                 val existed = target.isFile && target.length() > 0L
                 target.parentFile?.mkdirs()
@@ -66,13 +75,22 @@ internal class ProtonPreviewStore
             }
         }
 
+        /** The decoded preview when it is still in memory from a recent [load]; never touches disk. */
+        fun peek(
+            userId: String,
+            nodeUid: String,
+            targetLongEdge: Int,
+        ): Bitmap? = decoded.get(PreviewKey(userId, nodeUid, targetLongEdge))?.takeUnless(Bitmap::isRecycled)
+
         /** Decrypts and decodes the preview so its longer edge is at least [targetLongEdge] pixels. */
         fun load(
             userId: String,
             nodeUid: String,
             targetLongEdge: Int,
-        ): Bitmap? =
-            synchronized(lock(userId, nodeUid)) {
+        ): Bitmap? {
+            peek(userId, nodeUid, targetLongEdge)?.let { return it }
+            return synchronized(lock(userId, nodeUid)) {
+                peek(userId, nodeUid, targetLongEdge)?.let { return it }
                 val file = file(userId, nodeUid)
                 if (!file.isFile || file.length() <= 0L) {
                     file.delete()
@@ -93,14 +111,17 @@ internal class ProtonPreviewStore
                     return null
                 }
                 file.setLastModified(clock.nowMillis())
+                decoded.put(PreviewKey(userId, nodeUid, targetLongEdge), bitmap)
                 bitmap
             }
+        }
 
         fun remove(
             userId: String,
             nodeUid: String,
         ) {
             synchronized(lock(userId, nodeUid)) {
+                dropDecoded { key -> key.userId == userId && key.nodeUid == nodeUid }
                 val target = file(userId, nodeUid)
                 val existed = target.isFile && target.length() > 0L
                 target.delete()
@@ -119,6 +140,7 @@ internal class ProtonPreviewStore
         fun maintain(userId: String) {
             directory(userId).listFiles()?.filter(::isStalePartial)?.forEach(File::delete)
             counts.remove(userId)
+            dropDecoded { key -> key.userId == userId }
         }
 
         fun removeUnreferenced(
@@ -132,15 +154,26 @@ internal class ProtonPreviewStore
                 }
             }
             counts.remove(userId)
+            dropDecoded { key -> key.userId == userId }
         }
 
         /** Drops memoized state for a user whose directory was deleted. */
         fun forget(userId: String) {
             counts.remove(userId)
+            dropDecoded { key -> key.userId == userId }
         }
 
         fun retainCountsFor(userId: String?) {
             counts.keys.removeAll { key -> key != userId }
+            dropDecoded { key -> key.userId != userId }
+        }
+
+        private fun dropDecoded(matches: (PreviewKey) -> Boolean) {
+            decoded
+                .snapshot()
+                .keys
+                .filter(matches)
+                .forEach(decoded::remove)
         }
 
         private fun adjustCount(
@@ -172,9 +205,18 @@ internal class ProtonPreviewStore
                         clock.nowMillis() - file.lastModified() > ProtonStorageLayout.STALE_PART_TTL_MILLIS
                 )
 
+        private data class PreviewKey(
+            val userId: String,
+            val nodeUid: String,
+            val targetLongEdge: Int,
+        )
+
         private companion object {
             const val EXTENSION = "preview"
             const val LOCK_COUNT = 32
+
+            /** The photo on screen plus one neighbour either side. */
+            const val DECODED_CACHE_ENTRIES = 3
         }
     }
 
