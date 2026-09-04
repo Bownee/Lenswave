@@ -468,7 +468,12 @@ internal enum class ThumbnailFailureKind(
 internal object ThumbnailFailureClassifier {
     fun classify(error: Throwable): ThumbnailFailureKind {
         if (error is SocketTimeoutException) return ThumbnailFailureKind.NETWORK
-        (error as? ProtonDriveSdkException)?.error?.let { sdkError -> return classify(sdkError) }
+        if (error is ProtonDriveSdkException) {
+            error.error?.let { sdkError -> return classify(sdkError) }
+            // Without a structured error the message is all the SDK gives, for example
+            // "File thumbnail failure: This item has no image preview".
+            return classifyDescription(error.message.orEmpty().lowercase())
+        }
         val type = error::class.java.simpleName.lowercase()
         return when {
             "unauthor" in type || "auth" in type -> ThumbnailFailureKind.AUTHENTICATION
@@ -504,15 +509,7 @@ internal object ThumbnailFailureClassifier {
                     ThumbnailFailureKind.NOT_FOUND
                 }
 
-                "not found" in description || "notfound" in description || "does not exist" in description -> {
-                    ThumbnailFailureKind.NOT_FOUND
-                }
-
                 sdkError.primaryCode == HTTP_UNAUTHORIZED || sdkError.primaryCode == HTTP_FORBIDDEN -> {
-                    ThumbnailFailureKind.AUTHENTICATION
-                }
-
-                "unauthor" in description -> {
                     ThumbnailFailureKind.AUTHENTICATION
                 }
 
@@ -522,12 +519,23 @@ internal object ThumbnailFailureClassifier {
                 }
 
                 else -> {
-                    ThumbnailFailureKind.UNKNOWN
+                    classifyDescription(description)
                 }
             }
         if (kind != ThumbnailFailureKind.UNKNOWN) return kind
         return sdkError.innerError?.let(::classify) ?: ThumbnailFailureKind.UNKNOWN
     }
+
+    private fun classifyDescription(description: String): ThumbnailFailureKind =
+        when {
+            MISSING_RENDITION_PHRASES.any { phrase -> phrase in description } -> ThumbnailFailureKind.NOT_FOUND
+            "unauthor" in description -> ThumbnailFailureKind.AUTHENTICATION
+            else -> ThumbnailFailureKind.UNKNOWN
+        }
+
+    /** Wordings Proton uses when a photo simply has no such rendition; retrying cannot help. */
+    private val MISSING_RENDITION_PHRASES =
+        listOf("no image preview", "no preview", "no thumbnail", "not found", "notfound", "does not exist")
 
     private const val HTTP_UNAUTHORIZED = 401L
     private const val HTTP_FORBIDDEN = 403L

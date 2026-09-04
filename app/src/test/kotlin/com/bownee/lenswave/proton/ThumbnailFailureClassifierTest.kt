@@ -34,6 +34,19 @@ class ThumbnailFailureClassifierTest {
         )
     }
 
+    @Test fun sdkMessageWithoutStructuredErrorIsClassifiedByWording() {
+        assertEquals(
+            ThumbnailFailureKind.NOT_FOUND,
+            ThumbnailFailureClassifier.classify(
+                ProtonDriveSdkException("File thumbnail failure: This item has no image preview", null, null),
+            ),
+        )
+        assertEquals(
+            ThumbnailFailureKind.UNKNOWN,
+            ThumbnailFailureClassifier.classify(ProtonDriveSdkException("File thumbnail failure: boom", null, null)),
+        )
+    }
+
     @Test fun sdkErrorsAreClassifiedFromTheirStructure() {
         assertEquals(
             ThumbnailFailureKind.NOT_FOUND,

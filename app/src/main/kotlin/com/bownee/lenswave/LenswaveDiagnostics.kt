@@ -111,7 +111,20 @@ internal object LenswaveDiagnostics {
             append(operation)
             append(" failure=")
             append(error.diagnosticClassName())
-            (error as? ProtonDriveSdkException)?.error?.let { sdkError ->
+            (error as? ProtonDriveSdkException)?.let { sdkException ->
+                val sdkError = sdkException.error
+                if (sdkError == null) {
+                    // Some SDK failures carry no structured error; the message is the only clue.
+                    sdkException.message?.let { message ->
+                        append(" sdkMessage=")
+                        append(message.sanitizedDiagnosticText())
+                    }
+                    sdkException.cause?.let { cause ->
+                        append(" sdkCause=")
+                        append(cause.javaClass.name)
+                    }
+                    return@let
+                }
                 appendSdkError("sdk", sdkError)
                 sdkError.innerError?.let { innerError -> appendSdkError("inner", innerError) }
                 sdkError.safeStackFrames().forEachIndexed { index, frame ->
@@ -122,6 +135,10 @@ internal object LenswaveDiagnostics {
                 }
             }
         }
+
+    /** Keeps letters, digits and basic punctuation so a free-form message cannot smuggle secrets or newlines. */
+    private fun String.sanitizedDiagnosticText(): String =
+        replace(Regex("[^A-Za-z0-9 _.:,()/-]"), "_").take(MAX_MESSAGE_LENGTH)
 
     private fun StringBuilder.appendSdkError(
         prefix: String,
@@ -167,6 +184,7 @@ internal object LenswaveDiagnostics {
 
     private const val TAG = "Lenswave"
     private const val MAX_STACK_FRAMES = 4
+    private const val MAX_MESSAGE_LENGTH = 160
     private val SAFE_DIAGNOSTIC_VALUE = Regex("[A-Za-z0-9_.-]{1,64}")
     private val SAFE_STACK_FRAME =
         Regex(
