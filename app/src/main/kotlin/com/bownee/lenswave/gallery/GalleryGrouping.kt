@@ -5,6 +5,7 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.time.zone.ZoneRules
 import java.util.Locale
 
 sealed interface GalleryRow {
@@ -79,12 +80,10 @@ object GalleryGrouping {
         require(columns > 0) { "Columns must be positive" }
         if (photos.isEmpty()) return emptyList()
         val groups = LinkedHashMap<Long, ArrayList<GalleryAsset>>()
-        val rules = zoneId.rules
-        val fixedOffsetSeconds = if (rules.isFixedOffset) rules.getOffset(Instant.EPOCH).totalSeconds else null
+        val offsets = ZoneOffsetLookup(zoneId.rules)
         photos.forEach { photo ->
             val millis = photo.capturedAtEpochMillis
-            val offsetSeconds = fixedOffsetSeconds ?: rules.getOffset(Instant.ofEpochMilli(millis)).totalSeconds
-            groups.getOrPut(epochDay(millis, offsetSeconds), ::ArrayList).add(photo)
+            groups.getOrPut(epochDay(millis, offsets.offsetSeconds(millis)), ::ArrayList).add(photo)
         }
         val formatter = DateTimeFormatter.ofPattern("EEE, d MMM uuuu", locale)
         val rows = ArrayList<GalleryRow>(groups.size + photos.size / columns + groups.size)
@@ -151,6 +150,42 @@ object GalleryGrouping {
                     .chunked(entryColumns)
                     .forEach { add(GalleryRow.Entries(it)) }
             }
+        }
+    }
+
+    /**
+     * The zone offset in force at an instant, remembered together with the transition window it
+     * holds for. Photos arrive sorted, so consecutive lookups fall in the same window and the
+     * rules (a binary search plus allocations per call in zones with daylight saving) are only
+     * consulted when an instant leaves it. A fixed-offset zone has no transitions, so its single
+     * window spans every instant.
+     */
+    internal class ZoneOffsetLookup(
+        private val rules: ZoneRules,
+    ) {
+        /** The window [windowStartMillis, windowEndMillis) that [offsetSeconds] holds for; empty until the first lookup. */
+        var windowStartMillis = Long.MAX_VALUE
+            private set
+        var windowEndMillis = Long.MIN_VALUE
+            private set
+        private var offsetSeconds = 0
+
+        fun offsetSeconds(epochMillis: Long): Int {
+            if (epochMillis < windowStartMillis || epochMillis >= windowEndMillis) refresh(epochMillis)
+            return offsetSeconds
+        }
+
+        private fun refresh(epochMillis: Long) {
+            // Transitions fall on whole seconds, so the window is bounded in seconds: the last
+            // transition at or before this second (previousTransition is exclusive, hence +1) and
+            // the first one after it (nextTransition is exclusive too).
+            val epochSecond = Math.floorDiv(epochMillis, MILLIS_PER_SECOND)
+            val instant = Instant.ofEpochSecond(epochSecond)
+            offsetSeconds = rules.getOffset(instant).totalSeconds
+            windowStartMillis =
+                rules.previousTransition(Instant.ofEpochSecond(epochSecond + 1))?.instant?.toEpochMilli()
+                    ?: Long.MIN_VALUE
+            windowEndMillis = rules.nextTransition(instant)?.instant?.toEpochMilli() ?: Long.MAX_VALUE
         }
     }
 

@@ -108,6 +108,7 @@ class GalleryGroupingTest {
             )
         zones.forEach { zone ->
             val rules = zone.rules
+            val offsets = GalleryGrouping.ZoneOffsetLookup(rules)
             // A sweep at an odd stride crosses every transition of two years at varied times of day.
             val samples =
                 interesting +
@@ -118,13 +119,42 @@ class GalleryGroupingTest {
                 val millis = instant.toEpochMilli()
                 if (millis <= 0) return@forEach
                 val expected = LocalDate.from(instant.atZone(zone))
-                val actual =
-                    LocalDate.ofEpochDay(
-                        GalleryGrouping.epochDay(millis, rules.getOffset(instant).totalSeconds),
-                    )
+                val offsetSeconds = rules.getOffset(instant).totalSeconds
+                assertEquals("$zone offset at $instant", offsetSeconds, offsets.offsetSeconds(millis))
+                val actual = LocalDate.ofEpochDay(GalleryGrouping.epochDay(millis, offsetSeconds))
                 assertEquals("$zone at $instant", expected, actual)
             }
         }
+    }
+
+    @Test
+    fun offsetLookupReQueriesTheRulesOnlyWhenAnInstantLeavesTheTransitionWindow() {
+        val zone = ZoneId.of("Europe/Zurich")
+        val springForward = Instant.parse("2026-03-29T01:00:00Z")
+        val fallBack = Instant.parse("2026-10-25T01:00:00Z")
+        val offsets = GalleryGrouping.ZoneOffsetLookup(zone.rules)
+
+        assertEquals(3_600, offsets.offsetSeconds(springForward.toEpochMilli() - 1))
+        assertEquals(Instant.parse("2025-10-26T01:00:00Z").toEpochMilli(), offsets.windowStartMillis)
+        assertEquals(springForward.toEpochMilli(), offsets.windowEndMillis)
+
+        // Anywhere inside the window answers from the cache: the window itself does not move.
+        assertEquals(3_600, offsets.offsetSeconds(Instant.parse("2026-01-15T12:00:00Z").toEpochMilli()))
+        assertEquals(springForward.toEpochMilli(), offsets.windowEndMillis)
+
+        // The transition instant itself belongs to the new window.
+        assertEquals(7_200, offsets.offsetSeconds(springForward.toEpochMilli()))
+        assertEquals(springForward.toEpochMilli(), offsets.windowStartMillis)
+        assertEquals(fallBack.toEpochMilli(), offsets.windowEndMillis)
+
+        // Going back in time re-queries as well.
+        assertEquals(3_600, offsets.offsetSeconds(Instant.parse("2025-12-01T00:00:00Z").toEpochMilli()))
+        assertEquals(springForward.toEpochMilli(), offsets.windowEndMillis)
+
+        val fixed = GalleryGrouping.ZoneOffsetLookup(ZoneOffset.ofHours(-3).rules)
+        assertEquals(-3 * 3_600, fixed.offsetSeconds(1))
+        assertEquals(Long.MIN_VALUE, fixed.windowStartMillis)
+        assertEquals(Long.MAX_VALUE, fixed.windowEndMillis)
     }
 
     @Test
