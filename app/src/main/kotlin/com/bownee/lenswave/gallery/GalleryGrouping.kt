@@ -32,12 +32,21 @@ sealed interface GalleryRow {
 }
 
 object GalleryGrouping {
-    fun sortPhotos(photos: List<GalleryAsset>): List<GalleryAsset> =
-        photos.sortedWith(
-            compareByDescending<GalleryAsset> { it.capturedAtEpochMillis > 0 }
-                .thenByDescending { it.capturedAtEpochMillis }
-                .thenBy { it.stableId },
-        )
+    /**
+     * Newest first, undated photos last, ties broken by id. The comparator works on primitive
+     * longs so sorting a long timeline allocates nothing per comparison.
+     */
+    private val newestFirst =
+        Comparator<GalleryAsset> { first, second ->
+            val byTime = sortTime(second).compareTo(sortTime(first))
+            if (byTime != 0) byTime else first.stableId.compareTo(second.stableId)
+        }
+
+    fun sortPhotos(photos: List<GalleryAsset>): List<GalleryAsset> = photos.sortedWith(newestFirst)
+
+    /** Undated photos (no positive capture time) sort below every dated one. */
+    private fun sortTime(photo: GalleryAsset): Long =
+        if (photo.capturedAtEpochMillis > 0) photo.capturedAtEpochMillis else Long.MIN_VALUE
 
     fun createRows(
         photos: List<GalleryAsset>,
