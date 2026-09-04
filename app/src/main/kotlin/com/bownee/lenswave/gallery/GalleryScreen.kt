@@ -72,6 +72,7 @@ internal class GalleryScreen(
     private val selectionCount: TextView
     private val selectionDeleteButton: Button
     private var safeArea = Insets.NONE
+    private var revealedDestination: GalleryDestination? = null
 
     init {
         adapter =
@@ -241,7 +242,11 @@ internal class GalleryScreen(
         albumsTab.setSelectedTab(tab == GalleryTab.ALBUMS)
         filterRow.visibility = if (GalleryNavigationPolicy.showsFilters(destination)) View.VISIBLE else View.GONE
         filterChips.forEach { (target, chip) -> chip.setSelectedChip(target == destination) }
-        filterChips[destination]?.let(::revealChip)
+        // Scrolling the chip into view is a one-off on arrival; later renders must not fight the user's scroll.
+        if (revealedDestination != destination) {
+            revealedDestination = destination
+            filterChips[destination]?.let(::revealChip)
+        }
     }
 
     /** Scrolls back to the top, jumping most of the way first so long lists do not crawl. */
@@ -612,6 +617,17 @@ internal class GalleryScreen(
             }
         private val labelView = UiStyle.label(context, label, 14f, medium = true)
 
+        // Both looks are built once; a render only swaps them when the chip's state changes.
+        private val selectedBackground =
+            UiStyle.rippled(
+                UiStyle.rounded(context, UiStyle.surfaceRaised, 12),
+                UiStyle.accent,
+            )
+        private val plainBackground = UiStyle.rippled(UiStyle.rounded(context, Color.TRANSPARENT, 12), UiStyle.accent)
+        private val selectedTint = ColorStateList.valueOf(UiStyle.text)
+        private val plainTint = ColorStateList.valueOf(UiStyle.muted)
+        private var isSelectedChip: Boolean? = null
+
         init {
             orientation = HORIZONTAL
             gravity = Gravity.CENTER
@@ -625,15 +641,13 @@ internal class GalleryScreen(
         }
 
         fun setSelectedChip(selected: Boolean) {
+            if (isSelectedChip == selected) return
+            isSelectedChip = selected
             UiStyle.setSelectedState(this, selected)
-            val tint = if (selected) UiStyle.text else UiStyle.muted
-            iconView.imageTintList = ColorStateList.valueOf(tint)
+            val tint = if (selected) selectedTint else plainTint
+            iconView.imageTintList = tint
             labelView.setTextColor(tint)
-            background =
-                UiStyle.rippled(
-                    UiStyle.rounded(context, if (selected) UiStyle.surfaceRaised else Color.TRANSPARENT, 12),
-                    UiStyle.accent,
-                )
+            background = if (selected) selectedBackground else plainBackground
         }
     }
 
