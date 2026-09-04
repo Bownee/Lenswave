@@ -1,0 +1,101 @@
+<title>App Audit</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@600;700;800&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --paper: #F3F5F7; --surface: #FFFFFF; --ink: #1B2431; --ink-2: #4A5665; --ink-3: #7A8797;
+    --line: #D6DCE3; --line-2: #E6EAEF; --accent: #2B55B8; --accent-ink: #1E3F8F; --accent-soft: #E4EBFA;
+    --crit: #B3261E; --crit-soft: #F9E4E2; --high: #C4671A; --high-soft: #FBEADB;
+    --med: #8B6F12; --med-soft: #F6EFD3; --low: #4C7A66; --low-soft: #E1EFE8;
+    --fixed: #2E7D5B; --fixed-soft: #DDF1E6; --code-bg: #EAEEF3; color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #12171E; --surface: #1A2129; --ink: #E7ECF2; --ink-2: #B4BECB; --ink-3: #7F8B99;
+      --line: #2E3843; --line-2: #242D37; --accent: #8FAFF2; --accent-ink: #B7CCF8; --accent-soft: #1F2C45;
+      --crit: #F08C85; --crit-soft: #3B1F1E; --high: #F0A45C; --high-soft: #3B2A18;
+      --med: #D9BC4E; --med-soft: #35301A; --low: #8FC4AE; --low-soft: #1D3129;
+      --fixed: #7FD1A8; --fixed-soft: #1C3428; --code-bg: #232C36; color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #12171E; --surface: #1A2129; --ink: #E7ECF2; --ink-2: #B4BECB; --ink-3: #7F8B99;
+    --line: #2E3843; --line-2: #242D37; --accent: #8FAFF2; --accent-ink: #B7CCF8; --accent-soft: #1F2C45;
+    --crit: #F08C85; --crit-soft: #3B1F1E; --high: #F0A45C; --high-soft: #3B2A18;
+    --med: #D9BC4E; --med-soft: #35301A; --low: #8FC4AE; --low-soft: #1D3129;
+    --fixed: #7FD1A8; --fixed-soft: #1C3428; --code-bg: #232C36; color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body { background: var(--paper); color: var(--ink); font: 16px/1.55 "IBM Plex Sans", "Segoe UI", system-ui, sans-serif; margin: 0; }
+  main { max-width: 76ch; margin: 0 auto; padding: 48px 24px 96px; }
+  h1, h2, h3 { font-family: Manrope, "Segoe UI", system-ui, sans-serif; text-wrap: balance; margin: 0; letter-spacing: -0.01em; }
+  h1 { font-size: 2.1rem; font-weight: 800; line-height: 1.15; }
+  h2 { font-size: 1.35rem; font-weight: 700; margin-top: 56px; padding-bottom: 10px; border-bottom: 2px solid var(--line); }
+  h3 { font-size: 1.02rem; font-weight: 700; }
+  p { margin: 0; }
+  .lede { color: var(--ink-2); font-size: 1.05rem; margin-top: 12px; max-width: 64ch; }
+  .meta { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-top: 18px; color: var(--ink-3); font-size: 0.85rem; }
+  .meta b { color: var(--ink-2); font-weight: 500; }
+  code, .path { font-family: "IBM Plex Mono", Consolas, monospace; font-size: 0.86em; background: var(--code-bg); padding: 1px 5px; border-radius: 3px; }
+  a { color: var(--accent); }
+  .eyebrow { font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); font-weight: 600; }
+  .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-top: 28px; }
+  .tile { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 14px 16px; display: grid; gap: 4px; }
+  .tile .n { font: 700 1.7rem/1 Manrope, sans-serif; font-variant-numeric: tabular-nums; }
+  .tile .l { font-size: 0.82rem; color: var(--ink-2); }
+  .tile.crit .n { color: var(--crit); } .tile.high .n { color: var(--high); } .tile.med .n { color: var(--med); } .tile.low .n { color: var(--low); } .tile.fixed .n { color: var(--fixed); }
+  .chip { display: inline-block; font: 600 0.7rem/1 "IBM Plex Sans", sans-serif; letter-spacing: 0.06em; text-transform: uppercase; padding: 5px 8px 4px; border-radius: 3px; white-space: nowrap; }
+  .chip.crit { background: var(--crit-soft); color: var(--crit); } .chip.high { background: var(--high-soft); color: var(--high); }
+  .chip.med { background: var(--med-soft); color: var(--med); } .chip.low { background: var(--low-soft); color: var(--low); }
+  .chip.fixed { background: var(--fixed-soft); color: var(--fixed); } .chip.area { background: var(--accent-soft); color: var(--accent-ink); }
+  .finding { display: grid; gap: 8px; padding: 18px 0; border-bottom: 1px solid var(--line-2); }
+  .finding:last-child { border-bottom: 0; }
+  .finding .head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .finding .head h3 { flex: 1 1 auto; min-width: 20ch; }
+  .finding .where { color: var(--ink-3); font-size: 0.85rem; }
+  .finding .body { color: var(--ink-2); }
+  .finding .fix { display: grid; grid-template-columns: max-content 1fr; gap: 10px; align-items: baseline; margin-top: 2px; }
+  .finding .fix .eyebrow { color: var(--accent); }
+  .fine { margin-top: 14px; display: grid; gap: 6px; color: var(--ink-2); padding-left: 1.2em; }
+  .fine li::marker { color: var(--low); }
+  .callout { background: var(--surface); border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 6px; padding: 14px 18px; margin-top: 20px; color: var(--ink-2); }
+  .callout b { color: var(--ink); }
+  ol.order { padding-left: 1.4em; margin: 14px 0 0; display: grid; gap: 8px; color: var(--ink-2); }
+  ol.order b { color: var(--ink); font-weight: 600; }
+</style>
+
+<main>
+  <!-- Keep this structure so successive audits compare: eyebrow (repo, branch, commit), title,
+       lede, meta, summary tiles, then per-dimension sections. Chips: crit/high/med/low/fixed/area.
+       A later pass flips severity chips to fixed in place rather than removing findings. -->
+  <p class="eyebrow">APP · PLATFORM · BRANCH at COMMIT</p>
+  <h1 style="margin-top:8px">APP NAME Audit</h1>
+  <p class="lede">One or two sentences: which dimensions were reviewed and what the reader should do first.</p>
+  <div class="meta">
+    <span><b>Scope</b> which directories, manifest, config</span>
+    <span><b>Method</b> N parallel line-by-line reviews with scenario tracing, no execution</span>
+  </div>
+  <div class="summary">
+    <div class="tile crit"><span class="n">0</span><span class="l">critical</span></div>
+    <div class="tile high"><span class="n">0</span><span class="l">high</span></div>
+    <div class="tile med"><span class="n">0</span><span class="l">medium</span></div>
+    <div class="tile low"><span class="n">0</span><span class="l">low</span></div>
+    <div class="tile fixed"><span class="n">0</span><span class="l">fixed on the branch</span></div>
+  </div>
+
+  <h2>What to fix first</h2>
+  <ol class="order">
+    <li><b>Headline.</b> One sentence on why it is first.</li>
+  </ol>
+
+  <h2>Dimension name</h2>
+  <div class="finding"><div class="head"><h3>Finding title as a claim</h3><i class="chip high">high</i></div>
+    <p class="where"><span class="path">File.kt</span> lines or function, what holds what</p>
+    <p class="body">What happens, the failing sequence or the cost scaling, in two or three sentences.</p>
+    <div class="fix"><span class="eyebrow">Fix</span><span>The concrete change.</span></div></div>
+  <ul class="fine">
+    <li>Verified sound: the things checked that are fine, as one compact bullet per dimension.</li>
+  </ul>
+
+  <div class="callout"><b>Not measured.</b> Say what reasoning from code could not establish and how to measure it.</div>
+</main>
