@@ -90,10 +90,7 @@ class PhotoMetadataReader
                     add(PhotoMetadataItem(context.getString(labelRes), value, action))
                 }
                 row(R.string.metadata_file_name, fallbackName)
-                row(
-                    R.string.metadata_captured,
-                    fallbackTimestamp.takeIf { it > 0 }?.let { DateFormat.getDateTimeInstance().format(Date(it)) },
-                )
+                row(R.string.metadata_captured, fallbackTimestamp.takeIf { it > 0 }?.let(::formatCapturedAt))
                 if (width > 0 && height > 0) {
                     row(
                         R.string.metadata_dimensions,
@@ -139,6 +136,22 @@ class PhotoMetadataReader
                     exif?.gpsDirection?.let { context.getString(R.string.metadata_gps_direction_value, it) },
                 )
             }
+        }
+
+        /** The last date format built, valid for the locale it was built for. */
+        @Volatile
+        private var capturedAtFormat: Pair<Locale, DateFormat>? = null
+
+        /**
+         * Formats with a DateFormat cached per locale; java.text formats are not thread-safe, so
+         * concurrent reads on the IO dispatcher take turns on it.
+         */
+        private fun formatCapturedAt(epochMillis: Long): String {
+            val locale = Locale.getDefault(Locale.Category.FORMAT)
+            val format =
+                capturedAtFormat?.takeIf { it.first == locale }?.second
+                    ?: DateFormat.getDateTimeInstance().also { capturedAtFormat = locale to it }
+            return synchronized(format) { format.format(Date(epochMillis)) }
         }
 
         private fun Int?.orZero(): Int = this ?: 0
