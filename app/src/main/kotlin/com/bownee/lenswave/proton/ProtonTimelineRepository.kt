@@ -184,28 +184,32 @@ internal class ProtonTimelineRepository
             if (nodeUids.isEmpty()) return
             mutableState.update { state ->
                 if (state.userId != userId.id) return@update state
-                val photos =
-                    state.photos.withThumbnailAvailability(
-                        nodeUids,
-                        available,
-                        nodeUid = ProtonGalleryPhoto::nodeUid,
-                        hasThumbnail = ProtonGalleryPhoto::hasThumbnail,
-                        copy = { photo, hasThumbnail -> photo.copy(hasThumbnail = hasThumbnail) },
-                    ) ?: return@update state
-                state.copy(
-                    photos = photos,
-                    tags =
-                        state.tags.mapValues { (_, tagState) ->
-                            tagState.copy(
-                                photos =
-                                    tagState.photos.map { photo ->
-                                        if (photo.nodeUid in nodeUids) photo.copy(hasThumbnail = available) else photo
-                                    },
-                            )
-                        },
-                )
+                val photos = state.photos.withThumbnailAvailability(nodeUids, available)
+                // Tag listings that did not change keep their instance, so the tabs' memos hold.
+                var tagsChanged = false
+                val tags =
+                    state.tags.mapValues { (_, tagState) ->
+                        tagState.photos.withThumbnailAvailability(nodeUids, available)?.let { updated ->
+                            tagsChanged = true
+                            tagState.copy(photos = updated)
+                        } ?: tagState
+                    }
+                if (photos == null && !tagsChanged) return@update state
+                state.copy(photos = photos ?: state.photos, tags = if (tagsChanged) tags else state.tags)
             }
         }
+
+        private fun List<ProtonGalleryPhoto>.withThumbnailAvailability(
+            nodeUids: Set<String>,
+            available: Boolean,
+        ): List<ProtonGalleryPhoto>? =
+            withThumbnailAvailability(
+                nodeUids,
+                available,
+                nodeUid = ProtonGalleryPhoto::nodeUid,
+                hasThumbnail = ProtonGalleryPhoto::hasThumbnail,
+                copy = { photo, hasThumbnail -> photo.copy(hasThumbnail = hasThumbnail) },
+            )
 
         /** Previews only matter to the timeline queue, so tag listings are left untouched. */
         internal fun markPreviewsAvailable(
@@ -292,21 +296,29 @@ internal class ProtonTimelineRepository
             mutableState.value = ProtonGalleryState()
         }
 
+        /**
+         * Publishes [photos] as the timeline. The published list keeps its previous instance
+         * whenever the content is unchanged: the gallery memoizes its assets and its uid index by
+         * list identity, so a syncing heartbeat that re-published an equal copy made the Activity
+         * compare the whole library on the main thread. Callers hand over lists they built
+         * themselves, so no defensive copy is taken. [tags] null keeps the published tag map.
+         */
         private fun emit(
             userId: UserId,
             photos: List<ProtonGalleryPhoto>,
             hasLoaded: Boolean,
             syncing: Boolean,
-            tags: Map<ProtonMediaTag, ProtonTagState> = mutableState.value.tags,
+            tags: Map<ProtonMediaTag, ProtonTagState>? = null,
         ) {
-            mutableState.value =
+            mutableState.update { previous ->
                 ProtonGalleryState(
                     userId = userId.id,
-                    photos = photos.toList(),
+                    photos = if (previous.photos == photos) previous.photos else photos,
                     hasLoaded = hasLoaded,
                     syncing = syncing,
-                    tags = tags,
+                    tags = tags ?: previous.tags,
                 )
+            }
         }
 
         private fun updateTag(

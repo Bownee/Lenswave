@@ -281,19 +281,25 @@ internal class ProtonAlbumRepository
             )
         }
 
+        /**
+         * The published list keeps its previous instance whenever the content is unchanged; the
+         * gallery memoizes by list identity, so a syncing heartbeat must not hand it an equal copy.
+         * Callers hand over lists they built themselves, so no defensive copy is taken.
+         */
         private fun emitAlbums(
             userId: UserId,
             albums: List<ProtonAlbum>,
             syncing: Boolean,
             hasLoaded: Boolean = true,
         ) {
-            mutableAlbumsState.value =
+            mutableAlbumsState.update { previous ->
                 ProtonAlbumsState(
                     userId = userId.id,
-                    albums = albums.toList(),
+                    albums = if (previous.albums == albums) previous.albums else albums,
                     hasLoaded = hasLoaded,
                     syncing = syncing,
                 )
+            }
         }
 
         private fun emitAlbumPhotos(
@@ -303,17 +309,18 @@ internal class ProtonAlbumRepository
             hasLoaded: Boolean,
             syncing: Boolean,
         ) {
-            val currentAlbumUid = mutableAlbumPhotosState.value.albumUid
-            if (currentAlbumUid != null && currentAlbumUid != album.nodeUid) return
-            mutableAlbumPhotosState.value =
+            mutableAlbumPhotosState.update { previous ->
+                val currentAlbumUid = previous.albumUid
+                if (currentAlbumUid != null && currentAlbumUid != album.nodeUid) return@update previous
                 ProtonAlbumPhotosState(
                     userId = userId.id,
                     albumUid = album.nodeUid,
                     albumName = album.name,
-                    photos = photos.toList(),
+                    photos = if (previous.photos == photos) previous.photos else photos,
                     hasLoaded = hasLoaded,
                     syncing = syncing,
                 )
+            }
         }
 
         private companion object {
