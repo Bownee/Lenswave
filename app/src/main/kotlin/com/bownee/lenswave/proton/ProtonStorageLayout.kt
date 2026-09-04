@@ -23,6 +23,9 @@ internal object ProtonStorageLayout {
     /** Plaintext originals are removed this long after they were last used. */
     const val DECRYPTED_TTL_MILLIS = 30L * 60L * 1_000L
 
+    /** Encrypted originals kept per user; the least recently read ones are evicted beyond this. */
+    const val ORIGINALS_CACHE_LIMIT_BYTES = 4L * 1024L * 1024L * 1024L
+
     /** Keystore scope protecting every cached file of one user. */
     fun mediaScope(userId: String): String = "proton-media:$userId"
 }

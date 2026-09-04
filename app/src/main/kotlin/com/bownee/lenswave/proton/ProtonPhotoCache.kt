@@ -20,6 +20,7 @@ internal class ProtonPhotoCache
         private val clock: LenswaveClock,
         private val thumbnails: ProtonThumbnailStore,
         private val previews: ProtonPreviewStore,
+        private val originals: ProtonOriginalStore,
     ) : ProtonSyncMetadataStore,
         ProtonAccountCacheCleaner,
         ProtonTimelineCache,
@@ -28,15 +29,6 @@ internal class ProtonPhotoCache
         ProtonSessionCache,
         ProtonThumbnailQueueStore {
         private val root = File(context.filesDir, ProtonStorageLayout.METADATA_DIRECTORY).apply { mkdirs() }
-        private val originals = File(context.cacheDir, ProtonStorageLayout.ORIGINALS_DIRECTORY).apply { mkdirs() }
-        private val decrypted = File(context.cacheDir, ProtonStorageLayout.DECRYPTED_DIRECTORY)
-
-        /**
-         * Plaintext copies from a previous process are wiped once, on the first session activation,
-         * which runs on an I/O dispatcher. Doing it in the constructor would delete potentially
-         * hundreds of megabytes on the main thread while Hilt builds the object graph.
-         */
-        @Volatile private var decryptedWiped = false
 
         /** Metadata hydration only needs availability; authenticated contents are validated when read. */
         override fun thumbnailExists(
@@ -312,83 +304,31 @@ internal class ProtonPhotoCache
         override fun readOriginal(
             userId: String,
             nodeUid: String,
-        ): File? {
-            val file = originalFile(userId, nodeUid)
-            if (!file.isFile || file.length() <= 0L) {
-                file.delete()
-                return null
-            }
-            val materialized = decryptedOriginalFile(userId, nodeUid)
-            if (materialized.isFile && !isExpired(materialized, ProtonStorageLayout.DECRYPTED_TTL_MILLIS)) {
-                materialized.setLastModified(clock.nowMillis())
-                file.setLastModified(clock.nowMillis())
-                return materialized
-            }
-            return runCatching {
-                materialized.delete()
-                secureFiles.decryptFile(scope(userId), file, materialized)
-                file.setLastModified(clock.nowMillis())
-                materialized.setLastModified(clock.nowMillis())
-                materialized
-            }.getOrElse {
-                materialized.delete()
-                file.delete()
-                null
-            }
-        }
+        ): File? = originals.read(userId, nodeUid)
 
         override fun createOriginalTarget(
             userId: String,
             nodeUid: String,
-        ): Pair<File, File> {
-            val target = originalFile(userId, nodeUid)
-            val materialized = decryptedOriginalFile(userId, nodeUid)
-            materialized.parentFile?.mkdirs()
-            target.parentFile?.mkdirs()
-            check(materialized.delete() || !materialized.exists()) {
-                "Could not replace materialized Proton media"
-            }
-            return materialized to target
-        }
+        ): Pair<File, File> = originals.createTarget(userId, nodeUid)
 
         override fun commitOriginal(
             userId: String,
             nodeUid: String,
             plaintext: File,
             target: File,
-        ): File {
-            require(plaintext == decryptedOriginalFile(userId, nodeUid)) {
-                "Downloaded Proton media must use its materialized cache target"
-            }
-            secureFiles.encryptFile(scope(userId), plaintext, target, "Could not protect downloaded photo")
-            val storedAt = clock.nowMillis()
-            target.setLastModified(storedAt)
-            plaintext.setLastModified(storedAt)
-            return plaintext
-        }
+        ): File = originals.commit(userId, nodeUid, plaintext, target)
 
         override fun onOriginalStored(
             userId: String,
             target: File,
         ) {
-            // Encrypted originals are kept without a size or age limit; reconciliation removes the
-            // ones whose photos no longer exist, and disconnecting erases them all.
-            target.setLastModified(clock.nowMillis())
+            originals.onStored(userId, target)
         }
 
         override fun trimUser(userId: String) {
             thumbnails.maintain(userId)
             previews.maintain(userId)
-            wipeStaleDecryptedCopies()
-            expireFiles(decryptedDirectory(userId), ProtonStorageLayout.DECRYPTED_TTL_MILLIS)
-        }
-
-        @Synchronized
-        private fun wipeStaleDecryptedCopies() {
-            if (decryptedWiped) return
-            decrypted.deleteRecursively()
-            decrypted.mkdirs()
-            decryptedWiped = true
+            originals.maintain(userId)
         }
 
         override fun reconcilePhotos(
@@ -409,22 +349,12 @@ internal class ProtonPhotoCache
                 if (nodeUid in retainedNodeUids) return@forEach
                 thumbnails.remove(userId, nodeUid)
                 previews.remove(userId, nodeUid)
-                originalFile(userId, nodeUid).delete()
-                decryptedOriginalFile(userId, nodeUid).delete()
+                originals.remove(userId, nodeUid)
             }
-            val validNames = (remoteNodeUids + retainedNodeUids).mapTo(mutableSetOf(), ::safeName)
-            thumbnails.removeUnreferenced(userId, remoteNodeUids + retainedNodeUids)
-            previews.removeUnreferenced(userId, remoteNodeUids + retainedNodeUids)
-            originalDirectory(userId).listFiles()?.forEach { file ->
-                if (file.isPrunable(validNames)) {
-                    file.delete()
-                }
-            }
-            decryptedDirectory(userId).listFiles()?.forEach { file ->
-                if (file.isPrunable(validNames)) {
-                    file.delete()
-                }
-            }
+            val referencedNodeUids = remoteNodeUids + retainedNodeUids
+            thumbnails.removeUnreferenced(userId, referencedNodeUids)
+            previews.removeUnreferenced(userId, referencedNodeUids)
+            originals.removeUnreferenced(userId, referencedNodeUids)
         }
 
         override fun removePhotos(
@@ -435,8 +365,7 @@ internal class ProtonPhotoCache
             removed.forEach { nodeUid ->
                 removeThumbnail(userId, nodeUid)
                 removePreview(userId, nodeUid)
-                originalFile(userId, nodeUid).delete()
-                decryptedOriginalFile(userId, nodeUid).delete()
+                originals.remove(userId, nodeUid)
             }
             writeIndex(userId, readIndex(userId).filterNot { it.nodeUid in removed })
             ProtonMediaTag.entries.forEach { tag ->
@@ -467,9 +396,8 @@ internal class ProtonPhotoCache
             thumbnails.clearMemory(userId)
             previews.forget(userId)
             val indexDeleted = userDirectory(userId).deleteRecursively()
-            val originalsDeleted = originalDirectory(userId).deleteRecursively()
-            val decryptedDeleted = decryptedDirectory(userId).deleteRecursively()
-            check(indexDeleted && originalsDeleted && decryptedDeleted) { "Could not remove cached Proton media" }
+            val originalsDeleted = originals.clear(userId)
+            check(indexDeleted && originalsDeleted) { "Could not remove cached Proton media" }
             secureFiles.deleteKey(scope(userId))
         }
 
@@ -478,29 +406,10 @@ internal class ProtonPhotoCache
             root.listFiles()?.filter { it.name != retainedName }?.forEach { directory ->
                 check(directory.deleteRecursively()) { "Could not remove orphaned Proton cache" }
             }
-            originals.listFiles()?.filter { it.name != retainedName }?.forEach { directory ->
-                check(directory.deleteRecursively()) { "Could not remove orphaned Proton originals" }
-            }
-            decrypted.listFiles()?.filter { it.name != retainedName }?.forEach { directory ->
-                check(directory.deleteRecursively()) { "Could not remove orphaned decrypted Proton media" }
-            }
+            originals.retainOnly(userId)
             thumbnails.retainMemoryFor(userId)
             previews.retainCountsFor(userId)
         }
-
-        private fun originalFile(
-            userId: String,
-            nodeUid: String,
-        ): File = File(originalDirectory(userId), "${safeName(nodeUid)}.image")
-
-        private fun originalDirectory(userId: String): File = File(originals, safeName(userId))
-
-        private fun decryptedOriginalFile(
-            userId: String,
-            nodeUid: String,
-        ): File = File(decryptedDirectory(userId), "${safeName(nodeUid)}.image")
-
-        private fun decryptedDirectory(userId: String): File = File(decrypted, safeName(userId))
 
         private fun indexFile(userId: String): File = File(userDirectory(userId), "index.json")
 
@@ -623,16 +532,6 @@ internal class ProtonPhotoCache
             file: File,
             ttlMillis: Long,
         ): Boolean = file.lastModified() <= 0L || clock.nowMillis() - file.lastModified() > ttlMillis
-
-        private fun expireFiles(
-            directory: File,
-            ttlMillis: Long,
-        ) {
-            directory
-                .listFiles()
-                ?.filter { file -> file.isFile && isExpired(file, ttlMillis) }
-                ?.forEach(File::delete)
-        }
 
         private fun safeName(value: String): String = AtomicFileStore.safeName(value)
     }

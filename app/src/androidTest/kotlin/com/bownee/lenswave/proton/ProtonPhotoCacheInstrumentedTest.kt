@@ -249,6 +249,7 @@ class ProtonPhotoCacheInstrumentedTest {
             clock,
             ProtonThumbnailStore(context, secureFiles, clock),
             ProtonPreviewStore(context, secureFiles, clock),
+            ProtonOriginalStore(context, secureFiles, clock),
         )
 
     private class IsolatedCacheContext(
