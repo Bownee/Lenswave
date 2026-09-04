@@ -163,6 +163,29 @@ class ProtonRenditionSyncTest {
         }
 
     @Test
+    fun `a thumbnail reported twice in one batch is kept`() =
+        runBlocking {
+            thumbnails.replaceSource(USER.id, ProtonSyncKeys.QueueSource.TIMELINE, candidates("a", "b"))
+            source.thumbnailProgress =
+                listOf(
+                    ThumbnailBatchResult(setOf("a"), emptyMap()),
+                    ThumbnailBatchResult(setOf("a", "b"), emptyMap()),
+                )
+
+            sync.downloadNextBatch(USER, allowPreviews = true) {}
+
+            assertTrue(
+                "a settled thumbnail must not be deleted: ${source.removedThumbnails}",
+                source.removedThumbnails.isEmpty(),
+            )
+            assertEquals(0, thumbnails.pendingCount(USER.id))
+            assertEquals(
+                setOf("a", "b"),
+                availability.thumbnailsAvailable.flatMap(PublishedThumbnails::timeline).toSet(),
+            )
+        }
+
+    @Test
     fun `previews wait for the charger without being claimed`() =
         runBlocking {
             previews.replaceSource(USER.id, ProtonSyncKeys.QueueSource.TIMELINE_PREVIEWS, candidates("a"))

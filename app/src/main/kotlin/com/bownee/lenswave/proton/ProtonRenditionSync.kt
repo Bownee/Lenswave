@@ -166,10 +166,11 @@ internal class ProtonRenditionSync
             val nodeUids = entries.map(ProtonThumbnailQueueEntry::nodeUid)
             val progressMutex = Mutex()
             val marks = PendingMarks()
+            val settledSuccesses = mutableSetOf<String>()
             try {
                 source.downloadThumbnails(userId, nodeUids) { result ->
                     progressMutex.withLock {
-                        settleThumbnails(userId, result, marks)
+                        settleThumbnails(userId, result, marks, settledSuccesses)
                         publishMarks(userId, marks, force = false)
                         onProgress(progress(userId))
                     }
@@ -235,18 +236,26 @@ internal class ProtonRenditionSync
             marks.previews += result.successfulNodeUids
         }
 
+        /**
+         * [settledSuccesses] are the nodes earlier reports of the same batch already settled: the
+         * SDK sometimes answers a node twice, and the second answer must not read as "nobody
+         * asked for this".
+         */
         private suspend fun settleThumbnails(
             userId: UserId,
             result: ThumbnailBatchResult,
             marks: PendingMarks,
+            settledSuccesses: MutableSet<String>,
         ) {
             val completed = thumbnailQueue.settle(userId.id, result.successfulNodeUids, result.failures)
             val completedNodeUids = completed.mapTo(mutableSetOf(), ProtonThumbnailQueueEntry::nodeUid)
-            // A thumbnail nothing asked for any more (its photo left every listing meanwhile)
-            // would only take up space.
+            // A thumbnail nothing asked for (never queued, or its photo left every listing while
+            // the batch ran and the queue dropped the entry) would only take up space. One this
+            // batch already settled is wanted; it is simply reported again.
             result.successfulNodeUids
-                .filterNot(completedNodeUids::contains)
+                .filterNot { nodeUid -> nodeUid in completedNodeUids || nodeUid in settledSuccesses }
                 .forEach { nodeUid -> source.removeThumbnail(userId, nodeUid) }
+            settledSuccesses += completedNodeUids
             completed.forEach { entry ->
                 if (ProtonSyncKeys.QueueSource.TIMELINE in entry.sources) marks.timeline += entry.nodeUid
                 if (ProtonSyncKeys.QueueSource.ALBUM_COVERS in entry.sources) marks.albumCovers += entry.nodeUid
