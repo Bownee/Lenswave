@@ -22,18 +22,23 @@ dependency changed; see CONTRIBUTING.md.
   state comes from `GalleryViewModel` through `GalleryUiStateFactory`; navigation is
   `GalleryDestination` + `GalleryNavigationPolicy`.
 - `viewer/` — full-screen photo/video viewer split into `Viewer*` controllers (media transform,
-  swipe/peek, dismiss, details sheet).
+  swipe/peek, dismiss, details sheet, video playback).
 - `proton/` — everything that talks to Proton: `ProtonPhotoGateway` is the session boundary; UI
   code depends on the narrow interfaces in `gallery/GalleryDataSources.kt`, not the gateway.
-  Background downloads run through two `ProtonThumbnailQueue` instances (`@ThumbnailQueue`,
-  `@PreviewQueue`); `ProtonBackgroundBatchPolicy` serves thumbnails before previews, and
-  `ProtonPreviewStore` keeps the screen-sized renditions the viewer shows before the original.
-- `storage/` — Keystore-backed encrypted files and the database passphrase.
+  Downloads: `ProtonOriginalDownloads` (full-size files) and `ProtonRenditionDownloads`
+  (thumbnails, previews). Background work: `ProtonThumbnailWorker` drives `ProtonRenditionSync`,
+  which claims from two `ProtonThumbnailQueue` instances (`@ThumbnailQueue`, `@PreviewQueue`);
+  `ProtonBackgroundBatchPolicy` serves thumbnails first, previews wait for the charger unless the
+  app is on screen, and a photo Proton has no preview for keeps its thumbnail as its preview.
+  Stores: `ProtonThumbnailStore`, `ProtonPreviewStore`, `ProtonOriginalStore` (4 GiB LRU cap).
+- `storage/` — envelope-encrypted files (Keystore-wrapped per-scope data key) and the database
+  passphrase.
 - `update/` — GitHub Releases update check.
 
 ## Rules
 
-- Lint warnings are errors. Coverage gates are enforced; `*Policy` objects must stay above 80 %.
+- Lint and Kotlin compiler warnings are errors. Coverage gates are enforced; `*Policy` objects
+  must stay above 80 %.
 - Pure logic goes in small objects with unit tests; Activities only wire things together.
 - Keep `UiStyle` the single place for colours and view factories.
 - Never zero the SQLCipher passphrase array; Room reads it lazily (see `ProtonDatabaseKeyMigration`).

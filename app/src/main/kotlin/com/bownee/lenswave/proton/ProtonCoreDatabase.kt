@@ -70,6 +70,9 @@ import me.proton.core.usersettings.data.entity.OrganizationKeysEntity
 import me.proton.core.usersettings.data.entity.UserSettingsEntity
 import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
 
+// Proton Core still ships the deprecated public-address entities alongside their replacements and
+// its own migrations expect both tables, so they stay listed until Core drops them.
+@Suppress("DEPRECATION")
 @Database(
     entities = [
         AccountEntity::class,

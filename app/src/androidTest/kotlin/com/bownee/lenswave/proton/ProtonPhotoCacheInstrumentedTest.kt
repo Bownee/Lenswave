@@ -21,7 +21,7 @@ import java.util.UUID
 
 @RunWith(AndroidJUnit4::class)
 class ProtonPhotoCacheInstrumentedTest {
-    @Test fun encryptedIndexCorruptionIsInvalidatedAndActivePartsArePreserved() {
+    @Test fun encryptedIndexCorruptionIsInvalidatedAndOriginalsOutliveTheirDecryptedCopies() {
         val context = isolatedContext()
         val userId = "cache-${UUID.randomUUID()}"
         val clock = FakeClock(System.currentTimeMillis())
@@ -54,9 +54,11 @@ class ProtonPhotoCacheInstrumentedTest {
             val (plaintext, encrypted) = cache.createOriginalTarget(userId, "bounded")
             plaintext.writeText("decrypted private content")
             assertTrue(cache.commitOriginal(userId, "bounded", plaintext, encrypted).isFile)
+            // The decrypted copy expires after 30 minutes; the encrypted original stays until the
+            // size cap or a disconnect removes it, so a later read simply decrypts it again.
             clock.value += 61L * 60L * 1_000L
-            assertEquals(null, cache.readOriginal(userId, "bounded"))
-            assertFalse(encrypted.exists())
+            assertEquals("decrypted private content", cache.readOriginal(userId, "bounded")?.readText())
+            assertTrue(encrypted.exists())
         } finally {
             cache.clearUser(userId)
             context.testRoot.deleteRecursively()

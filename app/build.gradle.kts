@@ -56,6 +56,13 @@ require(instrumentationBuildType in setOf("debug", "minified")) {
     "lenswave.instrumentationBuildType must be debug or minified"
 }
 
+kotlin {
+    compilerOptions {
+        // A warning left in the tree is a bug report nobody reads; treat it like lint does.
+        allWarningsAsErrors.set(true)
+    }
+}
+
 android {
     namespace = "com.bownee.lenswave"
     compileSdk = 36
@@ -265,7 +272,7 @@ tasks.register<JacocoCoverageVerification>("jacocoDebugCoverageVerification") {
             limit {
                 counter = "BRANCH"
                 value = "COVEREDRATIO"
-                minimum = "0.16".toBigDecimal()
+                minimum = "0.18".toBigDecimal()
             }
         }
         // Pure decision objects carry the app's testable logic and must stay close to fully covered.

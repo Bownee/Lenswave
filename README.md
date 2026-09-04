@@ -36,7 +36,7 @@ and [SECURITY.md](SECURITY.md) for how to report a vulnerability.
 | `gallery/` | Timeline, media filters and albums; state built by `GalleryUiStateFactory` |
 | `viewer/` | Full-screen photo and video viewer with swipe, zoom, dismiss and details sheet |
 | `proton/` | Proton session boundary, sync repositories, encrypted caches, thumbnail worker |
-| `storage/` | Android Keystore-backed encrypted files and the database passphrase |
+| `storage/` | Envelope-encrypted files (Keystore-wrapped data keys) and the database passphrase |
 | `update/` | GitHub Releases update check |
 
 The UI is built from programmatic Views. Compose is present only because Proton Core's

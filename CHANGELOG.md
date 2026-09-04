@@ -10,6 +10,7 @@ All notable changes to Lenswave. The format follows [Keep a Changelog](https://k
 - Pull down on any photo grid or the album list to refresh it from Proton.
 - While the gallery is open it re-enumerates the visible section quietly about every 15
   minutes (the album list every 30). Returning from the background triggers an immediate check.
+- Cached originals are capped at 4 GiB per account; the oldest are removed first.
 - Battery: the download worker no longer sleeps inside its foreground service for more than two
   minutes waiting on retries, gives up on a photo after six failed attempts until the next sync,
   re-posts its notification at most every 1.5 seconds, keeps one network callback per run instead
@@ -38,6 +39,8 @@ All notable changes to Lenswave. The format follows [Keep a Changelog](https://k
   they are read.
 
 ### Changed
+- Internal: originals, renditions and background sync are separate classes; video playback has
+  its own viewer controller; Kotlin compiler warnings fail the build like lint warnings do.
 - Proton-only: device photos, the editor and the picker were removed.
 - New navigation: a pinned Photos | Albums switch with media-type filter chips under it, albums
   on the Albums tab, settings top right, no bottom bar. New visual design and icons.
