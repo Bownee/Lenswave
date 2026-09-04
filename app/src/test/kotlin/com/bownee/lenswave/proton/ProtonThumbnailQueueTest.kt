@@ -378,6 +378,23 @@ class ProtonThumbnailQueueTest {
         }
 
     @Test
+    fun theQueueFileIsReadOnceAndAUserForgottenDuringTheReadStaysEmpty() =
+        runTest {
+            val store = FakeStore()
+            store.entries[USER_ID] = listOf(ProtonThumbnailQueueEntry("stored", mapOf("timeline" to 1L)))
+            val queue = queue(store, FakeClock())
+
+            assertEquals(1, queue.pendingCount(USER_ID))
+            assertEquals(1, queue.claimReady(USER_ID, limit = 1).size)
+            assertEquals(1, store.readCount)
+
+            queue.forget(USER_ID)
+            store.onRead = { kotlinx.coroutines.runBlocking { queue.forget(USER_ID) } }
+            assertEquals(0, queue.pendingCount(USER_ID))
+            assertEquals(2, store.readCount)
+        }
+
+    @Test
     fun aRenditionProtonDoesNotHaveIsDroppedAtOnce() =
         runTest {
             val store = FakeStore()
@@ -443,12 +460,18 @@ class ProtonThumbnailQueueTest {
         val entries = mutableMapOf<String, List<ProtonThumbnailQueueEntry>>()
         val previewEntries = mutableMapOf<String, List<ProtonThumbnailQueueEntry>>()
         var writeCount = 0
+        var readCount = 0
         var failWrites = false
+        var onRead: () -> Unit = {}
 
         override fun readQueue(
             userId: String,
             queue: ProtonQueueName,
-        ): List<ProtonThumbnailQueueEntry> = entriesFor(queue)[userId].orEmpty()
+        ): List<ProtonThumbnailQueueEntry> {
+            readCount++
+            onRead()
+            return entriesFor(queue)[userId].orEmpty()
+        }
 
         override fun writeQueue(
             userId: String,

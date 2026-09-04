@@ -111,6 +111,9 @@ internal class ProtonThumbnailQueue(
     private val claimedNodeUids = mutableMapOf<String, MutableSet<String>>()
     private val persistence = mutableMapOf<String, UserPersistence>()
 
+    /** Bumped by [forget] so a read that was in progress for that user is not installed. */
+    private var forgetCount = 0L
+
     suspend fun replaceSource(
         userId: String,
         source: String,
@@ -125,6 +128,7 @@ internal class ProtonThumbnailQueue(
         pendingCandidatesBySource: Map<String, Collection<ProtonThumbnailCandidate>>,
         retainedAlbumNodeUids: Collection<String>? = null,
     ) {
+        hydrate(userId)
         mutex.withLock {
             val entries = entries(userId)
             val replacedSources = pendingCandidatesBySource.keys
@@ -173,6 +177,7 @@ internal class ProtonThumbnailQueue(
         sources: Set<String>,
     ) {
         if (sources.isEmpty()) return
+        hydrate(userId)
         mutex.withLock {
             val entries = entries(userId)
             val existing = entries[candidate.nodeUid]
@@ -194,9 +199,10 @@ internal class ProtonThumbnailQueue(
     suspend fun claimReady(
         userId: String,
         limit: Int,
-    ): List<ProtonThumbnailQueueEntry> =
-        mutex.withLock {
-            require(limit > 0) { "Thumbnail claim limit must be positive" }
+    ): List<ProtonThumbnailQueueEntry> {
+        require(limit > 0) { "Thumbnail claim limit must be positive" }
+        hydrate(userId)
+        return mutex.withLock {
             val now = clock.nowMillis()
             val claimed = claimedNodeUids.getOrPut(userId, ::mutableSetOf)
             val ready =
@@ -210,6 +216,7 @@ internal class ProtonThumbnailQueue(
                 .takeFirst(ready, limit, NEWEST_FIRST)
                 .onEach { entry -> claimed += entry.nodeUid }
         }
+    }
 
     /** [settle] with every failure treated as transient. */
     suspend fun settle(
@@ -230,12 +237,13 @@ internal class ProtonThumbnailQueue(
         userId: String,
         successfulNodeUids: Set<String>,
         failures: Map<String, ThumbnailFailureKind>,
-    ): List<ProtonThumbnailQueueEntry> =
-        mutex.withLock {
-            val failedNodeUids = failures.keys
-            require(successfulNodeUids.intersect(failedNodeUids).isEmpty()) {
-                "A thumbnail cannot succeed and fail in the same batch"
-            }
+    ): List<ProtonThumbnailQueueEntry> {
+        val failedNodeUids = failures.keys
+        require(successfulNodeUids.intersect(failedNodeUids).isEmpty()) {
+            "A thumbnail cannot succeed and fail in the same batch"
+        }
+        hydrate(userId)
+        return mutex.withLock {
             val entries = entries(userId)
             val completed = successfulNodeUids.mapNotNull(entries::remove)
             val now = clock.nowMillis()
@@ -263,6 +271,7 @@ internal class ProtonThumbnailQueue(
             if (changes > 0) markChanged(userId, changes)
             completed
         }
+    }
 
     suspend fun release(
         userId: String,
@@ -281,24 +290,26 @@ internal class ProtonThumbnailQueue(
         mutex.withLock { claimedNodeUids.remove(userId) }
     }
 
-    suspend fun hasPending(userId: String): Boolean =
-        mutex.withLock {
-            entries(userId).isNotEmpty()
-        }
+    suspend fun hasPending(userId: String): Boolean {
+        hydrate(userId)
+        return mutex.withLock { entries(userId).isNotEmpty() }
+    }
 
-    suspend fun pendingCount(userId: String): Int =
-        mutex.withLock {
-            entries(userId).size
-        }
+    suspend fun pendingCount(userId: String): Int {
+        hydrate(userId)
+        return mutex.withLock { entries(userId).size }
+    }
 
     /** How long until the soonest backed-off entry is claimable again (0 if now), or null when empty. */
-    suspend fun retryDelayMillis(userId: String): Long? =
-        mutex.withLock {
+    suspend fun retryDelayMillis(userId: String): Long? {
+        hydrate(userId)
+        return mutex.withLock {
             entries(userId)
                 .values
                 .minOfOrNull(ProtonThumbnailQueueEntry::retryAtMillis)
                 ?.let { retryAt -> (retryAt - clock.nowMillis()).coerceAtLeast(0L) }
         }
+    }
 
     /**
      * Drops the user's queue from memory without writing it: the caller is erasing the user's
@@ -307,6 +318,7 @@ internal class ProtonThumbnailQueue(
      */
     suspend fun forget(userId: String) {
         mutex.withLock {
+            forgetCount++
             entriesByUser.remove(userId)
             claimedNodeUids.remove(userId)
             persistence.remove(userId)?.scheduledFlush?.cancel()
@@ -387,10 +399,23 @@ internal class ProtonThumbnailQueue(
             }
     }
 
-    private fun entries(userId: String): LinkedHashMap<String, ProtonThumbnailQueueEntry> =
-        entriesByUser.getOrPut(userId) {
-            store.readQueue(userId, name).associateByTo(linkedMapOf(), ProtonThumbnailQueueEntry::nodeUid)
+    /**
+     * Reads the user's queue file on first use. Reading means decrypting and parsing, so it runs
+     * outside [mutex] where every other operation would otherwise wait on it; a copy loaded by a
+     * concurrent caller wins and this one is discarded, and a user forgotten during the read gets
+     * nothing installed (the file being read is the one the caller is erasing).
+     */
+    private suspend fun hydrate(userId: String) {
+        val forgetsBefore = mutex.withLock { if (userId in entriesByUser) return else forgetCount }
+        val loaded = store.readQueue(userId, name).associateByTo(linkedMapOf(), ProtonThumbnailQueueEntry::nodeUid)
+        mutex.withLock {
+            if (forgetCount == forgetsBefore) entriesByUser.getOrPut(userId) { loaded }
         }
+    }
+
+    /** Only under [mutex] and after [hydrate]; a user forgotten in between starts empty. */
+    private fun entries(userId: String): LinkedHashMap<String, ProtonThumbnailQueueEntry> =
+        entriesByUser.getOrPut(userId, ::linkedMapOf)
 
     private fun retryDelayMillis(retryCount: Int): Long {
         val multiplier = 1L shl (retryCount - 1).coerceIn(0, MAX_RETRY_SHIFT)
