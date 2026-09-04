@@ -113,6 +113,8 @@ class GalleryActivity :
     // Day headers depend on the device zone; a zone or clock change bumps this so the rows are regrouped.
     private val groupingGeneration = MutableStateFlow(0)
     private var renderedGrouping = 0
+    private var dayLabels: GalleryGrouping.DayLabels? = null
+    private var dayLabelsGeneration = 0
     private val timeChangeReceiver =
         object : BroadcastReceiver() {
             override fun onReceive(
@@ -328,7 +330,7 @@ class GalleryActivity :
         notificationPermissionPrompter.requestIfNeeded(protonConnected = state.isProtonConnected)
         updateThumbnailCacheIdentity(state.currentUserId)
         if (contentChanged || destinationChanged) {
-            val rows = buildRows(state.content)
+            val rows = buildRows(state.content, grouping)
             if (destinationChanged) {
                 // The list still shows the previous page here, so its position can be captured.
                 saveScrollPosition()
@@ -379,26 +381,44 @@ class GalleryActivity :
         } ?: screen.showContent()
     }
 
-    /** Long photo pages are grouped on a worker thread; short ones inline so the first frame is complete. */
-    private suspend fun buildRows(content: GalleryContent): GalleryRowSet =
+    /**
+     * Photo pages are grouped on a worker thread: the cost scales with the number of day groups
+     * (a label each on a cold cache) as much as with the assets, and neither is known up front.
+     * The empty page and the small library page are built inline.
+     */
+    private suspend fun buildRows(
+        content: GalleryContent,
+        grouping: Int,
+    ): GalleryRowSet =
         when (content) {
             is GalleryContent.Library -> {
                 GalleryRowSet.of(GalleryGrouping.createLibraryRows(content.sections))
             }
 
             is GalleryContent.Photos -> {
+                if (content.assets.isEmpty()) return GalleryRowSet.EMPTY
                 val unknownDateLabel = getString(R.string.unknown_date)
-                if (content.assets.size <= INLINE_ROW_BUILD_LIMIT) {
-                    GalleryRowSet.of(GalleryGrouping.createRows(content.assets, unknownDateLabel = unknownDateLabel))
-                } else {
-                    withContext(Dispatchers.Default) {
-                        GalleryRowSet.of(
-                            GalleryGrouping.createRows(content.assets, unknownDateLabel = unknownDateLabel),
-                        )
-                    }
+                val dayLabels = dayLabelsFor(grouping)
+                withContext(Dispatchers.Default) {
+                    GalleryRowSet.of(
+                        GalleryGrouping.createRows(
+                            content.assets,
+                            unknownDateLabel = unknownDateLabel,
+                            dayLabels = dayLabels,
+                        ),
+                    )
                 }
             }
         }
+
+    /** Day labels are cached across renders and dropped when the grouping generation moves on. */
+    private fun dayLabelsFor(grouping: Int): GalleryGrouping.DayLabels {
+        if (dayLabels == null || dayLabelsGeneration != grouping) {
+            dayLabels = GalleryGrouping.DayLabels()
+            dayLabelsGeneration = grouping
+        }
+        return requireNotNull(dayLabels)
+    }
 
     private fun updateThumbnailCacheIdentity(userId: UserId?) {
         val identity = GalleryThumbnailCacheIdentity(userId)
@@ -561,9 +581,5 @@ class GalleryActivity :
     private fun updateFastScrollTrack() {
         val gap = resources.getDimensionPixelSize(R.dimen.gallery_fast_scroll_edge_margin)
         list.setFastScrollEdgeInsets(top = screen.headerHeight + gap, bottom = safeBottom + gap)
-    }
-
-    private companion object {
-        const val INLINE_ROW_BUILD_LIMIT = 300
     }
 }

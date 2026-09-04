@@ -44,7 +44,7 @@ class GalleryGroupingTest {
     }
 
     @Test
-    fun keepsTheGivenOrderAndMergesLaterPhotosOfADayAlreadySeen() {
+    fun keepsTheGivenOrderAndStartsANewGroupWheneverTheDayChanges() {
         val rows =
             GalleryGrouping.createRows(
                 listOf(
@@ -57,9 +57,48 @@ class GalleryGroupingTest {
                 unknownDateLabel = "No capture date",
             )
 
-        assertEquals(listOf("b", "c"), (rows[1] as GalleryRow.Photos).items.map { it.stableId })
+        // The input contract is display order, so a day that recurs is a new run, not a merge.
+        assertEquals(listOf("b"), (rows[1] as GalleryRow.Photos).items.map { it.stableId })
         assertEquals(listOf("a"), (rows[3] as GalleryRow.Photos).items.map { it.stableId })
-        assertEquals(4, rows.size)
+        assertEquals(listOf("c"), (rows[5] as GalleryRow.Photos).items.map { it.stableId })
+        assertEquals(6, rows.size)
+    }
+
+    @Test
+    fun photoRowsCarryTheIndexOfTheirFirstPhotoAndDayLabelsAreFormattedOnce() {
+        val photos =
+            listOf(
+                photo("d", timestamp(2026, 7, 12)),
+                photo("c", timestamp(2026, 7, 12)),
+                photo("b", timestamp(2026, 7, 12)),
+                photo("a", timestamp(2026, 7, 12)),
+                photo("z", timestamp(2026, 7, 11)),
+                photo("u", 0),
+            )
+        val labels = GalleryGrouping.DayLabels(Locale.US)
+
+        val rows =
+            GalleryGrouping.createRows(
+                photos,
+                ZoneOffset.UTC,
+                Locale.US,
+                columns = 3,
+                unknownDateLabel = "-",
+                dayLabels = labels,
+            )
+
+        assertEquals(listOf(0, 3, 4, 5), rows.filterIsInstance<GalleryRow.Photos>().map { it.startIndex })
+        rows.filterIsInstance<GalleryRow.Photos>().forEach { row ->
+            row.items.forEachIndexed { offset, item -> assertEquals(photos[row.startIndex + offset], item) }
+        }
+        val day = LocalDate.of(2026, 7, 12).toEpochDay()
+        assertEquals("Sun, 12 Jul 2026", labels.label(day))
+        assertTrue(labels.label(day) === labels.label(day))
+        assertEquals("2026-07-12", labels.key(day))
+        assertEquals(
+            GalleryGrouping.createRows(photos, ZoneOffset.UTC, Locale.US, columns = 3, unknownDateLabel = "-"),
+            rows,
+        )
     }
 
     @Test
