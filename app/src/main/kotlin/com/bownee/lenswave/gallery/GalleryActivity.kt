@@ -24,8 +24,10 @@ import com.bownee.lenswave.gallery.GalleryDeletionCoordinator
 import com.bownee.lenswave.gallery.GalleryDestination
 import com.bownee.lenswave.gallery.GalleryEmptyAction
 import com.bownee.lenswave.gallery.GalleryFastScrollLayoutPolicy
+import com.bownee.lenswave.gallery.GalleryGrouping
 import com.bownee.lenswave.gallery.GalleryNavigationPolicy
 import com.bownee.lenswave.gallery.GalleryNotificationPermissionPrompter
+import com.bownee.lenswave.gallery.GalleryRowSet
 import com.bownee.lenswave.gallery.GalleryScrollPosition
 import com.bownee.lenswave.gallery.GalleryScrollPositionStore
 import com.bownee.lenswave.gallery.GallerySettingsPresenter
@@ -42,8 +44,10 @@ import com.bownee.lenswave.update.AppUpdateChecker
 import com.bownee.lenswave.update.UpdateAvailableDialogFragment
 import com.bownee.lenswave.viewer.PhotoViewerActivity
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import me.proton.core.accountmanager.domain.AccountManager
 import me.proton.core.auth.presentation.AuthOrchestrator
 import me.proton.core.domain.entity.UserId
@@ -210,8 +214,14 @@ class GalleryActivity :
         }
     }
 
-    private fun render(state: GalleryUiState) {
+    /**
+     * Collected with collectLatest: a newer state cancels a render still building its rows, and
+     * the rendered destination and content are only recorded once the rows are on screen, so the
+     * newer state's render always submits them.
+     */
+    private suspend fun render(state: GalleryUiState) {
         val destinationChanged = renderedDestination != state.destination
+        // Memoised photo content keeps its instance, so an unchanged page compares in O(1).
         val contentChanged = renderedContent != state.content
         if (destinationChanged) {
             renderedDestination?.let { previousDestination ->
@@ -225,13 +235,10 @@ class GalleryActivity :
         screen.setRefreshing(state.isRefreshing)
         notificationPermissionPrompter.requestIfNeeded(protonConnected = state.isProtonConnected)
         updateThumbnailCacheIdentity(state.currentUserId)
-        renderedDestination = state.destination
-        renderedContent = state.content
         if (contentChanged || destinationChanged) {
-            when (val content = state.content) {
-                is GalleryContent.Photos -> adapter.submitPhotos(content.assets)
-                is GalleryContent.Library -> adapter.submitLibrary(content.sections)
-            }
+            adapter.submitRows(buildRows(state.content))
+            renderedDestination = state.destination
+            renderedContent = state.content
             restorePendingScrollPosition(state)
         }
         state.emptyState?.let { empty ->
@@ -251,6 +258,27 @@ class GalleryActivity :
             adapter.clearSelection()
         }
     }
+
+    /** Long photo pages are grouped on a worker thread; short ones inline so the first frame is complete. */
+    private suspend fun buildRows(content: GalleryContent): GalleryRowSet =
+        when (content) {
+            is GalleryContent.Library -> {
+                GalleryRowSet.of(GalleryGrouping.createLibraryRows(content.sections))
+            }
+
+            is GalleryContent.Photos -> {
+                val unknownDateLabel = getString(R.string.unknown_date)
+                if (content.assets.size <= INLINE_ROW_BUILD_LIMIT) {
+                    GalleryRowSet.of(GalleryGrouping.createRows(content.assets, unknownDateLabel = unknownDateLabel))
+                } else {
+                    withContext(Dispatchers.Default) {
+                        GalleryRowSet.of(
+                            GalleryGrouping.createRows(content.assets, unknownDateLabel = unknownDateLabel),
+                        )
+                    }
+                }
+            }
+        }
 
     private fun updateThumbnailCacheIdentity(userId: UserId?) {
         val identity = GalleryThumbnailCacheIdentity(userId)
@@ -403,5 +431,9 @@ class GalleryActivity :
     private fun updateFastScrollTrack() {
         val gap = resources.getDimensionPixelSize(R.dimen.gallery_fast_scroll_edge_margin)
         list.setFastScrollEdgeInsets(top = screen.headerHeight + gap, bottom = safeBottom + gap)
+    }
+
+    private companion object {
+        const val INLINE_ROW_BUILD_LIMIT = 300
     }
 }

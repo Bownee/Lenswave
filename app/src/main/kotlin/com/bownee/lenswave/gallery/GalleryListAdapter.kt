@@ -25,23 +25,20 @@ class GalleryListAdapter(
 ) : BaseAdapter() {
     private val selected = linkedMapOf<String, GalleryAsset>()
     private var rows: List<GalleryRow> = emptyList()
+    private var dateLabels: List<String?> = emptyList()
     private var isFastScrolling = false
 
-    fun submitPhotos(photos: List<GalleryAsset>) {
-        val stableIds = photos.mapTo(mutableSetOf(), GalleryAsset::stableId)
-        rows =
-            GalleryGrouping.createRows(
-                photos = photos,
-                unknownDateLabel = context.getString(R.string.unknown_date),
-            )
-        selected.keys.retainAll(stableIds)
-        notifyDataSetChanged()
-        notifySelectionChanged()
-    }
-
-    fun submitLibrary(sections: List<LibrarySection>) {
-        rows = GalleryGrouping.createLibraryRows(sections)
-        selected.clear()
+    /** Shows finished rows (see [GalleryGrouping]); a selection survives only for photos still listed. */
+    fun submitRows(rowSet: GalleryRowSet) {
+        rows = rowSet.rows
+        dateLabels = rowSet.dateLabels
+        if (selected.isNotEmpty()) {
+            val stableIds = HashSet<String>()
+            rows.forEach { row ->
+                if (row is GalleryRow.Photos) row.items.forEach { stableIds.add(it.stableId) }
+            }
+            selected.keys.retainAll(stableIds)
+        }
         notifyDataSetChanged()
         notifySelectionChanged()
     }
@@ -70,12 +67,8 @@ class GalleryListAdapter(
 
     fun selectedPhotos(): List<GalleryAsset> = selected.values.toList()
 
-    fun dateLabelForPosition(position: Int): String? {
-        for (index in position.coerceAtMost(rows.lastIndex) downTo 0) {
-            (rows[index] as? GalleryRow.DateHeader)?.let { return it.label }
-        }
-        return null
-    }
+    /** The date heading the row at [position] falls under; null before the first heading. */
+    fun dateLabelForPosition(position: Int): String? = dateLabels.getOrNull(position.coerceAtMost(rows.lastIndex))
 
     override fun getCount(): Int = rows.size
 
