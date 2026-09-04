@@ -61,6 +61,9 @@ class FullResolutionPhotoView
         private var rotationDegrees = 0
         private var exifOrientation = ExifInterface.ORIENTATION_NORMAL
         private var baseBitmap: Bitmap? = null
+
+        /** True while [baseBitmap] is a borrowed preview rather than a decoded original. */
+        private var basePlaceholder = false
         private var baseSampleSize = 1
         private var detailBitmap: Bitmap? = null
         private var detailRect: Rect? = null
@@ -186,12 +189,24 @@ class FullResolutionPhotoView
                             rawHeight = loaded.decoder.height
                             rotationDegrees = ExifOrientation.degrees(loaded.orientation)
                             exifOrientation = loaded.orientation
+                            // A placeholder may already be zoomed; the original takes over the same
+                            // rendered geometry so the picture does not jump when it arrives.
+                            val keepGeometry = basePlaceholder && imageWidth > 0 && width > 0 && height > 0
+                            val renderedWidth = imageWidth * scale
                             imageWidth = if (rotationDegrees % 180 == 0) rawWidth else rawHeight
                             imageHeight = if (rotationDegrees % 180 == 0) rawHeight else rawWidth
-                            baseBitmap?.recycle()
+                            if (!basePlaceholder) baseBitmap?.recycle()
+                            basePlaceholder = false
                             baseBitmap = loaded.bitmap
                             baseSampleSize = loaded.sampleSize
-                            resetTransform()
+                            if (keepGeometry) {
+                                minScale = min(width.toFloat() / imageWidth, height.toFloat() / imageHeight)
+                                scale = (renderedWidth / imageWidth).coerceIn(minScale, maximumScale())
+                                clampOffsets()
+                                recycleDetail()
+                            } else {
+                                resetTransform()
+                            }
                             invalidate()
                             scheduleDetailDecode()
                             onComplete(Result.success(Unit))
@@ -204,6 +219,26 @@ class FullResolutionPhotoView
                 }
         }
 
+        /**
+         * Shows [bitmap] (a screen-sized preview) with full zoom and pan while the original is
+         * still being decoded. The bitmap is not owned by this view and is never recycled here.
+         */
+        fun showPlaceholder(bitmap: Bitmap) {
+            zoomAnimator?.cancel()
+            zoomAnimator = null
+            if (!basePlaceholder) baseBitmap?.recycle()
+            basePlaceholder = true
+            baseBitmap = bitmap
+            rawWidth = bitmap.width
+            rawHeight = bitmap.height
+            rotationDegrees = 0
+            exifOrientation = ExifInterface.ORIENTATION_NORMAL
+            imageWidth = bitmap.width
+            imageHeight = bitmap.height
+            resetTransform()
+            invalidate()
+        }
+
         fun clear() {
             generation.incrementAndGet()
             zoomAnimator?.cancel()
@@ -213,7 +248,8 @@ class FullResolutionPhotoView
             detailRect = null
             detailBitmap?.recycle()
             detailBitmap = null
-            baseBitmap?.recycle()
+            if (!basePlaceholder) baseBitmap?.recycle()
+            basePlaceholder = false
             baseBitmap = null
             rawWidth = 0
             rawHeight = 0

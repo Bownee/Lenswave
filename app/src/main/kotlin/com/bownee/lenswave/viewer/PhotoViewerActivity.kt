@@ -446,21 +446,16 @@ class PhotoViewerActivity : FragmentActivity() {
                 targetLongEdge = max(metrics.widthPixels, metrics.heightPixels),
             ) ?: return
         if (request.stableId != requestedPhoto.stableId || photoReady) return
-        if (thumbnailPreview.isVisible && previewStableId == requestedPhoto.stableId) {
-            thumbnailPreview.setImageBitmap(bitmap)
-            return
-        }
+        // The preview goes into the photo view itself so zoom and pan work right away; the
+        // original later takes over the same geometry. Any spinner scheduled for an empty
+        // screen goes, and the thumbnail underneath is no longer needed.
+        hideLoadingPanel()
+        photoView.animate().cancel()
+        photoView.visibility = View.VISIBLE
+        photoView.showPlaceholder(bitmap)
+        if (thumbnailPreview.isVisible) photoView.translationX = thumbnailPreview.translationX
+        photoView.alpha = 1f
         clearThumbnailPreview()
-        previewStableId = requestedPhoto.stableId
-        thumbnailPreview.setImageBitmap(bitmap)
-        thumbnailPreview.visibility = View.VISIBLE
-        thumbnailPreview.animate().cancel()
-        photoView.alpha = 0f
-        thumbnailPreview.translationY = photoView.translationY
-        thumbnailPreview.scaleX = photoView.scaleX
-        thumbnailPreview.scaleY = photoView.scaleY
-        thumbnailPreview.translationX = photoView.translationX
-        thumbnailPreview.alpha = 1f
         photoDetailsScroll.post(details::synchronizeWithImage)
     }
 
