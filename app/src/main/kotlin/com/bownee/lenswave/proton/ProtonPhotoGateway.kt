@@ -80,8 +80,6 @@ class ProtonPhotoGateway
             forceRemote: Boolean,
         ) = withContext(Dispatchers.IO) {
             sessionGuard.withActiveSession(userId) {
-                // A manual refresh re-checks photos whose renditions were missing last time.
-                if (forceRemote) previewQueue.forgetAbandoned(userId.id)
                 timeline.syncMetadata(userId, forceRemote)
                 reconcileTimelineThumbnailQueue(userId)
                 reconcileTimelinePreviewQueue(userId)

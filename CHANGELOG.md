@@ -7,9 +7,7 @@ All notable changes to Lenswave. The format follows [Keep a Changelog](https://k
 ### Added
 - Previews (~1920 px) of every photo are downloaded in the background after thumbnails, so
   photos open sharp immediately.
-
-- Pull down on any photo grid or the album list to refresh it from Proton. A pull also re-checks
-  photos that had no preview on Proton last time.
+- Pull down on any photo grid or the album list to refresh it from Proton.
 - While the gallery is open it checks for new, changed or deleted media every five minutes and
   re-enumerates the visible section quietly once its cached listing is older than 15 minutes
   (30 minutes for the album list). Returning from the background triggers an immediate check.
@@ -21,8 +19,8 @@ All notable changes to Lenswave. The format follows [Keep a Changelog](https://k
 - Favourites toggled in the viewer now refresh the gallery when you return.
 - Swiping quickly after a video became ready no longer shows a black frame.
 - Cached-thumbnail counts and decrypted-cache cleanup no longer run on the main thread.
-- Photos that have no preview on Proton are remembered, so the preview download no longer
-  restarts and stalls on them after every launch. A manual refresh re-checks them.
+- Photos that have no preview on Proton keep their thumbnail as their preview, so the preview
+  download no longer restarts and stalls on them after every launch.
 - A preview batch the SDK stops answering now ends after 15 seconds of silence instead of
   90, and the unanswered photos are asked for one by one straight away rather than being
   parked in a retry backoff of up to 15 minutes. Re-checking 195 preview-less photos takes

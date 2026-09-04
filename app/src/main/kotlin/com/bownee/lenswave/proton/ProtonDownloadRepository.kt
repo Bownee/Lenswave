@@ -254,6 +254,19 @@ internal class ProtonDownloadRepository
                 result.successfulNodeUids.forEach(failures::remove)
                 failures += result.failures
             }
+            // A photo Proton has no preview for keeps its thumbnail as the preview: the viewer
+            // shows that anyway, and a stored preview keeps the photo out of every later queue.
+            failures
+                .filterValues { kind -> kind == ThumbnailFailureKind.NOT_FOUND }
+                .keys
+                .filter { nodeUid -> nodeUid !in successful }
+                .forEach { nodeUid ->
+                    val thumbnail = cache.readThumbnailBytes(userId.id, nodeUid) ?: return@forEach
+                    if (runCatching { cache.writePreview(userId.id, nodeUid, thumbnail) }.isSuccess) {
+                        successful += nodeUid
+                        failures.remove(nodeUid)
+                    }
+                }
             val finalFailures = failures.filterKeys { nodeUid -> nodeUid !in successful }
             if (finalFailures.isNotEmpty()) onProgress(ThumbnailBatchResult(emptySet(), finalFailures))
             return ThumbnailBatchResult(successful, finalFailures)

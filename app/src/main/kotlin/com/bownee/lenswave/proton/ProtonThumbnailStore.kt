@@ -164,6 +164,16 @@ internal class ProtonThumbnailStore
                 .forEach(bitmaps::remove)
         }
 
+        /** The encrypted file decrypted but not decoded; null when missing or unreadable. */
+        fun readBytes(
+            userId: String,
+            nodeUid: String,
+        ): ByteArray? {
+            val file = file(userId, nodeUid)
+            if (!file.isFile || file.length() <= 0L) return null
+            return runCatching { secureFiles.read(scope(userId), file) }.getOrNull()
+        }
+
         private fun loadFromDisk(key: ThumbnailKey): Bitmap? {
             val file = file(key.userId, key.nodeUid)
             if (!file.isFile || file.length() <= 0L) {

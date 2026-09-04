@@ -118,6 +118,12 @@ interface ProtonMediaCache {
 
     fun thumbnailCount(userId: String): Int
 
+    /** The stored thumbnail exactly as Proton delivered it; null when absent or unreadable. */
+    fun readThumbnailBytes(
+        userId: String,
+        nodeUid: String,
+    ): ByteArray?
+
     fun previewExists(
         userId: String,
         nodeUid: String,
@@ -184,18 +190,6 @@ internal interface ProtonThumbnailQueueStore {
         userId: String,
         queue: ProtonQueueName,
         entries: List<ProtonThumbnailQueueEntry>,
-    )
-
-    /** Node uids the server has no rendition for; they are never queued again. */
-    fun readAbandoned(
-        userId: String,
-        queue: ProtonQueueName,
-    ): Set<String>
-
-    fun writeAbandoned(
-        userId: String,
-        queue: ProtonQueueName,
-        nodeUids: Set<String>,
     )
 }
 

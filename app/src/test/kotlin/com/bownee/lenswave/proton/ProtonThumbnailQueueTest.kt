@@ -299,47 +299,6 @@ class ProtonThumbnailQueueTest {
             assertEquals(1, queue.pendingCount(USER_ID))
         }
 
-    @Test
-    fun abandonedItemsAreRememberedAndNeverQueuedAgain() =
-        runBlocking {
-            val store = FakeStore()
-            val queue = ProtonThumbnailQueue(store, FakeClock(), ProtonQueueName.PREVIEWS)
-            queue.replaceSource(USER_ID, "timeline", candidates("missing", "ok"))
-            queue.claimReady(USER_ID, limit = 2)
-            queue.settle(
-                USER_ID,
-                successfulNodeUids = setOf("ok"),
-                failedNodeUids = emptySet(),
-                abandonedNodeUids = setOf("missing"),
-            )
-
-            // A later sync, here from a fresh instance over the same store, offers the photo again.
-            val restarted = ProtonThumbnailQueue(store, FakeClock(), ProtonQueueName.PREVIEWS)
-            restarted.replaceSource(USER_ID, "timeline", candidates("missing", "new"))
-
-            assertEquals(setOf("missing"), store.abandoned[USER_ID to ProtonQueueName.PREVIEWS])
-            assertEquals(
-                listOf("new"),
-                restarted.claimReady(USER_ID, limit = 5).map(ProtonThumbnailQueueEntry::nodeUid),
-            )
-        }
-
-    @Test
-    fun forgettingAbandonedItemsLetsThemBeQueuedAgain() =
-        runBlocking {
-            val store = FakeStore()
-            val queue = ProtonThumbnailQueue(store, FakeClock(), ProtonQueueName.PREVIEWS)
-            queue.replaceSource(USER_ID, "timeline", candidates("missing"))
-            queue.claimReady(USER_ID, limit = 1)
-            queue.settle(USER_ID, emptySet(), emptySet(), abandonedNodeUids = setOf("missing"))
-
-            queue.forgetAbandoned(USER_ID)
-            queue.replaceSource(USER_ID, "timeline", candidates("missing"))
-
-            assertEquals(emptySet<String>(), store.abandoned[USER_ID to ProtonQueueName.PREVIEWS])
-            assertEquals(1, queue.pendingCount(USER_ID))
-        }
-
     @Test(expected = IllegalArgumentException::class)
     fun anItemCannotBeAbandonedAndRetriedAtOnce() =
         runBlocking {
@@ -367,21 +326,6 @@ class ProtonThumbnailQueueTest {
         ) {
             writeCount++
             entriesFor(queue)[userId] = entries.toList()
-        }
-
-        val abandoned = mutableMapOf<Pair<String, ProtonQueueName>, Set<String>>()
-
-        override fun readAbandoned(
-            userId: String,
-            queue: ProtonQueueName,
-        ): Set<String> = abandoned[userId to queue].orEmpty()
-
-        override fun writeAbandoned(
-            userId: String,
-            queue: ProtonQueueName,
-            nodeUids: Set<String>,
-        ) {
-            abandoned[userId to queue] = nodeUids.toSet()
         }
 
         private fun entriesFor(queue: ProtonQueueName) =
