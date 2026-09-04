@@ -215,31 +215,35 @@ class GalleryActivity :
     }
 
     /**
-     * Collected with collectLatest: a newer state cancels a render still building its rows, and
-     * the rendered destination and content are only recorded once the rows are on screen, so the
-     * newer state's render always submits them.
+     * Collected with collectLatest: a newer state cancels a render still building its rows. Only
+     * the cheap, idempotent parts run before that suspension; everything the rest of the activity
+     * reads back ([currentUiState], the rendered destination and content, the pending scroll
+     * restore) is written after the rows are on screen, so a cancelled render leaves no record of
+     * a page the grid never showed, and the newer state's render always submits its rows.
      */
     private suspend fun render(state: GalleryUiState) {
         val destinationChanged = renderedDestination != state.destination
         val contentChanged = GalleryRenderPolicy.contentChanged(renderedContent, state.content)
-        if (destinationChanged) {
-            renderedDestination?.let { previousDestination ->
-                screen.captureScrollPosition()?.let { position ->
-                    scrollPositions.save(previousDestination, position)
-                }
-            }
-            pendingScrollRestore = state.destination
-        }
-        currentUiState = state
         screen.setRefreshing(state.isRefreshing)
         notificationPermissionPrompter.requestIfNeeded(protonConnected = state.isProtonConnected)
         updateThumbnailCacheIdentity(state.currentUserId)
         if (contentChanged || destinationChanged) {
-            adapter.submitRows(buildRows(state.content))
+            val rows = buildRows(state.content)
+            if (destinationChanged) {
+                // The list still shows the previous page here, so its position can be captured.
+                renderedDestination?.let { previousDestination ->
+                    screen.captureScrollPosition()?.let { position ->
+                        scrollPositions.save(previousDestination, position)
+                    }
+                }
+                pendingScrollRestore = state.destination
+            }
+            adapter.submitRows(rows)
             renderedDestination = state.destination
             renderedContent = state.content
-            restorePendingScrollPosition(state)
         }
+        currentUiState = state
+        if (contentChanged || destinationChanged) restorePendingScrollPosition(state)
         state.emptyState?.let { empty ->
             screen.showEmptyState(
                 title = empty.title,
