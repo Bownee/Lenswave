@@ -27,32 +27,38 @@ internal class ProtonTimelineRepository
 
         val state: StateFlow<ProtonGalleryState> = mutableState.asStateFlow()
 
+        /**
+         * Publishes the cached timeline as soon as it is parsed so the grid can draw, then the
+         * cached tag listings; a cold start waits on nothing else.
+         */
         fun loadCached(userId: UserId) {
+            val availability = cache.storedRenditions(userId.id)
+            val timeline = cache.readTimelineSnapshot(userId.id, availability)
+            emit(
+                userId = userId,
+                photos = timeline.orEmpty(),
+                hasLoaded = timeline != null,
+                syncing = false,
+                tags = emptyMap(),
+            )
             val tagStates =
                 ProtonMediaTag.entries
                     .mapNotNull { tag ->
-                        if (!cache.hasTagSnapshot(userId.id, tag)) return@mapNotNull null
-                        tag to
-                            ProtonTagState(
-                                photos = cache.readTag(userId.id, tag),
-                                hasLoaded = true,
-                            )
+                        cache.readTagSnapshot(userId.id, tag, availability)?.let { photos ->
+                            tag to ProtonTagState(photos = photos, hasLoaded = true)
+                        }
                     }.toMap()
-            emit(
-                userId = userId,
-                photos = cache.readIndex(userId.id),
-                hasLoaded = cache.hasTimelineSnapshot(userId.id),
-                syncing = false,
-                tags = tagStates,
-            )
+            if (tagStates.isEmpty()) return
+            mutableState.update { state -> if (state.userId == userId.id) state.copy(tags = tagStates) else state }
         }
 
         suspend fun syncMetadata(
             userId: UserId,
             forceRemote: Boolean,
         ) = syncMutex.withLock {
-            val existing = cache.readIndex(userId.id)
-            val hasCachedSnapshot = cache.hasTimelineSnapshot(userId.id)
+            val cached = cache.readTimelineSnapshot(userId.id)
+            val existing = cached.orEmpty()
+            val hasCachedSnapshot = cached != null
             snapshotSync.sync(
                 userId = userId.id,
                 source = ProtonSyncSource.TIMELINE,
@@ -63,14 +69,9 @@ internal class ProtonTimelineRepository
                 publishFresh = { emit(userId, existing, hasLoaded = true, syncing = false) },
                 publishSyncing = { emit(userId, existing, hasLoaded = hasCachedSnapshot, syncing = true) },
                 enumerate = {
-                    clientProvider.get(userId).enumerateTimeline().toList().map { item ->
-                        ProtonGalleryPhoto(
-                            nodeUid = item.nodeUid.value,
-                            captureTimeEpochSeconds = item.captureTime.epochSecond,
-                            hasThumbnail = cache.thumbnailExists(userId.id, item.nodeUid.value),
-                            hasPreview = cache.previewExists(userId.id, item.nodeUid.value),
-                        )
-                    }
+                    val items = clientProvider.get(userId).enumerateTimeline().toList()
+                    val availability = cache.storedRenditions(userId.id)
+                    items.map { item -> availability.photo(item.nodeUid.value, item.captureTime.epochSecond) }
                 },
                 commit = { photos ->
                     cache.reconcilePhotos(
@@ -104,8 +105,9 @@ internal class ProtonTimelineRepository
             tag: ProtonMediaTag,
             forceRemote: Boolean,
         ) = tagMutexes.getValue(tag).withLock {
-            val existing = cache.readTag(userId.id, tag)
-            val hasCachedSnapshot = cache.hasTagSnapshot(userId.id, tag)
+            val cached = cache.readTagSnapshot(userId.id, tag)
+            val existing = cached.orEmpty()
+            val hasCachedSnapshot = cached != null
             snapshotSync.sync(
                 userId = userId.id,
                 source = ProtonSyncSource.TIMELINE,
@@ -150,14 +152,14 @@ internal class ProtonTimelineRepository
             if (volumeId == null && mutableState.value.hasLoaded && mutableState.value.photos.isEmpty()) {
                 return emptyList()
             }
-            return tagListings
-                .list(
+            val listed =
+                tagListings.list(
                     userId,
                     requireNotNull(volumeId) { "Cannot determine the Proton Photos volume" },
                     tag,
-                ).map { photo ->
-                    photo.copy(hasThumbnail = cache.thumbnailExists(userId.id, photo.nodeUid))
-                }
+                )
+            val availability = cache.storedRenditions(userId.id)
+            return listed.map { photo -> photo.copy(hasThumbnail = availability.hasThumbnail(photo.nodeUid)) }
         }
 
         internal fun markThumbnailsAvailable(

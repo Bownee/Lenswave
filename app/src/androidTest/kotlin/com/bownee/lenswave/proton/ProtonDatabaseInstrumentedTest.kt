@@ -19,8 +19,10 @@ class ProtonDatabaseInstrumentedTest {
         // open it on a background thread at any time.
         val database = context.getDatabasePath(DATABASE_NAME)
         val passphraseFile = java.io.File(context.noBackupFilesDir, KEY_FILE_NAME)
+        val keyedMarker = ProtonDatabaseKeyMigration.keyedMarker(database)
         context.deleteDatabase(database.name)
         passphraseFile.delete()
+        keyedMarker.delete()
         secureFiles.deleteKey(KEY_SCOPE)
         try {
             val passphrases = DatabasePassphraseStore(context, secureFiles, KEY_FILE_NAME, KEY_SCOPE)
@@ -33,9 +35,12 @@ class ProtonDatabaseInstrumentedTest {
             val header = database.inputStream().use { input -> ByteArray(16).also(input::read) }
             assertFalse(header.contentEquals("SQLite format 3\u0000".toByteArray(Charsets.US_ASCII)))
             assertTrue(database.length() > 0L)
+            // The key probe ran once and recorded that later launches can skip it.
+            assertTrue(keyedMarker.isFile)
         } finally {
             context.deleteDatabase(database.name)
             passphraseFile.delete()
+            keyedMarker.delete()
             secureFiles.deleteKey(KEY_SCOPE)
         }
     }

@@ -7,25 +7,30 @@ import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
 import java.io.File
 
-interface ProtonTimelineCache {
-    fun readIndex(userId: String): List<ProtonGalleryPhoto>
+/**
+ * Snapshot readers return null when no valid listing is stored, so one read answers both "what
+ * is cached" and "is anything cached"; a corrupt file is discarded and reads as absent.
+ * Every hydrated photo carries its rendition availability from [storedRenditions]; pass one
+ * snapshot to several reads to list the rendition directories only once.
+ */
+internal interface ProtonTimelineCache {
+    fun storedRenditions(userId: String): ProtonStoredRenditions
 
-    fun hasTimelineSnapshot(userId: String): Boolean
+    fun readTimelineSnapshot(
+        userId: String,
+        availability: ProtonStoredRenditions = storedRenditions(userId),
+    ): List<ProtonGalleryPhoto>?
 
     fun writeIndex(
         userId: String,
         photos: List<ProtonGalleryPhoto>,
     )
 
-    fun readTag(
+    fun readTagSnapshot(
         userId: String,
         tag: ProtonMediaTag,
-    ): List<ProtonGalleryPhoto>
-
-    fun hasTagSnapshot(
-        userId: String,
-        tag: ProtonMediaTag,
-    ): Boolean
+        availability: ProtonStoredRenditions = storedRenditions(userId),
+    ): List<ProtonGalleryPhoto>?
 
     fun writeTag(
         userId: String,
@@ -34,11 +39,6 @@ interface ProtonTimelineCache {
     )
 
     fun thumbnailExists(
-        userId: String,
-        nodeUid: String,
-    ): Boolean
-
-    fun previewExists(
         userId: String,
         nodeUid: String,
     ): Boolean
@@ -56,25 +56,24 @@ interface ProtonTimelineCache {
     )
 }
 
-interface ProtonAlbumCache {
-    fun readAlbums(userId: String): List<ProtonAlbum>
+internal interface ProtonAlbumCache {
+    fun storedRenditions(userId: String): ProtonStoredRenditions
 
-    fun hasAlbumsSnapshot(userId: String): Boolean
+    fun readAlbumsSnapshot(
+        userId: String,
+        availability: ProtonStoredRenditions = storedRenditions(userId),
+    ): List<ProtonAlbum>?
 
     fun writeAlbums(
         userId: String,
         albums: List<ProtonAlbum>,
     )
 
-    fun readAlbumPhotos(
+    fun readAlbumPhotosSnapshot(
         userId: String,
         albumUid: String,
-    ): List<ProtonGalleryPhoto>
-
-    fun hasAlbumPhotosSnapshot(
-        userId: String,
-        albumUid: String,
-    ): Boolean
+        availability: ProtonStoredRenditions = storedRenditions(userId),
+    ): List<ProtonGalleryPhoto>?
 
     fun writeAlbumPhotos(
         userId: String,
@@ -176,6 +175,13 @@ interface ProtonMediaCache {
 interface ProtonSessionCache {
     fun clearUser(userId: String)
 
+    /**
+     * The cheap part of activation: plaintext copies left behind by a previous process are wiped
+     * before anything can materialize a new one next to them.
+     */
+    fun prepareUser(userId: String)
+
+    /** Expiry and size-cap housekeeping; safe to run while the session is in use. */
     fun trimUser(userId: String)
 }
 

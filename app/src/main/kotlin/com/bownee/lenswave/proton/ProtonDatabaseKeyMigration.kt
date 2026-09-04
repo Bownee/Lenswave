@@ -14,9 +14,28 @@ import java.io.File
  * 32 zero bytes. Opening such a file with the real passphrase fails, so before Room touches the
  * database this migration rekeys it in place; if neither key opens it, the file is discarded and
  * the user signs in again rather than the app crashing at launch.
+ *
+ * Probing the key means a full SQLCipher key derivation, a few hundred milliseconds on the main
+ * thread while Hilt builds the graph, so once the database is known to open with the real
+ * passphrase a marker next to it records that and every later launch skips the probe. Room
+ * creates a missing database with the real passphrase, so a missing file earns the marker too.
  */
 internal object ProtonDatabaseKeyMigration {
     fun rekeyLegacyDatabase(
+        databaseFile: File,
+        passphrase: ByteArray,
+    ) {
+        val marker = keyedMarker(databaseFile)
+        if (marker.isFile) return
+        rekey(databaseFile, passphrase)
+        marker.parentFile?.mkdirs()
+        runCatching { marker.createNewFile() }
+    }
+
+    /** Sits beside the database so a cleared app storage removes both together. */
+    fun keyedMarker(databaseFile: File): File = File(databaseFile.path + MARKER_SUFFIX)
+
+    private fun rekey(
         databaseFile: File,
         passphrase: ByteArray,
     ) {
@@ -71,4 +90,6 @@ internal object ProtonDatabaseKeyMigration {
             File(databaseFile.path + suffix).delete()
         }
     }
+
+    private const val MARKER_SUFFIX = ".keyed"
 }

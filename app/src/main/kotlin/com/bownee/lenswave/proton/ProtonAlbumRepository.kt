@@ -31,11 +31,12 @@ internal class ProtonAlbumRepository
         val albumPhotosState: StateFlow<ProtonAlbumPhotosState> = mutableAlbumPhotosState.asStateFlow()
 
         fun loadCached(userId: UserId) {
+            val albums = cache.readAlbumsSnapshot(userId.id)
             emitAlbums(
                 userId,
-                cache.readAlbums(userId.id),
+                albums.orEmpty(),
                 syncing = false,
-                hasLoaded = cache.hasAlbumsSnapshot(userId.id),
+                hasLoaded = albums != null,
             )
         }
 
@@ -43,14 +44,14 @@ internal class ProtonAlbumRepository
             userId: UserId,
             album: ProtonAlbumReference,
         ) {
-            val photos = cache.readAlbumPhotos(userId.id, album.nodeUid)
+            val photos = cache.readAlbumPhotosSnapshot(userId.id, album.nodeUid)
             mutableAlbumPhotosState.value =
                 ProtonAlbumPhotosState(
                     userId = userId.id,
                     albumUid = album.nodeUid,
                     albumName = album.name,
-                    photos = photos,
-                    hasLoaded = cache.hasAlbumPhotosSnapshot(userId.id, album.nodeUid),
+                    photos = photos.orEmpty(),
+                    hasLoaded = photos != null,
                 )
         }
 
@@ -58,8 +59,9 @@ internal class ProtonAlbumRepository
             userId: UserId,
             forceRemote: Boolean,
         ) = albumsSyncMutex.withLock {
-            val existing = cache.readAlbums(userId.id)
-            val hasCachedSnapshot = cache.hasAlbumsSnapshot(userId.id)
+            val cached = cache.readAlbumsSnapshot(userId.id)
+            val existing = cached.orEmpty()
+            val hasCachedSnapshot = cached != null
             snapshotSync.sync(
                 userId = userId.id,
                 source = ProtonSyncSource.ALBUMS,
@@ -98,8 +100,9 @@ internal class ProtonAlbumRepository
             album: ProtonAlbumReference,
             forceRemote: Boolean,
         ) = albumPhotosSyncMutex.withLock {
-            val existing = cache.readAlbumPhotos(userId.id, album.nodeUid)
-            val hasCachedSnapshot = cache.hasAlbumPhotosSnapshot(userId.id, album.nodeUid)
+            val cached = cache.readAlbumPhotosSnapshot(userId.id, album.nodeUid)
+            val existing = cached.orEmpty()
+            val hasCachedSnapshot = cached != null
             snapshotSync.sync(
                 userId = userId.id,
                 source = ProtonSyncSource.ALBUM_PHOTOS,
@@ -112,17 +115,11 @@ internal class ProtonAlbumRepository
                     emitAlbumPhotos(userId, album, existing, hasLoaded = hasCachedSnapshot, syncing = true)
                 },
                 enumerate = {
-                    clientProvider
-                        .get(userId)
-                        .enumerateAlbum(NodeUid(album.nodeUid))
-                        .toList()
-                        .map { item ->
-                            ProtonGalleryPhoto(
-                                nodeUid = item.nodeUid.value,
-                                captureTimeEpochSeconds = item.captureTime.epochSecond,
-                                hasThumbnail = cache.thumbnailExists(userId.id, item.nodeUid.value),
-                            )
-                        }.sortedByDescending(ProtonGalleryPhoto::captureTimeEpochSeconds)
+                    val items = clientProvider.get(userId).enumerateAlbum(NodeUid(album.nodeUid)).toList()
+                    val availability = cache.storedRenditions(userId.id)
+                    items
+                        .map { item -> availability.photo(item.nodeUid.value, item.captureTime.epochSecond) }
+                        .sortedByDescending(ProtonGalleryPhoto::captureTimeEpochSeconds)
                 },
                 commit = { photos -> cache.writeAlbumPhotos(userId.id, album.nodeUid, photos) },
                 publishResult = { photos ->
@@ -233,7 +230,7 @@ internal class ProtonAlbumRepository
                     }
                     // ProtonPhotoCache removes the nodes from every album index and reconciles all counts.
                     // Publish that complete snapshot so unopened albums cannot retain stale counts in memory.
-                    val updatedAlbums = cache.readAlbums(userId.id)
+                    val updatedAlbums = cache.readAlbumsSnapshot(userId.id).orEmpty()
                     mutableAlbumsState.value =
                         mutableAlbumsState.value.copy(
                             albums = updatedAlbums,

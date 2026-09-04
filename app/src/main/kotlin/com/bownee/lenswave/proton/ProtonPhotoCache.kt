@@ -96,9 +96,13 @@ internal class ProtonPhotoCache
 
         override fun previewCount(userId: String): Int = previews.count(userId)
 
-        override fun readIndex(userId: String): List<ProtonGalleryPhoto> = readPhotoIndex(userId, indexFile(userId))
+        override fun storedRenditions(userId: String): ProtonStoredRenditions =
+            ProtonStoredRenditions(thumbnails.storedNames(userId), previews.storedNames(userId))
 
-        override fun hasTimelineSnapshot(userId: String): Boolean = hasValidArray(userId, indexFile(userId))
+        override fun readTimelineSnapshot(
+            userId: String,
+            availability: ProtonStoredRenditions,
+        ): List<ProtonGalleryPhoto>? = readPhotoSnapshot(userId, indexFile(userId), availability)
 
         override fun writeIndex(
             userId: String,
@@ -107,15 +111,11 @@ internal class ProtonPhotoCache
             writePhotoIndex(userId, indexFile(userId), photos)
         }
 
-        override fun readTag(
+        override fun readTagSnapshot(
             userId: String,
             tag: ProtonMediaTag,
-        ): List<ProtonGalleryPhoto> = readPhotoIndex(userId, tagIndexFile(userId, tag))
-
-        override fun hasTagSnapshot(
-            userId: String,
-            tag: ProtonMediaTag,
-        ): Boolean = hasValidArray(userId, tagIndexFile(userId, tag))
+            availability: ProtonStoredRenditions,
+        ): List<ProtonGalleryPhoto>? = readPhotoSnapshot(userId, tagIndexFile(userId, tag), availability)
 
         override fun writeTag(
             userId: String,
@@ -125,9 +125,12 @@ internal class ProtonPhotoCache
             writePhotoIndex(userId, tagIndexFile(userId, tag), photos)
         }
 
-        override fun readAlbums(userId: String): List<ProtonAlbum> {
+        override fun readAlbumsSnapshot(
+            userId: String,
+            availability: ProtonStoredRenditions,
+        ): List<ProtonAlbum>? {
             val index = albumsIndexFile(userId)
-            if (!index.isFile) return emptyList()
+            if (!index.isFile) return null
             return runCatching {
                 val array = JSONArray(readText(userId, index))
                 buildList {
@@ -145,10 +148,7 @@ internal class ProtonPhotoCache
                                 coverPhotoNodeUid = coverPhotoNodeUid,
                                 createdAtEpochSeconds = value.optLong("createdAt"),
                                 lastActivityEpochSeconds = value.optLong("lastActivity"),
-                                hasCoverThumbnail =
-                                    coverPhotoNodeUid?.let {
-                                        thumbnailExists(userId, it)
-                                    } == true,
+                                hasCoverThumbnail = coverPhotoNodeUid?.let(availability::hasThumbnail) == true,
                                 isShared = value.optBoolean("isShared"),
                             ),
                         )
@@ -156,11 +156,9 @@ internal class ProtonPhotoCache
                 }
             }.getOrElse {
                 index.delete()
-                emptyList()
+                null
             }
         }
-
-        override fun hasAlbumsSnapshot(userId: String): Boolean = hasValidArray(userId, albumsIndexFile(userId))
 
         override fun writeAlbums(
             userId: String,
@@ -182,15 +180,11 @@ internal class ProtonPhotoCache
             writeAtomically(userId, albumsIndexFile(userId), array.toString(), "Could not commit Proton albums index")
         }
 
-        override fun readAlbumPhotos(
+        override fun readAlbumPhotosSnapshot(
             userId: String,
             albumUid: String,
-        ): List<ProtonGalleryPhoto> = readPhotoIndex(userId, albumPhotosIndexFile(userId, albumUid))
-
-        override fun hasAlbumPhotosSnapshot(
-            userId: String,
-            albumUid: String,
-        ): Boolean = hasValidArray(userId, albumPhotosIndexFile(userId, albumUid))
+            availability: ProtonStoredRenditions,
+        ): List<ProtonGalleryPhoto>? = readPhotoSnapshot(userId, albumPhotosIndexFile(userId, albumUid), availability)
 
         override fun writeAlbumPhotos(
             userId: String,
@@ -325,6 +319,10 @@ internal class ProtonPhotoCache
             originals.onStored(userId, target)
         }
 
+        override fun prepareUser(userId: String) {
+            originals.wipeStaleDecryptedCopies()
+        }
+
         override fun trimUser(userId: String) {
             thumbnails.maintain(userId)
             previews.maintain(userId)
@@ -338,9 +336,9 @@ internal class ProtonPhotoCache
         ) {
             val changes = ProtonPhotoReconciliation.compare(cachedNodeUids, remoteNodeUids)
             val remote = remoteNodeUids.toSet()
+            val availability = storedRenditions(userId)
             ProtonMediaTag.entries.forEach { tag ->
-                if (!hasTagSnapshot(userId, tag)) return@forEach
-                val tagged = readTag(userId, tag)
+                val tagged = readTagSnapshot(userId, tag, availability) ?: return@forEach
                 val retained = tagged.filter { it.nodeUid in remote }
                 if (retained.size != tagged.size) writeTag(userId, tag, retained)
             }
@@ -367,28 +365,37 @@ internal class ProtonPhotoCache
                 removePreview(userId, nodeUid)
                 originals.remove(userId, nodeUid)
             }
-            writeIndex(userId, readIndex(userId).filterNot { it.nodeUid in removed })
+            val availability = storedRenditions(userId)
+            readTimelineSnapshot(userId, availability)?.let { photos ->
+                writeIndex(userId, photos.filterNot { it.nodeUid in removed })
+            }
             ProtonMediaTag.entries.forEach { tag ->
-                if (hasTagSnapshot(userId, tag)) {
-                    writeTag(userId, tag, readTag(userId, tag).filterNot { it.nodeUid in removed })
+                readTagSnapshot(userId, tag, availability)?.let { photos ->
+                    writeTag(userId, tag, photos.filterNot { it.nodeUid in removed })
                 }
             }
+            // Only albums that actually lost a photo are rewritten; the rest keep their counts.
             val albumCounts = mutableMapOf<String, Long>()
             albumPhotosDirectory(userId)
                 .listFiles()
                 ?.filter { it.extension == "json" }
                 ?.forEach { file ->
-                    val remaining = readPhotoIndex(userId, file).filterNot { it.nodeUid in removed }
+                    val photos = readPhotoSnapshot(userId, file, availability) ?: return@forEach
+                    val remaining = photos.filterNot { it.nodeUid in removed }
+                    if (remaining.size == photos.size) return@forEach
                     writePhotoIndex(userId, file, remaining)
                     albumCounts[file.nameWithoutExtension] = remaining.size.toLong()
                 }
             if (albumCounts.isNotEmpty()) {
-                writeAlbums(
-                    userId,
-                    readAlbums(userId).map { album ->
-                        albumCounts[safeName(album.nodeUid)]?.let { count -> album.copy(photoCount = count) } ?: album
-                    },
-                )
+                readAlbumsSnapshot(userId, availability)?.let { albums ->
+                    writeAlbums(
+                        userId,
+                        albums.map { album ->
+                            albumCounts[safeName(album.nodeUid)]?.let { count -> album.copy(photoCount = count) }
+                                ?: album
+                        },
+                    )
+                }
             }
         }
 
@@ -439,30 +446,34 @@ internal class ProtonPhotoCache
 
         private fun userDirectory(userId: String): File = File(root, safeName(userId))
 
-        private fun readPhotoIndex(
+        /** The listing in [index], or null when it is absent or corrupt (a corrupt file is discarded). */
+        private fun readPhotoSnapshot(
             userId: String,
             index: File,
-        ): List<ProtonGalleryPhoto> {
-            if (!index.isFile) return emptyList()
-            return runCatching {
+            availability: ProtonStoredRenditions,
+        ): List<ProtonGalleryPhoto>? =
+            parsePhotoIndex(userId, index) { value ->
+                availability.photo(value.getString("nodeUid"), value.getLong("captureTime"))
+            }
+
+        /** Node uids only, for callers that never look at rendition availability. */
+        private fun readNodeUids(
+            userId: String,
+            index: File,
+        ): List<String> = parsePhotoIndex(userId, index) { value -> value.getString("nodeUid") }.orEmpty()
+
+        private inline fun <T> parsePhotoIndex(
+            userId: String,
+            index: File,
+            entry: (JSONObject) -> T,
+        ): List<T>? {
+            if (!index.isFile) return null
+            return try {
                 val array = JSONArray(readText(userId, index))
-                buildList {
-                    for (position in 0 until array.length()) {
-                        val value = array.getJSONObject(position)
-                        val nodeUid = value.getString("nodeUid")
-                        add(
-                            ProtonGalleryPhoto(
-                                nodeUid = nodeUid,
-                                captureTimeEpochSeconds = value.getLong("captureTime"),
-                                hasThumbnail = thumbnailExists(userId, nodeUid),
-                                hasPreview = previewExists(userId, nodeUid),
-                            ),
-                        )
-                    }
-                }
-            }.getOrElse {
+                List(array.length()) { position -> entry(array.getJSONObject(position)) }
+            } catch (_: Exception) {
                 index.delete()
-                emptyList()
+                null
             }
         }
 
@@ -484,11 +495,12 @@ internal class ProtonPhotoCache
 
         private fun nonTimelineReferencedNodeUids(userId: String): Set<String> =
             buildSet {
-                readAlbums(userId).mapNotNullTo(this) { it.coverPhotoNodeUid }
+                readAlbumsSnapshot(userId, ProtonStoredRenditions.NONE)
+                    ?.mapNotNullTo(this) { it.coverPhotoNodeUid }
                 albumPhotosDirectory(userId)
                     .listFiles()
                     ?.filter { it.extension == "json" }
-                    ?.forEach { file -> readPhotoIndex(userId, file).mapTo(this, ProtonGalleryPhoto::nodeUid) }
+                    ?.forEach { file -> addAll(readNodeUids(userId, file)) }
             }
 
         private fun writeAtomically(
@@ -498,20 +510,6 @@ internal class ProtonPhotoCache
             failureMessage: String,
         ) {
             secureFiles.writeText(scope(userId), target, contents, failureMessage)
-        }
-
-        private fun hasValidArray(
-            userId: String,
-            file: File,
-        ): Boolean {
-            if (!file.isFile) return false
-            return runCatching {
-                JSONArray(readText(userId, file))
-                true
-            }.getOrElse {
-                file.delete()
-                false
-            }
         }
 
         private fun readText(

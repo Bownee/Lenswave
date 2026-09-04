@@ -153,8 +153,9 @@ internal class ProtonOriginalStore
             }
         }
 
+        /** Runs once per process; every later call returns at once. */
         @Synchronized
-        private fun wipeStaleDecryptedCopies() {
+        fun wipeStaleDecryptedCopies() {
             if (decryptedWiped) return
             decrypted.deleteRecursively()
             decrypted.mkdirs()

@@ -37,12 +37,14 @@ internal class ProtonPreviewStore
         fun exists(
             userId: String,
             nodeUid: String,
-        ): Boolean =
-            file(userId, nodeUid).let { file ->
-                (file.isFile && file.length() > 0L).also { exists ->
-                    if (!exists) file.delete()
-                }
-            }
+        ): Boolean = file(userId, nodeUid).let { file -> file.isFile && file.length() > 0L }
+
+        /** File names (without extension) of every stored preview, from a single directory listing. */
+        fun storedNames(userId: String): Set<String> =
+            directory(userId)
+                .list()
+                ?.mapNotNullTo(HashSet()) { name -> name.removeSuffix(".$EXTENSION").takeIf { it != name } }
+                .orEmpty()
 
         /**
          * Stores the bytes exactly as Proton delivered them after checking that they carry a

@@ -1,13 +1,17 @@
 package com.bownee.lenswave.proton
 
 import android.graphics.Bitmap
+import com.bownee.lenswave.LenswaveDiagnostics
+import com.bownee.lenswave.LenswaveOperation
 import com.bownee.lenswave.gallery.ProtonGalleryReader
 import com.bownee.lenswave.gallery.ProtonOriginalMediaSource
 import com.bownee.lenswave.gallery.ProtonPhotoMutations
 import com.bownee.lenswave.gallery.ProtonSessionLifecycle
 import com.bownee.lenswave.gallery.ProtonThumbnailImageSource
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.toList
@@ -53,9 +57,18 @@ class ProtonPhotoGateway
         override val albumsState: StateFlow<ProtonAlbumsState> = albums.albumsState
         override val albumPhotosState: StateFlow<ProtonAlbumPhotosState> = albums.albumPhotosState
 
+        /** Process-wide, like the session itself; [runActivationHousekeeping] guards every use. */
+        private val housekeepingScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
         /** Background thumbnail work; kept off the public class surface, see [ProtonThumbnailWorkGateway]. */
         internal val thumbnailWork: ProtonThumbnailWorkGateway = ThumbnailWork()
 
+        /**
+         * The transition holds only what the grid needs: the cached listings. Everything else runs
+         * afterwards as an ordinary session operation, so thumbnail reads and the account state
+         * stop waiting on cache trimming and queue reconciliation, and a disconnect still waits for
+         * that housekeeping to finish before it erases the user's files.
+         */
         override suspend fun activate(userId: UserId) {
             withContext(Dispatchers.IO) {
                 sessionGuard.activate(userId) { previousUserId ->
@@ -66,14 +79,28 @@ class ProtonPhotoGateway
                     }
                     timeline.reset()
                     albums.reset()
-                    // Cached metadata goes on screen first; housekeeping can wait.
+                    cache.prepareUser(userId.id)
                     timeline.loadCached(userId)
                     albums.loadCached(userId)
+                }
+            }
+            housekeepingScope.launch { runActivationHousekeeping(userId) }
+        }
+
+        private suspend fun runActivationHousekeeping(userId: UserId) {
+            try {
+                sessionGuard.withActiveSession(userId) {
                     cache.trimUser(userId.id)
                     reconcileTimelineThumbnailQueue(userId)
                     reconcileTimelinePreviewQueue(userId)
                     reconcileAlbumCoverThumbnailQueue(userId)
                 }
+            } catch (_: ProtonSessionChangedException) {
+                // The account changed underneath; the next activation does its own housekeeping.
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                LenswaveDiagnostics.reportFailure(LenswaveOperation.SESSION_HOUSEKEEPING, error)
             }
         }
 

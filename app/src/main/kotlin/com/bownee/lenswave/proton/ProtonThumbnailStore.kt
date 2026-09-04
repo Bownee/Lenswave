@@ -43,12 +43,17 @@ internal class ProtonThumbnailStore
         fun exists(
             userId: String,
             nodeUid: String,
-        ): Boolean =
-            file(userId, nodeUid).let { file ->
-                (file.isFile && file.length() > 0L).also { exists ->
-                    if (!exists) file.delete()
-                }
-            }
+        ): Boolean = file(userId, nodeUid).let { file -> file.isFile && file.length() > 0L }
+
+        /**
+         * File names (without extension) of every stored thumbnail, from a single directory
+         * listing. Writes are atomic renames, so a listed name is a complete file.
+         */
+        fun storedNames(userId: String): Set<String> =
+            directory(userId)
+                .list()
+                ?.mapNotNullTo(HashSet()) { name -> name.removeSuffix(".thumb").takeIf { it != name } }
+                .orEmpty()
 
         /** The decoded bitmap when it is already in memory; never touches disk or blocks on a decode. */
         fun peek(
