@@ -44,7 +44,14 @@ class FullResolutionPhotoView
         attrs: AttributeSet? = null,
     ) : View(context, attrs),
         Closeable {
+        /** Base loads (open file, decode the down-sampled picture). */
         private val decoderExecutor = Executors.newSingleThreadExecutor()
+
+        /**
+         * Detail tiles run on their own thread so a swipe's next base decode never queues behind a
+         * tile that is still decoding: `Future.cancel` cannot interrupt `decodeRegion`.
+         */
+        private val detailExecutor = Executors.newSingleThreadExecutor()
         private var loadFuture: Future<*>? = null
         private var detailFuture: Future<*>? = null
         private val mainHandler = Handler(Looper.getMainLooper())
@@ -141,11 +148,11 @@ class FullResolutionPhotoView
         ) {
             val loadGeneration = generation.incrementAndGet()
             loadFuture?.cancel(true)
-            detailFuture?.cancel(true)
+            detailFuture?.cancel(false)
+            releaseDecoder()
             loadFuture =
                 decoderExecutor.submit {
                     runCatching {
-                        releaseDecoder()
                         var openedDescriptor: ParcelFileDescriptor? = null
                         var openedDecoder: BitmapRegionDecoder? = null
                         var openedBitmap: Bitmap? = null
@@ -244,7 +251,7 @@ class FullResolutionPhotoView
             zoomAnimator?.cancel()
             zoomAnimator = null
             requestedDetailKey = null
-            detailFuture?.cancel(true)
+            detailFuture?.cancel(false)
             detailRect = null
             detailBitmap?.recycle()
             detailBitmap = null
@@ -262,7 +269,7 @@ class FullResolutionPhotoView
             offsetX = 0f
             offsetY = 0f
             invalidate()
-            if (!decoderExecutor.isShutdown) decoderExecutor.execute(::releaseDecoder)
+            releaseDecoder()
         }
 
         override fun onSizeChanged(
@@ -472,9 +479,13 @@ class FullResolutionPhotoView
             if (key == requestedDetailKey) return
             requestedDetailKey = key
             val detailGeneration = generation.get()
-            detailFuture?.cancel(true)
+            val detailOrientation = exifOrientation
+            detailFuture?.cancel(false)
             detailFuture =
-                decoderExecutor.submit {
+                detailExecutor.submit {
+                    // A newer load or clear has already retired this decoder (its recycle is queued
+                    // behind this task), so a stale tile is not worth decoding.
+                    if (detailGeneration != generation.get() || activeDecoder.isRecycled) return@submit
                     val decoded =
                         runCatching {
                             val raw =
@@ -487,7 +498,7 @@ class FullResolutionPhotoView
                                         },
                                     ),
                                 )
-                            ExifOrientation.apply(raw, exifOrientation, true)
+                            ExifOrientation.apply(raw, detailOrientation, true)
                         }.getOrNull()
                     mainHandler.post {
                         if (detailGeneration != generation.get() || requestedDetailKey != key) {
@@ -561,11 +572,18 @@ class FullResolutionPhotoView
             baseBitmap?.recycle()
             baseBitmap = null
             loadFuture?.cancel(true)
-            detailFuture?.cancel(true)
+            detailFuture?.cancel(false)
             decoderExecutor.shutdownNow()
+            detailExecutor.shutdownNow()
+            val retiredDecoder = decoder
+            val retiredDescriptor = descriptor
+            decoder = null
+            descriptor = null
             Thread {
                 decoderExecutor.awaitTermination(2, TimeUnit.SECONDS)
-                releaseDecoder()
+                detailExecutor.awaitTermination(2, TimeUnit.SECONDS)
+                retiredDecoder?.recycle()
+                retiredDescriptor?.close()
             }.apply {
                 name = "Lenswave-photo-decoder-cleanup"
                 isDaemon = true
@@ -573,11 +591,22 @@ class FullResolutionPhotoView
             }
         }
 
+        /**
+         * Retires the current decoder from the main thread. The recycle runs on the detail thread,
+         * queued behind any tile still decoding, so neither the main thread nor the next base load
+         * waits for it, and no tile ever runs against a recycled decoder.
+         */
         private fun releaseDecoder() {
-            decoder?.recycle()
+            val retiredDecoder = decoder ?: return
+            val retiredDescriptor = descriptor
             decoder = null
-            descriptor?.close()
             descriptor = null
+            val release =
+                Runnable {
+                    retiredDecoder.recycle()
+                    retiredDescriptor?.close()
+                }
+            if (detailExecutor.isShutdown) release.run() else detailExecutor.execute(release)
         }
 
         private data class LoadedPhoto(
