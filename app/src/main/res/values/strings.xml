@@ -77,6 +77,7 @@
     <string name="disconnect_proton_message">Cached Proton media will be cryptographically erased from this device.</string>
     <string name="proton_unlock_failed">Proton could not unlock the account keys</string>
     <string name="could_not_download_proton_photo">Could not download this Proton photo</string>
+    <string name="could_not_open_proton_photo_signed_out">Your Proton session ended. Sign in again to open this photo.</string>
     <string name="could_not_display_photo">Could not display this photo</string>
     <string name="no_more_photos_loaded">No more photos are loaded here. Go back to the gallery to keep browsing.</string>
     <string name="error">Error</string>

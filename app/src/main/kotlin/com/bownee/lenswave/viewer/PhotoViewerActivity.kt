@@ -24,6 +24,8 @@ import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import com.bownee.lenswave.LenswaveDiagnostics
+import com.bownee.lenswave.LenswaveOperation
 import com.bownee.lenswave.R
 import com.bownee.lenswave.UiStyle
 import com.bownee.lenswave.applyBottomOverlayInsets
@@ -41,6 +43,7 @@ import com.bownee.lenswave.gallery.StoredGalleryNavigation
 import com.bownee.lenswave.gallery.TrashConfirmationDialogFragment
 import com.bownee.lenswave.metadata.PhotoMetadataHints
 import com.bownee.lenswave.metadata.PhotoMetadataReader
+import com.bownee.lenswave.proton.ProtonSessionChangedException
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -456,7 +459,7 @@ class PhotoViewerActivity :
                 screen = screen,
                 mediaTransform = mediaTransform,
                 scope = lifecycleScope,
-                loadThumbnail = { photo -> thumbnailSource.loadThumbnail(UserId(photo.userId), photo.nodeUid) },
+                loadThumbnail = ::readThumbnail,
                 peekThumbnail = { photo -> thumbnailSource.peekThumbnail(UserId(photo.userId), photo.nodeUid) },
                 host =
                     object : ViewerSwipeController.Host {
@@ -632,11 +635,13 @@ class PhotoViewerActivity :
                     } else {
                         async(Dispatchers.IO) { runCatching { originalMedia.prepareCachedOriginal(userId, nodeUid) } }
                     }
-                if (!thumbnailShown) loadProtonThumbnail(requestedPhoto)
-                // Photos load the original quietly behind the preview; the spinner only appears
-                // when there is nothing at all to show. Videos keep their download progress.
-                if (requestedPhoto.mediaKind == MediaKind.VIDEO || !thumbnailPreview.isVisible) scheduleLoadingPanel()
                 try {
+                    if (!thumbnailShown) loadProtonThumbnail(requestedPhoto)
+                    // Photos load the original quietly behind the preview; the spinner only appears
+                    // when there is nothing at all to show. Videos keep their download progress.
+                    if (requestedPhoto.mediaKind == MediaKind.VIDEO || !thumbnailPreview.isVisible) {
+                        scheduleLoadingPanel()
+                    }
                     val cachedOriginal = cachedOriginalPreparation?.await()?.getOrThrow()
                     if (request.stableId != requestedPhoto.stableId) return@launch
                     if (cachedOriginal != null) {
@@ -661,6 +666,12 @@ class PhotoViewerActivity :
                         }
                     if (request.stableId != requestedPhoto.stableId) return@launch
                     if (requestedPhoto.mediaKind != MediaKind.VIDEO) showMedia(Uri.fromFile(file))
+                } catch (error: ProtonSessionChangedException) {
+                    // A cancellation subtype, but not this job's: the account changed underneath
+                    // the read (a viewer relaunched from recents after a sign-out, say). Left to
+                    // the branch below it would end the job with the spinner still up and no retry.
+                    if (request.stableId != requestedPhoto.stableId) return@launch
+                    handlePhotoLoadFailure(error, getString(R.string.could_not_open_proton_photo_signed_out))
                 } catch (error: CancellationException) {
                     throw error
                 } catch (error: Throwable) {
@@ -684,7 +695,7 @@ class PhotoViewerActivity :
     private fun resolveDisplayName(requestedPhoto: PhotoRequest) {
         lifecycleScope.launch {
             val name =
-                withContext(Dispatchers.IO) {
+                optionalGatewayRead(LenswaveOperation.ORIGINAL_NAME_LOAD) {
                     originalMedia.getOriginalFileName(UserId(requestedPhoto.userId), requestedPhoto.nodeUid)
                 }.orEmpty()
             if (name.isBlank()) return@launch
@@ -705,6 +716,28 @@ class PhotoViewerActivity :
     }
 
     /**
+     * Runs a gateway read whose result the viewer can do without (a thumbnail, a preview, a file
+     * name). The gateway signals an account change with [ProtonSessionChangedException], a
+     * [CancellationException] subtype that is not this coroutine's own cancellation: swallowed
+     * here it reads as "nothing to show", where it would otherwise end the coroutine silently.
+     * Any other failure is a failure of the read, not of the viewer, and is reported the same way.
+     */
+    private suspend fun <T> optionalGatewayRead(
+        operation: LenswaveOperation,
+        read: suspend () -> T?,
+    ): T? =
+        try {
+            read()
+        } catch (_: ProtonSessionChangedException) {
+            null
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            LenswaveDiagnostics.reportFailure(operation, error)
+            null
+        }
+
+    /**
      * Shows the thumbnail without leaving the main thread when it is already on screen from the
      * swipe's peek or decoded in the thumbnail cache. Returns false when it must be read from
      * disk through [loadProtonThumbnail].
@@ -721,12 +754,14 @@ class PhotoViewerActivity :
         return true
     }
 
+    /** The thumbnail from the store, or null when there is none or the session ended; never throws for the read. */
+    private suspend fun readThumbnail(photo: PhotoRequest): Bitmap? =
+        optionalGatewayRead(LenswaveOperation.RENDITION_READ) {
+            thumbnailSource.loadThumbnail(UserId(photo.userId), photo.nodeUid)
+        }
+
     private suspend fun loadProtonThumbnail(requestedPhoto: PhotoRequest) {
-        val bitmap =
-            thumbnailSource.loadThumbnail(
-                UserId(requestedPhoto.userId),
-                requestedPhoto.nodeUid,
-            )
+        val bitmap = readThumbnail(requestedPhoto)
         if (!PhotoPreviewPolicy.canShow(
                 requestedPhoto.stableId,
                 request.stableId,
@@ -768,11 +803,13 @@ class PhotoViewerActivity :
     private suspend fun showCachedProtonPreview(requestedPhoto: PhotoRequest) {
         val metrics = resources.displayMetrics
         val bitmap =
-            originalMedia.loadPreview(
-                UserId(requestedPhoto.userId),
-                requestedPhoto.nodeUid,
-                targetLongEdge = max(metrics.widthPixels, metrics.heightPixels),
-            ) ?: return
+            optionalGatewayRead(LenswaveOperation.RENDITION_READ) {
+                originalMedia.loadPreview(
+                    UserId(requestedPhoto.userId),
+                    requestedPhoto.nodeUid,
+                    targetLongEdge = max(metrics.widthPixels, metrics.heightPixels),
+                )
+            } ?: return
         if (request.stableId != requestedPhoto.stableId || photoReady) return
         // The preview goes into the photo view itself so zoom and pan work right away; the
         // original later takes over the same geometry. Any spinner scheduled for an empty
