@@ -108,11 +108,11 @@ class ProtonThumbnailWorker(
                                 // run that ends on a timeout or a lost network still owes the
                                 // charging follow-up for the previews it saw deferred.
                                 lastIdle = step
-                                val wait = ProtonBackgroundBatchPolicy.idleWaitMillis(step, MAX_IDLE_WAIT_MILLIS)
+                                val wait = ProtonBackgroundBatchPolicy.idleWaitMillis(step)
                                 if (wait != null) {
-                                    // A retry due within minutes is worth sleeping for: it keeps the
-                                    // run alive instead of relying on a WorkManager retry that cannot
-                                    // start from the background. Longer backoffs end the run.
+                                    // A retry due within seconds is worth sleeping for; a longer
+                                    // backoff ends the run and becomes the follow-up's initial
+                                    // delay, so the wakelock is not held for it.
                                     delay(wait + IDLE_WAIT_SLACK_MILLIS)
                                     continue
                                 }
@@ -272,9 +272,6 @@ class ProtonThumbnailWorker(
         private const val SESSION_READY_TIMEOUT_MILLIS = 30_000L
         private const val NETWORK_READY_TIMEOUT_MILLIS = 5_000L
         private const val FOREGROUND_YIELD_TIMEOUT_MILLIS = 5_000L
-
-        /** Sleeping longer than this inside a foreground service would keep the phone awake for nothing. */
-        private const val MAX_IDLE_WAIT_MILLIS = 2L * 60L * 1_000L
         private const val IDLE_WAIT_SLACK_MILLIS = 1_000L
 
         fun request(
