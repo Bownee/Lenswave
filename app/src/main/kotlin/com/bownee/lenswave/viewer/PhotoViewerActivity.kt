@@ -236,6 +236,7 @@ class PhotoViewerActivity : FragmentActivity() {
                 mediaTransform = mediaTransform,
                 scope = lifecycleScope,
                 loadThumbnail = { photo -> thumbnailSource.loadThumbnail(UserId(photo.userId), photo.nodeUid) },
+                peekThumbnail = { photo -> thumbnailSource.peekThumbnail(UserId(photo.userId), photo.nodeUid) },
                 host =
                     object : ViewerSwipeController.Host {
                         override val request: PhotoRequest get() = this@PhotoViewerActivity.request
