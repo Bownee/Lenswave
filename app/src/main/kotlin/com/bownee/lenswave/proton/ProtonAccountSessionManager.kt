@@ -78,9 +78,14 @@ class ProtonAccountSessionManager internal constructor(
         }
     }
 
+    /**
+     * The first observation always reaches the coordinator, even when it names the account
+     * already observed (none): that is where the residue of an account signed out in a previous
+     * process is swept. Later observations of the same account only refresh the details.
+     */
     private suspend fun transitionTo(account: Account?) {
         val nextUserId = account?.takeIf(Account::isReady)?.userId
-        if (observedUserId == nextUserId) {
+        if (observedUserId == nextUserId && mutableState.value.initialized) {
             mutableState.value =
                 ProtonAccountSessionState(
                     account = account,

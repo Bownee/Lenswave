@@ -44,6 +44,30 @@ class ProtonAccountTransitionCoordinatorTest {
         assertEquals(listOf("cancel:a", "disconnect:a", "activate:b"), events)
     }
 
+    @Test
+    fun firstObservationWithoutAnAccountSweepsTheResidueOfPreviousSignOuts() =
+        runBlocking {
+            val events = mutableListOf<String>()
+            val coordinator = coordinator(events)
+
+            coordinator.transition(null, null)
+            coordinator.transition(null, null)
+
+            assertEquals(listOf("retain:null"), events)
+        }
+
+    @Test
+    fun aRealTransitionCountsAsTheSweep() =
+        runBlocking {
+            val events = mutableListOf<String>()
+            val coordinator = coordinator(events)
+
+            coordinator.transition(null, UserId("a"))
+            coordinator.transition(UserId("a"), UserId("a"))
+
+            assertEquals(listOf("activate:a", "retain:a", "enqueue:a"), events)
+        }
+
     private fun coordinator(
         events: MutableList<String>,
         sessionLifecycle: ProtonSessionLifecycle = FakeSessionLifecycle(events),

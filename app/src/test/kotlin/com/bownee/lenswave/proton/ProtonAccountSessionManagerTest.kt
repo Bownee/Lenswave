@@ -90,6 +90,24 @@ class ProtonAccountSessionManagerTest {
         }
 
     @Test
+    fun `a launch without an account still sweeps the residue of the previous sign-out`() =
+        runTest {
+            val manager = manager(backgroundScope)
+
+            manager.start()
+            runCurrent()
+
+            assertEquals(listOf("retain:null"), events)
+            assertTrue(manager.state.value.initialized)
+            assertFalse(manager.state.value.transitioning)
+
+            accounts.value = null
+            runCurrent()
+
+            assertEquals(listOf("retain:null"), events)
+        }
+
+    @Test
     fun `an account that is not ready reads as signed out`() =
         runTest {
             val manager = manager(backgroundScope)
