@@ -19,6 +19,23 @@ internal enum class ThumbnailFailureKind(
     NOT_FOUND(2),
 }
 
+/**
+ * What a node is left with after the preview rendition was tried in place of its thumbnail.
+ * A missing preview says nothing about the thumbnail: a node whose thumbnail pass went
+ * unanswered keeps that status and is retried, instead of being dropped as if Proton had
+ * refused the thumbnail itself.
+ */
+internal object ThumbnailFallbackFailurePolicy {
+    fun settle(
+        thumbnailKind: ThumbnailFailureKind?,
+        previewKind: ThumbnailFailureKind,
+    ): ThumbnailFailureKind {
+        val thumbnail = thumbnailKind ?: ThumbnailFailureKind.OTHER
+        if (previewKind == ThumbnailFailureKind.NOT_FOUND) return thumbnail
+        return if (previewKind.priority > thumbnail.priority) previewKind else thumbnail
+    }
+}
+
 internal object ThumbnailFailureClassifier {
     fun classify(error: Throwable): ThumbnailFailureKind {
         if (error is ProtonDriveSdkException) {
