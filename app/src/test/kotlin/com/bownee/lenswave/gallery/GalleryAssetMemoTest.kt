@@ -61,10 +61,45 @@ class GalleryAssetMemoTest {
     @Test
     fun `tag index is reused for the same tag map and rebuilt for a new one`() {
         val tags = mapOf(ProtonMediaTag.SELFIES to ProtonTagState(listOf(image), hasLoaded = true))
+        val changed = mapOf(ProtonMediaTag.SELFIES to ProtonTagState(listOf(image, video), hasLoaded = true))
 
         assertSame(memo.tagIndex(tags), memo.tagIndex(tags))
-        assertNotSame(memo.tagIndex(tags), memo.tagIndex(tags.toMap()))
+        assertNotSame(memo.tagIndex(tags), memo.tagIndex(changed))
         assertEquals(setOf(ProtonMediaTag.SELFIES), memo.tagIndex(tags)["image"])
         assertTrue(memo.tagIndex(emptyMap()).isEmpty())
+    }
+
+    @Test
+    fun `a new tag map with the same tagged photos keeps the index and the mapped page`() {
+        val photos = listOf(image, video)
+        val tags = mapOf(ProtonMediaTag.SELFIES to ProtonTagState(listOf(image), hasLoaded = false))
+        val resynced = mapOf(ProtonMediaTag.SELFIES to ProtonTagState(listOf(image.copy()), hasLoaded = true))
+
+        val index = memo.tagIndex(tags)
+        val page = memo.photos(photos, index)
+        val reusedIndex = memo.tagIndex(resynced)
+
+        assertSame(index, reusedIndex)
+        assertSame(page, memo.photos(photos, reusedIndex))
+        // The new map is now the remembered source, so its identity hits without a rebuild.
+        assertSame(reusedIndex, memo.tagIndex(resynced))
+    }
+
+    @Test
+    fun `switching between two photo lists and back reuses both pages`() {
+        val tagIndex = memo.tagIndex(emptyMap())
+        val timeline = listOf(image, video, undated)
+        val filtered = listOf(video)
+
+        val timelinePage = memo.photos(timeline, tagIndex)
+        val filteredPage = memo.photos(filtered, tagIndex)
+
+        assertSame(timelinePage, memo.photos(timeline, tagIndex))
+        assertSame(filteredPage, memo.photos(filtered, tagIndex))
+        assertSame(timelinePage, memo.photos(timeline, tagIndex))
+        // A third list evicts the least recently used page.
+        memo.photos(listOf(undated), tagIndex)
+        assertSame(timelinePage, memo.photos(timeline, tagIndex))
+        assertNotSame(filteredPage, memo.photos(filtered, tagIndex))
     }
 }

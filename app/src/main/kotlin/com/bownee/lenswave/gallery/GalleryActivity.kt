@@ -221,8 +221,7 @@ class GalleryActivity :
      */
     private suspend fun render(state: GalleryUiState) {
         val destinationChanged = renderedDestination != state.destination
-        // Memoised photo content keeps its instance, so an unchanged page compares in O(1).
-        val contentChanged = renderedContent != state.content
+        val contentChanged = GalleryRenderPolicy.contentChanged(renderedContent, state.content)
         if (destinationChanged) {
             renderedDestination?.let { previousDestination ->
                 screen.captureScrollPosition()?.let { position ->
