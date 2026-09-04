@@ -258,11 +258,13 @@ internal class ProtonAlbumRepository
                     }
                     // ProtonPhotoCache removes the nodes from every album index and reconciles all counts.
                     // Publish that complete snapshot so unopened albums cannot retain stale counts in memory.
-                    val updatedAlbums = cache.readAlbumsSnapshot(userId.id).orEmpty()
-                    mutableAlbumsState.value =
-                        mutableAlbumsState.value.copy(
-                            albums = updatedAlbums,
-                        )
+                    // A snapshot that cannot be read right now keeps the published list: a blank
+                    // Albums tab over a transient read failure would be worse than a stale count.
+                    cache.readAlbumsSnapshot(userId.id)?.let { updatedAlbums ->
+                        mutableAlbumsState.update { state ->
+                            if (state.userId != userId.id) state else state.copy(albums = updatedAlbums)
+                        }
+                    }
                 }
             }
         }
