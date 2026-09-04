@@ -75,11 +75,17 @@ class AppUpdateChecker
                 val result = client.fetch(state.etag)
             ) {
                 is LatestReleaseResult.Modified -> {
-                    state.copy(
-                        latestVersionName = result.versionName,
-                        etag = result.etag,
-                        nextCheckAtMillis = nowMillis + SUCCESS_INTERVAL_MILLIS,
-                    )
+                    // Only a tag that parses is worth keeping; a malformed one is left out of the
+                    // store (and its ETag with it, so the next check reads the release afresh).
+                    if (SemanticVersion.parse(result.versionName) == null) {
+                        state.copy(nextCheckAtMillis = nowMillis + SUCCESS_INTERVAL_MILLIS)
+                    } else {
+                        state.copy(
+                            latestVersionName = result.versionName,
+                            etag = result.etag,
+                            nextCheckAtMillis = nowMillis + SUCCESS_INTERVAL_MILLIS,
+                        )
+                    }
                 }
 
                 LatestReleaseResult.NotModified -> {
