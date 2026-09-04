@@ -25,7 +25,7 @@ class ProtonDatabaseInstrumentedTest {
         keyedMarker.delete()
         secureFiles.deleteKey(KEY_SCOPE)
         try {
-            val passphrases = DatabasePassphraseStore(context, secureFiles, KEY_FILE_NAME, KEY_SCOPE)
+            val passphrases = DatabasePassphraseStore(passphraseFile, secureFiles, KEY_SCOPE)
             val room = ProtonCoreDatabase.create(context, passphrases, DATABASE_NAME)
             try {
                 room.openHelper.writableDatabase

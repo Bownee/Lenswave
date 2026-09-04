@@ -27,6 +27,7 @@ internal enum class LenswaveOperation(
     RENDITION_READ("rendition-read"),
     SESSION_DATABASE_REKEY("session-database-rekey"),
     DATA_KEY_RECOVERY("data-key-recovery"),
+    DATABASE_PASSPHRASE_RECOVERY("database-passphrase-recovery"),
     SESSION_HOUSEKEEPING("session-housekeeping"),
     THUMBNAIL_DOWNLOAD("thumbnail-download"),
     PREVIEW_DOWNLOAD("preview-download"),

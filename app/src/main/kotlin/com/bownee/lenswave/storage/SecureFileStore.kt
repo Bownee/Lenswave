@@ -27,6 +27,35 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
+ * The two operations a holder of one small secret needs from [SecureFileStore]; a seam so such a
+ * holder can be exercised against an in-memory store.
+ */
+interface SecurePayloadStore {
+    fun read(
+        scope: String,
+        file: File,
+    ): ByteArray
+
+    fun write(
+        scope: String,
+        file: File,
+        bytes: ByteArray,
+        failureMessage: String,
+    )
+}
+
+/**
+ * The non-exportable keys that wrap each scope's data key. The Android Keystore is the only
+ * production implementation; the seam lets the store's software crypto run without a device.
+ */
+internal interface WrappingKeys {
+    /** The key stored under [alias], generated on first use. */
+    fun key(alias: String): SecretKey
+
+    fun delete(alias: String)
+}
+
+/**
  * Authenticated app-private storage. Each scope owns a random data key that encrypts file
  * contents in software; the data key itself is stored wrapped by a non-exportable Android
  * Keystore key. Keystore ciphers run inside the secure hardware and manage only a few kilobytes
@@ -41,15 +70,25 @@ import javax.inject.Singleton
  * in the current format when read.
  */
 @Singleton
-class SecureFileStore(
+class SecureFileStore internal constructor(
     private val keyDirectory: File,
-) {
+    private val wrappingKeys: WrappingKeys,
+    private val reportFailure: (Throwable) -> Unit = { error ->
+        LenswaveDiagnostics.reportFailure(LenswaveOperation.DATA_KEY_RECOVERY, error)
+    },
+) : SecurePayloadStore {
+    constructor(keyDirectory: File) : this(keyDirectory, AndroidKeystoreWrappingKeys)
+
     @Inject
     constructor(
         @ApplicationContext context: Context,
     ) : this(File(context.noBackupFilesDir, KEY_DIRECTORY))
 
-    fun read(
+    /** Per instance, like a process: Hilt holds one, and a second instance over the same directory behaves like a restart. */
+    private val aliasLocks = ConcurrentHashMap<String, Any>()
+    private val dataKeys = ConcurrentHashMap<String, SecretKey>()
+
+    override fun read(
         scope: String,
         file: File,
     ): ByteArray {
@@ -64,7 +103,7 @@ class SecureFileStore(
         file: File,
     ): String = read(scope, file).toString(Charsets.UTF_8)
 
-    fun write(
+    override fun write(
         scope: String,
         file: File,
         bytes: ByteArray,
@@ -156,8 +195,7 @@ class SecureFileStore(
     fun deleteKeyAlias(alias: String) {
         require(ALIAS_PATTERN.matches(alias)) { "Key alias is invalid" }
         synchronized(lockFor(alias)) {
-            keyStore.deleteEntry(alias)
-            keyReferences.remove(alias)
+            wrappingKeys.delete(alias)
             dataKeys.remove(alias)
             wrappedKeyFile(alias).delete()
         }
@@ -322,7 +360,7 @@ class SecureFileStore(
             } catch (error: IllegalArgumentException) {
                 error
             }
-        LenswaveDiagnostics.reportFailure(LenswaveOperation.DATA_KEY_RECOVERY, failure)
+        reportFailure(failure)
         check(file.delete() || !file.exists()) { "Could not discard the unreadable data key" }
         return null
     }
@@ -369,29 +407,7 @@ class SecureFileStore(
 
     private fun wrappedKeyFile(alias: String): File = File(keyDirectory, "$alias.key")
 
-    private fun keystoreKey(scope: String): SecretKey {
-        val alias = alias(scope)
-        keyReferences[alias]?.let { return it }
-        return synchronized(lockFor(alias)) {
-            keyReferences[alias] ?: (
-                (keyStore.getKey(alias, null) as? SecretKey) ?: KeyGenerator
-                    .getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
-                    .apply {
-                        init(
-                            KeyGenParameterSpec
-                                .Builder(
-                                    alias,
-                                    KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
-                                ).setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-                                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                                .setKeySize(256)
-                                .setRandomizedEncryptionRequired(true)
-                                .build(),
-                        )
-                    }.generateKey()
-            ).also { keyReferences[alias] = it }
-        }
-    }
+    private fun keystoreKey(scope: String): SecretKey = wrappingKeys.key(alias(scope))
 
     private fun alias(scope: String): String = ALIAS_PREFIX + AtomicFileStore.safeName(scope)
 
@@ -399,7 +415,6 @@ class SecureFileStore(
     private fun lockFor(alias: String): Any = aliasLocks.computeIfAbsent(alias) { Any() }
 
     private companion object {
-        const val ANDROID_KEYSTORE = "AndroidKeyStore"
         const val ALIAS_PREFIX = "lenswave.secure-file."
         val ALIAS_PATTERN = Regex(Regex.escape(ALIAS_PREFIX) + "[0-9a-f]{64}")
         const val KEY_DIRECTORY = "secure-keys"
@@ -410,11 +425,38 @@ class SecureFileStore(
         const val LEGACY_VERSION: Byte = 1
         const val VERSION: Byte = 2
         const val SEGMENTED_VERSION: Byte = 3
-        val keyStore: KeyStore by lazy {
-            KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+    }
+}
+
+/** The Android Keystore, with each key reference fetched once per process. */
+internal object AndroidKeystoreWrappingKeys : WrappingKeys {
+    private const val ANDROID_KEYSTORE = "AndroidKeyStore"
+    private val keyStore: KeyStore by lazy {
+        KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+    }
+    private val keyReferences = ConcurrentHashMap<String, SecretKey>()
+
+    override fun key(alias: String): SecretKey =
+        keyReferences.computeIfAbsent(alias) {
+            (keyStore.getKey(alias, null) as? SecretKey) ?: KeyGenerator
+                .getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
+                .apply {
+                    init(
+                        KeyGenParameterSpec
+                            .Builder(
+                                alias,
+                                KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
+                            ).setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                            .setKeySize(256)
+                            .setRandomizedEncryptionRequired(true)
+                            .build(),
+                    )
+                }.generateKey()
         }
-        val aliasLocks = ConcurrentHashMap<String, Any>()
-        val keyReferences = ConcurrentHashMap<String, SecretKey>()
-        val dataKeys = ConcurrentHashMap<String, SecretKey>()
+
+    override fun delete(alias: String) {
+        keyStore.deleteEntry(alias)
+        keyReferences.remove(alias)
     }
 }
