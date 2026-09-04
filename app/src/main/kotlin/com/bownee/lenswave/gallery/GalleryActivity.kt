@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
@@ -47,6 +48,7 @@ import com.bownee.lenswave.proton.ProtonAlbum
 import com.bownee.lenswave.update.AppUpdateChecker
 import com.bownee.lenswave.update.UpdateAvailableDialogFragment
 import com.bownee.lenswave.viewer.PhotoViewerActivity
+import com.bownee.lenswave.viewer.ViewerMutationCoordinator
 import com.bownee.lenswave.viewer.ViewerPrivacySettings
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.Dispatchers
@@ -81,6 +83,8 @@ class GalleryActivity :
     @Inject lateinit var appUpdateChecker: AppUpdateChecker
 
     @Inject lateinit var viewerPrivacySettings: ViewerPrivacySettings
+
+    @Inject lateinit var mutationCoordinator: ViewerMutationCoordinator
 
     private val viewModel: GalleryViewModel by lazy {
         ViewModelProvider(this)[GalleryViewModel::class.java]
@@ -177,6 +181,8 @@ class GalleryActivity :
     override fun onResume() {
         super.onResume()
         viewerLaunched = false
+        // The collector below saw these while the viewer was still launched; now they are the gallery's.
+        consumeViewerOutcomes(mutationCoordinator.outcomes.value)
         viewModel.resumeThumbnailDownloads()
         updatePresenter.showPendingUpdate()
     }
@@ -267,6 +273,25 @@ class GalleryActivity :
                 }
             }
         }
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                mutationCoordinator.outcomes.collect(::consumeViewerOutcomes)
+            }
+        }
+    }
+
+    /**
+     * Takes the viewer's mutation outcomes nobody consumed (see [GalleryViewerOutcomePolicy]): a
+     * favourite or trash the user started in the viewer and backed out of before it finished.
+     * While a viewer launched from here is up, its own collector owns them.
+     */
+    private fun consumeViewerOutcomes(outcomes: List<ViewerMutationCoordinator.Outcome>) {
+        if (!GalleryViewerOutcomePolicy.consumesNow(viewerLaunched, outcomes)) return
+        val summary = GalleryViewerOutcomePolicy.summarize(outcomes)
+        outcomes.forEach(mutationCoordinator::consume)
+        if (summary.refresh) viewModel.refreshAfterMutation()
+        if (summary.failedFavorite) Toast.makeText(this, R.string.could_not_update_favorite, Toast.LENGTH_LONG).show()
+        if (summary.failedTrash) Toast.makeText(this, R.string.could_not_move_to_proton_trash, Toast.LENGTH_LONG).show()
     }
 
     /**
