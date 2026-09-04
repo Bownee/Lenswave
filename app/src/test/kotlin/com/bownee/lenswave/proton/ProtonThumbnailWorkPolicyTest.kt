@@ -2,6 +2,8 @@ package com.bownee.lenswave.proton
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -85,11 +87,43 @@ class ProtonThumbnailWorkPolicyTest {
 
     @Test
     fun `a busy viewer is an idle step that keeps the work pending and asks again soon`() {
-        val step = ProtonThumbnailWorkPolicy.foregroundBusyStep()
+        val step = ProtonThumbnailWorkPolicy.foregroundBusyStep(consecutiveBusySteps = 1)
 
         assertTrue(step.hasPending)
         assertFalse(step.previewsDeferred)
         assertEquals(ProtonThumbnailWorkPolicy.FOREGROUND_BUSY_RETRY_MILLIS, step.retryAfterMillis)
         assertTrue(ProtonThumbnailWorkPolicy.FOREGROUND_BUSY_RETRY_MILLIS <= 10_000L)
+        assertNotNull(ProtonBackgroundBatchPolicy.idleWaitMillis(step))
+    }
+
+    @Test
+    fun `a viewer that stays busy ends the run with a real delay`() {
+        val limit = ProtonThumbnailWorkPolicy.MAX_CONSECUTIVE_BUSY_STEPS
+        assertTrue(limit in 2..10)
+
+        val stillSoon = ProtonThumbnailWorkPolicy.foregroundBusyStep(consecutiveBusySteps = limit - 1)
+        assertEquals(ProtonThumbnailWorkPolicy.FOREGROUND_BUSY_RETRY_MILLIS, stillSoon.retryAfterMillis)
+
+        val ending = ProtonThumbnailWorkPolicy.foregroundBusyStep(consecutiveBusySteps = limit)
+        assertTrue(ending.hasPending)
+        assertEquals(ProtonThumbnailWorkPolicy.FOREGROUND_BUSY_END_DELAY_MILLIS, ending.retryAfterMillis)
+        // Too long to sleep for: the run ends and the follow-up carries the delay.
+        assertNull(ProtonBackgroundBatchPolicy.idleWaitMillis(ending))
+        assertEquals(
+            ProtonThumbnailWorkPolicy.FOREGROUND_BUSY_END_DELAY_MILLIS,
+            ProtonThumbnailFollowUpPolicy
+                .followUp(
+                    ProtonThumbnailWorkOutcome.WAITING_FOR_RETRY,
+                    workRemaining = true,
+                    previewsDeferred = false,
+                    retryAfterMillis = ending.retryAfterMillis,
+                )?.initialDelayMillis,
+        )
+        assertEquals(ending, ProtonThumbnailWorkPolicy.foregroundBusyStep(consecutiveBusySteps = limit + 7))
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun `a busy step is at least the first one`() {
+        ProtonThumbnailWorkPolicy.foregroundBusyStep(consecutiveBusySteps = 0)
     }
 }

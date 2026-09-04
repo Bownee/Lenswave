@@ -83,8 +83,10 @@ class ProtonThumbnailWorker(
                 return run.end(ProtonThumbnailWorkOutcome.WAITING_FOR_NETWORK, initialProgress, lastIdle = null)
             }
             val foregroundInfoFactory = ProtonThumbnailForegroundInfoFactory(applicationContext, requestedUserId)
-            publishForeground(foregroundInfoFactory, initialProgress.notificationProgress(), force = true)
+            var lastProgress = initialProgress
+            publishForeground(foregroundInfoFactory, lastProgress.notificationProgress(), force = true)
             var lastIdle: ProtonThumbnailQueueStep.Idle? = null
+            var consecutiveBusySteps = 0
             val outcome =
                 withTimeoutOrNull(ProtonThumbnailWorkPolicy.MAX_RUN_MILLIS) {
                     var runOutcome: ProtonThumbnailWorkOutcome
@@ -96,14 +98,26 @@ class ProtonThumbnailWorker(
                         // Media the user opened comes first. The wait is short and the answer
                         // is an idle step, so the loop below decides what a busy viewer means
                         // for this run instead of the claim sitting on the viewer's download.
+                        // A viewer that stays busy ends the run rather than keeping the
+                        // foreground service awake to ask every few seconds.
                         val step =
                             if (!run.transferCoordinator.awaitNoForegroundTransfer(FOREGROUND_YIELD_TIMEOUT_MILLIS)) {
-                                ProtonThumbnailWorkPolicy.foregroundBusyStep()
+                                consecutiveBusySteps++
+                                publishForeground(
+                                    foregroundInfoFactory,
+                                    lastProgress.notificationProgress().copy(yielding = true),
+                                )
+                                ProtonThumbnailWorkPolicy.foregroundBusyStep(consecutiveBusySteps)
                             } else {
+                                if (consecutiveBusySteps > 0) {
+                                    consecutiveBusySteps = 0
+                                    publishForeground(foregroundInfoFactory, lastProgress.notificationProgress())
+                                }
                                 run.repository.downloadNextQueuedThumbnailBatch(
                                     requestedUserId,
                                     previewsAllowed(),
                                 ) { progress ->
+                                    lastProgress = progress
                                     publishForeground(foregroundInfoFactory, progress.notificationProgress())
                                 }
                             }
@@ -386,11 +400,31 @@ internal object ProtonThumbnailWorkPolicy {
     const val FOREGROUND_BUSY_RETRY_MILLIS = 3_000L
 
     /**
-     * The step a run takes while the viewer is downloading: the queues were not consulted, so
-     * the work is still pending and worth asking about again shortly.
+     * How many times in a row the viewer may be found busy before the run ends. Each busy step
+     * is a few seconds of waiting plus the retry sleep under the foreground service; a viewer
+     * fetching a large original kept that up until the run limit.
      */
-    fun foregroundBusyStep(): ProtonThumbnailQueueStep.Idle =
-        ProtonThumbnailQueueStep.Idle(hasPending = true, retryAfterMillis = FOREGROUND_BUSY_RETRY_MILLIS)
+    const val MAX_CONSECUTIVE_BUSY_STEPS = 3
+
+    /** The follow-up's delay once the viewer stayed busy; long enough for a large original to finish. */
+    const val FOREGROUND_BUSY_END_DELAY_MILLIS = 60_000L
+
+    /**
+     * The step a run takes while the viewer is downloading: the queues were not consulted, so
+     * the work is still pending. The first few times it is worth asking again shortly; after
+     * [MAX_CONSECUTIVE_BUSY_STEPS] the retry is too far off to sleep for, so the run ends and
+     * the follow-up carries it as its initial delay.
+     */
+    fun foregroundBusyStep(consecutiveBusySteps: Int): ProtonThumbnailQueueStep.Idle {
+        require(consecutiveBusySteps > 0) { "A busy step is at least the first one" }
+        val retryAfterMillis =
+            if (consecutiveBusySteps >= MAX_CONSECUTIVE_BUSY_STEPS) {
+                FOREGROUND_BUSY_END_DELAY_MILLIS
+            } else {
+                FOREGROUND_BUSY_RETRY_MILLIS
+            }
+        return ProtonThumbnailQueueStep.Idle(hasPending = true, retryAfterMillis = retryAfterMillis)
+    }
 
     /** The notification is re-posted at most every [PROGRESS_PUBLISH_INTERVAL_MILLIS] unless forced. */
     fun shouldPublishProgress(

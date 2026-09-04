@@ -122,7 +122,9 @@ class ProtonBackgroundBatchPolicyTest {
         )
         assertEquals(
             ProtonThumbnailWorkPolicy.FOREGROUND_BUSY_RETRY_MILLIS,
-            ProtonBackgroundBatchPolicy.idleWaitMillis(ProtonThumbnailWorkPolicy.foregroundBusyStep()),
+            ProtonBackgroundBatchPolicy.idleWaitMillis(
+                ProtonThumbnailWorkPolicy.foregroundBusyStep(consecutiveBusySteps = 1),
+            ),
         )
         assertEquals(
             5L,
