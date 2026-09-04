@@ -104,14 +104,8 @@ internal class ProtonAlbumRepository
                     albums
                 },
                 publishResult = { albums -> emitAlbums(userId, albums, syncing = false) },
-                publishCancelled = { mutableAlbumsState.value = mutableAlbumsState.value.copy(syncing = false) },
-                publishFailed = {
-                    mutableAlbumsState.value =
-                        mutableAlbumsState.value.copy(
-                            syncing = false,
-                            refreshFailed = true,
-                        )
-                },
+                publishCancelled = { updateAlbums(userId) { state -> state.copy(syncing = false) } },
+                publishFailed = { updateAlbums(userId) { state -> state.copy(syncing = false, refreshFailed = true) } },
             )
         }
 
@@ -156,17 +150,11 @@ internal class ProtonAlbumRepository
                 // The album-photo state may already belong to another album by the time the sync
                 // settles; only the album that is still open reflects the outcome.
                 publishCancelled = {
-                    if (mutableAlbumPhotosState.value.albumUid == album.nodeUid) {
-                        mutableAlbumPhotosState.value = mutableAlbumPhotosState.value.copy(syncing = false)
-                    }
+                    updateAlbumPhotos(userId, album.nodeUid) { state -> state.copy(syncing = false) }
                 },
                 publishFailed = {
-                    if (mutableAlbumPhotosState.value.albumUid == album.nodeUid) {
-                        mutableAlbumPhotosState.value =
-                            mutableAlbumPhotosState.value.copy(
-                                syncing = false,
-                                refreshFailed = true,
-                            )
+                    updateAlbumPhotos(userId, album.nodeUid) { state ->
+                        state.copy(syncing = false, refreshFailed = true)
                     }
                 },
             )
@@ -248,22 +236,22 @@ internal class ProtonAlbumRepository
                 albumPhotosSyncMutex.withLock albumPhotosLock@{
                     if (nodeUids.isEmpty()) return@albumPhotosLock
                     val current = mutableAlbumPhotosState.value
-                    current.albumUid?.let { albumUid ->
+                    if (current.userId == userId.id && current.albumUid != null) {
+                        // Both sync mutexes are held, so only thumbnail marks can land between
+                        // the file write and the publish; the publish filters the state it
+                        // replaces so those marks survive.
                         val remaining = current.photos.filterNot { it.nodeUid in nodeUids }
-                        cache.writeAlbumPhotos(userId.id, albumUid, remaining)
-                        mutableAlbumPhotosState.value =
-                            current.copy(
-                                photos = remaining,
-                            )
+                        cache.writeAlbumPhotos(userId.id, current.albumUid, remaining)
+                        updateAlbumPhotos(userId, current.albumUid) { state ->
+                            state.copy(photos = state.photos.filterNot { it.nodeUid in nodeUids })
+                        }
                     }
                     // ProtonPhotoCache removes the nodes from every album index and reconciles all counts.
                     // Publish that complete snapshot so unopened albums cannot retain stale counts in memory.
                     // A snapshot that cannot be read right now keeps the published list: a blank
                     // Albums tab over a transient read failure would be worse than a stale count.
                     cache.readAlbumsSnapshot(userId.id)?.let { updatedAlbums ->
-                        mutableAlbumsState.update { state ->
-                            if (state.userId != userId.id) state else state.copy(albums = updatedAlbums)
-                        }
+                        updateAlbums(userId) { state -> state.copy(albums = updatedAlbums) }
                     }
                 }
             }
@@ -317,6 +305,28 @@ internal class ProtonAlbumRepository
                     hasLoaded = hasLoaded,
                     syncing = syncing,
                 )
+            }
+        }
+
+        /** Applies [transform] to the published albums, but only while they still belong to [userId]. */
+        private inline fun updateAlbums(
+            userId: UserId,
+            transform: (ProtonAlbumsState) -> ProtonAlbumsState,
+        ) {
+            mutableAlbumsState.update { state -> if (state.userId != userId.id) state else transform(state) }
+        }
+
+        /**
+         * Applies [transform] to the published album photos while they are still [userId]'s and
+         * still [albumUid]'s: the state may belong to another album by the time a sync settles.
+         */
+        private inline fun updateAlbumPhotos(
+            userId: UserId,
+            albumUid: String,
+            transform: (ProtonAlbumPhotosState) -> ProtonAlbumPhotosState,
+        ) {
+            mutableAlbumPhotosState.update { state ->
+                if (state.userId != userId.id || state.albumUid != albumUid) state else transform(state)
             }
         }
 

@@ -119,6 +119,24 @@ class ProtonTimelineRepositoryTest {
         }
 
     @Test
+    fun `a removal for another account updates that account's cache but not the published state`() =
+        runTest {
+            cache.timelines[USER.id] = listOf(photo("v~a1", 100L))
+            cache.timelines["other"] = listOf(photo("o~a1", 100L))
+            repository.loadCached(USER)
+
+            repository.removePhotos(UserId("other"), setOf("o~a1"))
+
+            assertEquals("user", repository.state.value.userId)
+            assertEquals(
+                listOf("v~a1"),
+                repository.state.value.photos
+                    .map(ProtonGalleryPhoto::nodeUid),
+            )
+            assertTrue(cache.timelines.getValue("other").isEmpty())
+        }
+
+    @Test
     fun `a tag listing is committed whole while the timeline has not loaded`() =
         runTest {
             cache.tags[USER.id to ProtonMediaTag.VIDEOS] = listOf(photo("v~old", 1L))
