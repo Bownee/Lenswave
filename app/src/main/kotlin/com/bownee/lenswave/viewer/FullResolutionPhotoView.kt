@@ -84,7 +84,16 @@ class FullResolutionPhotoView
         private var baseSampleSize = 1
         private var detailBitmap: Bitmap? = null
         private var detailRect: Rect? = null
-        private var requestedDetailKey: String? = null
+
+        /** The inputs of the tile last asked for, so an unchanged viewport costs no allocation. */
+        private var detailRequested = false
+        private var requestedDetailGeneration = 0
+        private var requestedDetailSample = 0
+        private val requestedVisible = Rect()
+        private val visibleRect = Rect()
+
+        /** Identifies the newest tile request; a decode whose serial is stale is dropped. */
+        private var detailRequestSerial = 0
         private var minScale = 1f
         private var scale = 1f
         private var offsetX = 0f
@@ -290,11 +299,8 @@ class FullResolutionPhotoView
             generation.incrementAndGet()
             zoomAnimator?.cancel()
             zoomAnimator = null
-            requestedDetailKey = null
             detailFuture?.cancel(false)
-            detailRect = null
-            detailBitmap?.recycle()
-            detailBitmap = null
+            recycleDetail()
             if (!basePlaceholder) baseBitmap?.recycle()
             basePlaceholder = false
             baseBitmap = null
@@ -322,7 +328,24 @@ class FullResolutionPhotoView
             oldHeight: Int,
         ) {
             super.onSizeChanged(width, height, oldWidth, oldHeight)
-            if (imageWidth > 0 && imageHeight > 0) resetTransform()
+            if (imageWidth <= 0 || imageHeight <= 0 || width <= 0 || height <= 0) return
+            if (oldWidth <= 0 || oldHeight <= 0 || minScale <= 0f) {
+                resetTransform()
+                return
+            }
+            // The usual post-open margin update must not throw a zoom away: keep the zoom relative
+            // to the fit scale and the picture point under the old centre under the new one.
+            val zoom = scale / minScale
+            val centreImageX = (oldWidth / 2f - offsetX) / scale
+            val centreImageY = (oldHeight / 2f - offsetY) / scale
+            minScale = min(width.toFloat() / imageWidth, height.toFloat() / imageHeight)
+            scale = (minScale * zoom).coerceIn(minScale, maximumScale())
+            offsetX = width / 2f - centreImageX * scale
+            offsetY = height / 2f - centreImageY * scale
+            clampOffsets()
+            // The current tile is still right for its part of the picture; a new one is only
+            // requested when the visible region actually changed.
+            scheduleDetailDecode()
         }
 
         override fun onDraw(canvas: Canvas) {
@@ -530,7 +553,27 @@ class FullResolutionPhotoView
         private fun scheduleDetailDecode() {
             val activeDecoder = decoder ?: return
             if (width == 0 || height == 0) return
-            val visible = visibleImageRect()
+            val displaySample = PhotoDetailDecodePolicy.sampleSize(scale, baseSampleSize)
+            if (displaySample == null) {
+                // The base already matches the display; nothing to sharpen.
+                if (detailRequested || detailBitmap != null) {
+                    recycleDetail()
+                    invalidate()
+                }
+                return
+            }
+            val detailGeneration = generation.get()
+            fillVisibleImageRect(visibleRect)
+            // Every touch-up, animation end and size change lands here; the common case is that
+            // nothing moved, decided before any Region, Plan, Rect or String exists.
+            if (detailRequested &&
+                requestedDetailGeneration == detailGeneration &&
+                requestedDetailSample == displaySample &&
+                requestedVisible == visibleRect
+            ) {
+                return
+            }
+            val visible = visibleRect
             val plan =
                 PhotoDetailDecodePolicy.plan(
                     scale = scale,
@@ -555,10 +598,11 @@ class FullResolutionPhotoView
                     rawHeight,
                 )
             val orientedRect = rawToOriented(rawRect)
-            val key = "${generation.get()}:$sample:${rawRect.flattenToString()}"
-            if (key == requestedDetailKey) return
-            requestedDetailKey = key
-            val detailGeneration = generation.get()
+            detailRequested = true
+            requestedDetailGeneration = detailGeneration
+            requestedDetailSample = displaySample
+            requestedVisible.set(visibleRect)
+            val serial = ++detailRequestSerial
             detailFuture?.cancel(false)
             detailFuture =
                 detailExecutor.submit {
@@ -577,7 +621,7 @@ class FullResolutionPhotoView
                             )
                         }.getOrNull()
                     mainHandler.post {
-                        if (detailGeneration != generation.get() || requestedDetailKey != key) {
+                        if (detailGeneration != generation.get() || !detailRequested || detailRequestSerial != serial) {
                             decoded?.recycle()
                             return@post
                         }
@@ -589,12 +633,13 @@ class FullResolutionPhotoView
                 }
         }
 
-        private fun visibleImageRect(): Rect {
+        /** The viewport in oriented image pixels, written into [target]. */
+        private fun fillVisibleImageRect(target: Rect) {
             val left = floor((-offsetX / scale).coerceAtLeast(0f)).toInt()
             val top = floor((-offsetY / scale).coerceAtLeast(0f)).toInt()
             val right = ceil(((width - offsetX) / scale).coerceAtMost(imageWidth.toFloat())).toInt()
             val bottom = ceil(((height - offsetY) / scale).coerceAtMost(imageHeight.toFloat())).toInt()
-            return Rect(left, top, max(left + 1, right), max(top + 1, bottom))
+            target.set(left, top, max(left + 1, right), max(top + 1, bottom))
         }
 
         private fun orientedToRaw(rect: Rect): Rect =
@@ -636,7 +681,7 @@ class FullResolutionPhotoView
             detailBitmap?.recycle()
             detailBitmap = null
             detailRect = null
-            requestedDetailKey = null
+            detailRequested = false
         }
 
         override fun close() {
