@@ -3,7 +3,7 @@ package com.bownee.lenswave.proton
 import com.bownee.lenswave.LenswaveClock
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -68,6 +68,45 @@ class ProtonTimelineRepositoryTest {
                 listOf("v~a1"),
                 cache.tags.getValue(USER.id to ProtonMediaTag.FAVORITES).map(ProtonGalleryPhoto::nodeUid),
             )
+            assertTrue(failures.isEmpty())
+        }
+
+    @Test
+    fun `a trash during a timeline enumeration completes at once and is not undone by the commit`() =
+        runTest {
+            cache.timelines[USER.id] = listOf(photo("v~a1", 100L), photo("v~x", 500L))
+            cache.tags[USER.id to ProtonMediaTag.VIDEOS] = listOf(photo("v~x", 500L))
+            repository.loadCached(USER)
+            clients.holdEnumeration = true
+            clients.timeline = listOf("v~a1" to 100L, "v~x" to 500L, "v~new" to 600L)
+
+            val sync = launch { repository.syncMetadata(USER, forceRemote = false) }
+            runCurrent()
+            assertTrue("the enumeration must be in flight", clients.enumerating.isCompleted)
+
+            val removal = launch { repository.removePhotos(USER, setOf("v~x")) }
+            runCurrent()
+
+            assertTrue("a trash must not wait for the enumeration", removal.isCompleted)
+            assertEquals(
+                listOf("v~a1"),
+                repository.state.value.photos
+                    .map(ProtonGalleryPhoto::nodeUid),
+            )
+            clients.release.complete(Unit)
+            sync.join()
+
+            val state = repository.state.value
+            assertEquals(listOf("v~a1", "v~new"), state.photos.map(ProtonGalleryPhoto::nodeUid))
+            assertFalse(state.syncing)
+            assertTrue(
+                state.tags
+                    .getValue(ProtonMediaTag.VIDEOS)
+                    .photos
+                    .isEmpty(),
+            )
+            assertEquals(listOf("v~a1", "v~new"), cache.timelines.getValue(USER.id).map(ProtonGalleryPhoto::nodeUid))
+            assertEquals(listOf("removePhotos:v~x", "writeIndex:2", "reconcilePhotos:2->2"), cache.events)
             assertTrue(failures.isEmpty())
         }
 
@@ -278,6 +317,11 @@ class ProtonTimelineRepositoryTest {
     private class FakeClientProvider : ProtonPhotosClientProvider {
         var timeline: List<Pair<String, Long>> = emptyList()
 
+        /** While true, an enumeration signals [enumerating] and answers only once [release] completes. */
+        var holdEnumeration = false
+        val enumerating = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+
         override suspend fun get(userId: UserId): ProtonPhotosClient =
             Proxy.newProxyInstance(
                 ProtonPhotosClient::class.java.classLoader,
@@ -285,12 +329,11 @@ class ProtonTimelineRepositoryTest {
             ) { _, method, _ ->
                 when (method.name) {
                     "enumerateTimeline" -> {
-                        flowOf(
-                            *timeline
-                                .map { (nodeUid, captureTime) ->
-                                    timelineItem(nodeUid, captureTime)
-                                }.toTypedArray(),
-                        )
+                        flow {
+                            enumerating.complete(Unit)
+                            if (holdEnumeration) release.await()
+                            timeline.forEach { (nodeUid, captureTime) -> emit(timelineItem(nodeUid, captureTime)) }
+                        }
                     }
 
                     "toString" -> {

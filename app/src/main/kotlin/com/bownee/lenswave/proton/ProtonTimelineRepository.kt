@@ -22,6 +22,7 @@ internal class ProtonTimelineRepository
         private val snapshotSync: ProtonSnapshotSync,
         private val tagListings: ProtonTagListingClient,
     ) {
+        /** One timeline sync and one sync per tag at a time; held across their enumerations. */
         private val syncMutex = Mutex()
         private val tagMutexes = ProtonMediaTag.entries.associateWith { Mutex() }
 
@@ -29,8 +30,10 @@ internal class ProtonTimelineRepository
          * Serializes every write to the cached listings and to the state that mirrors them: a
          * sync commit (with its stamp and publish), a favourite toggle and a removal. It is the
          * innermost lock of the hierarchy, taken after [syncMutex] or a tag mutex and never held
-         * across an enumeration, so a trash never waits on a network round trip and a favourites
-         * sync that enumerated before a trash cannot publish or persist the trashed photo again.
+         * across an enumeration, and a removal takes nothing else, so a trash never waits on a
+         * network round trip. A sync that enumerated before the trash narrows its listing at
+         * commit time instead (see [ProtonPhotoReconciliation.withoutRemovedSince]), so neither
+         * the timeline nor a tag can publish or persist the trashed photo again.
          */
         private val mutationMutex = Mutex()
         private val mutableState = MutableStateFlow(ProtonGalleryState())
@@ -100,12 +103,15 @@ internal class ProtonTimelineRepository
                     items.map { item -> availability.photo(item.nodeUid.value, item.captureTime.epochSecond) }
                 },
                 commit = { photos ->
-                    val remoteNodeUids = photos.map(ProtonGalleryPhoto::nodeUid)
                     if (hasCachedSnapshot) {
                         ProtonReconcileSafetyPolicy.requireCommit(
                             listing = "timeline",
                             existing = existing,
-                            remoteNodeUids = remoteNodeUids.toHashSet(),
+                            remoteNodeUids =
+                                photos.mapTo(
+                                    HashSet(photos.size * 4 / 3 + 1),
+                                    ProtonGalleryPhoto::nodeUid,
+                                ),
                             forceRemote = forceRemote,
                             nodeUid = ProtonGalleryPhoto::nodeUid,
                         )
@@ -120,16 +126,25 @@ internal class ProtonTimelineRepository
                             forceRemote = forceRemote,
                         )
                     }
+                    // A photo trashed while the timeline was enumerating has left the published
+                    // listing; the enumerated one must not bring it back.
+                    val retained =
+                        ProtonPhotoReconciliation.withoutRemovedSince(
+                            enumerated = photos,
+                            existing = existing,
+                            published = mutableState.value.takeIf { state -> state.userId == userId.id }?.photos,
+                            nodeUid = ProtonGalleryPhoto::nodeUid,
+                        )
                     // The new listing lands before anything is deleted: a crash between the two
                     // then leaves stray renditions for the next reconcile, not a listing that
                     // points at renditions which are gone.
-                    cache.writeIndex(userId.id, photos)
+                    cache.writeIndex(userId.id, retained)
                     cache.reconcilePhotos(
                         userId = userId.id,
                         cachedNodeUids = existing.map(ProtonGalleryPhoto::nodeUid),
-                        remoteNodeUids = remoteNodeUids,
+                        remoteNodeUids = retained.map(ProtonGalleryPhoto::nodeUid),
                     )
-                    photos
+                    retained
                 },
                 publishResult = { photos ->
                     val remoteNodeUids = photos.mapTo(mutableSetOf(), ProtonGalleryPhoto::nodeUid)
@@ -380,22 +395,20 @@ internal class ProtonTimelineRepository
             nodeUids: Set<String>,
         ) {
             if (nodeUids.isEmpty()) return
-            // The sync mutex keeps a timeline enumeration from committing a listing that still
-            // has the photos; the mutation mutex does the same for a tag enumeration in flight.
-            syncMutex.withLock {
-                mutationMutex.withLock {
-                    cache.removePhotos(userId.id, nodeUids)
-                    updateState(userId) { state ->
-                        state.copy(
-                            photos = state.photos.filterNot { it.nodeUid in nodeUids },
-                            hasLoaded = true,
-                            syncing = false,
-                            tags =
-                                state.tags.mapValues { (_, tagState) ->
-                                    tagState.copy(photos = tagState.photos.filterNot { it.nodeUid in nodeUids })
-                                },
-                        )
-                    }
+            // Only the mutation mutex: an enumeration in flight keeps running and narrows its
+            // listing when it commits, so the trash never waits on the network.
+            mutationMutex.withLock {
+                cache.removePhotos(userId.id, nodeUids)
+                updateState(userId) { state ->
+                    state.copy(
+                        photos = state.photos.filterNot { it.nodeUid in nodeUids },
+                        hasLoaded = true,
+                        syncing = false,
+                        tags =
+                            state.tags.mapValues { (_, tagState) ->
+                                tagState.copy(photos = tagState.photos.filterNot { it.nodeUid in nodeUids })
+                            },
+                    )
                 }
             }
         }
