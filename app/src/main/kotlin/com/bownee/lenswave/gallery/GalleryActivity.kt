@@ -425,7 +425,13 @@ class GalleryActivity :
     private fun openPhoto(photo: GalleryAsset) {
         val userId = currentUiState.currentUserId ?: return
         viewerLauncher.launch(
-            PhotoViewerActivity.createIntent(this, photo, userId, currentUiState.visibleAssets),
+            PhotoViewerActivity.createIntent(
+                this,
+                photo,
+                userId,
+                currentUiState.visibleAssets,
+                currentUiState.destination,
+            ),
         )
     }
 

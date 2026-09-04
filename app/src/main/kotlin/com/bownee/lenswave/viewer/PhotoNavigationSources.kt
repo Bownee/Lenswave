@@ -16,6 +16,9 @@ internal object PhotoNavigationSources {
         val assets: List<GalleryAsset>,
     )
 
+    /** The token of a [Source] rebuilt by the viewer itself rather than published by the gallery. */
+    const val NO_TOKEN = -1L
+
     private val tokens = AtomicLong()
 
     @Volatile

@@ -30,11 +30,14 @@ import com.bownee.lenswave.applyBottomOverlayInsets
 import com.bownee.lenswave.configureEdgeToEdgeWindow
 import com.bownee.lenswave.dp
 import com.bownee.lenswave.gallery.GalleryAsset
+import com.bownee.lenswave.gallery.GalleryDestination
+import com.bownee.lenswave.gallery.GalleryNavigationCodec
 import com.bownee.lenswave.gallery.MediaKind
 import com.bownee.lenswave.gallery.PhotoDeletionDecision
 import com.bownee.lenswave.gallery.PhotoDeletionPolicy
 import com.bownee.lenswave.gallery.ProtonOriginalMediaSource
 import com.bownee.lenswave.gallery.ProtonThumbnailImageSource
+import com.bownee.lenswave.gallery.StoredGalleryNavigation
 import com.bownee.lenswave.metadata.PhotoMetadataHints
 import com.bownee.lenswave.metadata.PhotoMetadataReader
 import dagger.hilt.android.AndroidEntryPoint
@@ -70,6 +73,8 @@ class PhotoViewerActivity : FragmentActivity() {
 
     @Inject lateinit var mutationCoordinator: ViewerMutationCoordinator
 
+    @Inject lateinit var navigationSourceProvider: PhotoNavigationSourceProvider
+
     private lateinit var screen: PhotoViewerScreen
     private val root get() = screen.root
     private val photoDetailsScroll get() = screen.photoDetailsScroll
@@ -97,6 +102,15 @@ class PhotoViewerActivity : FragmentActivity() {
 
     /** Index of the first entry of [navigationRequests] in the gallery's list; -1 when unknown. */
     private var navigationStart = -1
+
+    /** Size of the gallery list the window was cut from; -1 when unknown. */
+    private var navigationTotal = -1
+
+    /** The gallery page the list came from, for rebuilding it after a process death. */
+    private var sourceDestination: GalleryDestination? = null
+    private var navigationRehydration: Job? = null
+    private var navigationRehydrationFailed = false
+    private var edgeToast: Toast? = null
 
     /** The gallery's full list, when it is still in the process and lines up with [navigationRequests]. */
     private var navigationSource: PhotoNavigationSources.Source? = null
@@ -134,6 +148,8 @@ class PhotoViewerActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
         restoreNavigation(savedInstanceState)
         restoreNavigationSource()
+        // A restored window may already have its edge near; the same check a swipe makes.
+        extendNavigationWindow()
         restoreResult(savedInstanceState)
         configureEdgeToEdgeWindow()
         buildInterface()
@@ -160,6 +176,7 @@ class PhotoViewerActivity : FragmentActivity() {
         val kept = PhotoNavigationWindowPolicy.initial(local, navigationRequests.size)
         outState.putParcelableArrayList(STATE_NAVIGATION, ArrayList(navigationRequests.subList(kept.start, kept.end)))
         outState.putInt(STATE_NAVIGATION_START, if (navigationStart < 0) -1 else navigationStart + kept.start)
+        outState.putInt(STATE_NAVIGATION_TOTAL, navigationTotal)
         RESULT_EXTRAS.forEach { extra -> outState.putBoolean(extra, resultIntent.getBooleanExtra(extra, false)) }
         super.onSaveInstanceState(outState)
     }
@@ -183,11 +200,63 @@ class PhotoViewerActivity : FragmentActivity() {
                     .ifEmpty { listOf(request) }
                     .toMutableList()
             navigationStart = savedInstanceState.getInt(STATE_NAVIGATION_START, -1)
+            navigationTotal = savedInstanceState.getInt(STATE_NAVIGATION_TOTAL, -1)
         } else {
             request = PhotoRequest.from(intent)
             navigationRequests = PhotoRequest.navigationFrom(intent).ifEmpty { listOf(request) }.toMutableList()
             navigationStart = intent.getIntExtra(EXTRA_NAVIGATION_START, -1)
+            navigationTotal = intent.getIntExtra(EXTRA_NAVIGATION_TOTAL, -1)
         }
+        sourceDestination = sourceDestination(intent)
+    }
+
+    /** Whether the gallery list had entries beyond the window in the direction of [offset]. */
+    private fun galleryContinues(offset: Int): Boolean {
+        val window = navigationWindow ?: return false
+        return if (offset < 0) window.start > 0 else navigationTotal > window.end
+    }
+
+    /**
+     * After a process death the in-process list is gone. This rebuilds it from the page's cache
+     * around the current photo, once, the first time the window would need to grow; while it is
+     * loading (or if it cannot be rebuilt) a swipe past the edge says so instead of bouncing.
+     */
+    private fun rehydrateNavigationSource() {
+        if (navigationRehydration != null || navigationRehydrationFailed) return
+        val destination = sourceDestination ?: return
+        val userId = UserId(request.userId)
+        navigationRehydration =
+            lifecycleScope.launch {
+                val assets = withContext(Dispatchers.IO) { navigationSourceProvider.load(destination, userId) }
+                if (assets == null || !adoptNavigationSource(assets, userId)) navigationRehydrationFailed = true
+            }
+    }
+
+    /** Re-cuts the window from [assets] around the current photo, keeping entries already resolved. */
+    private fun adoptNavigationSource(
+        assets: List<GalleryAsset>,
+        userId: UserId,
+    ): Boolean {
+        val index = assets.indexOfFirst { it.stableId == request.stableId }
+        if (index < 0) return false
+        val window = PhotoNavigationWindowPolicy.initial(index, assets.size)
+        val existing = navigationRequests.associateBy { it.stableId }
+        navigationRequests =
+            assets.subList(window.start, window.end).mapTo(ArrayList(window.size)) { asset ->
+                existing[asset.stableId] ?: PhotoRequest.from(asset, userId.id)
+            }
+        navigationStart = window.start
+        navigationTotal = assets.size
+        navigationSource = PhotoNavigationSources.Source(PhotoNavigationSources.NO_TOKEN, userId.id, assets)
+        return true
+    }
+
+    private fun showNavigationEdge(offset: Int) {
+        // With the list at hand the window grows before the edge, so an edge here is the gallery's own.
+        if (navigationSource != null || !galleryContinues(offset)) return
+        rehydrateNavigationSource()
+        edgeToast?.cancel()
+        edgeToast = Toast.makeText(this, R.string.no_more_photos_loaded, Toast.LENGTH_SHORT).also { it.show() }
     }
 
     private fun restoreResult(savedInstanceState: Bundle?) {
@@ -369,6 +438,8 @@ class PhotoViewerActivity : FragmentActivity() {
                             this@PhotoViewerActivity.commitNavigation(adjacent)
 
                         override fun adoptPreview(bitmap: Bitmap) = this@PhotoViewerActivity.adoptPreview(bitmap)
+
+                        override fun onNavigationEdge(offset: Int) = showNavigationEdge(offset)
                     },
             )
         video =
@@ -439,10 +510,17 @@ class PhotoViewerActivity : FragmentActivity() {
      * list is replaced rather than mutated so the swipe controller rebuilds its index.
      */
     private fun extendNavigationWindow() {
-        val source = navigationSource ?: return
         val window = navigationWindow ?: return
         val local = navigationRequests.indexOfFirst { it.stableId == request.stableId }
         if (local < 0) return
+        val source = navigationSource
+        if (source == null) {
+            // Nothing to grow from in the process; rebuild the list once the edge comes near.
+            if (PhotoNavigationWindowPolicy.extended(window, window.start + local, navigationTotal) != null) {
+                rehydrateNavigationSource()
+            }
+            return
+        }
         val grown = PhotoNavigationWindowPolicy.extended(window, window.start + local, source.assets.size) ?: return
         val extended = ArrayList<PhotoRequest>(grown.size)
         source.assets.subList(grown.start, window.start).mapTo(extended) { PhotoRequest.from(it, source.userId) }
@@ -1110,21 +1188,33 @@ class PhotoViewerActivity : FragmentActivity() {
         const val EXTRA_NAVIGATION = "com.bownee.lenswave.extra.NAVIGATION"
         const val EXTRA_NAVIGATION_START = "com.bownee.lenswave.extra.NAVIGATION_START"
         const val EXTRA_NAVIGATION_TOKEN = "com.bownee.lenswave.extra.NAVIGATION_TOKEN"
+        const val EXTRA_NAVIGATION_TOTAL = "com.bownee.lenswave.extra.NAVIGATION_TOTAL"
+        const val EXTRA_SOURCE_DESTINATION = "com.bownee.lenswave.extra.SOURCE_DESTINATION"
+        const val EXTRA_SOURCE_ALBUM_UID = "com.bownee.lenswave.extra.SOURCE_ALBUM_UID"
+        const val EXTRA_SOURCE_ALBUM_NAME = "com.bownee.lenswave.extra.SOURCE_ALBUM_NAME"
+        const val EXTRA_SOURCE_TAG = "com.bownee.lenswave.extra.SOURCE_TAG"
         private val RESULT_EXTRAS = listOf(EXTRA_PHOTO_DELETED, EXTRA_FAVORITE_CHANGED)
         private const val STATE_REQUEST = "viewer.request"
         private const val STATE_NAVIGATION = "viewer.navigation"
         private const val STATE_NAVIGATION_START = "viewer.navigation-start"
+        private const val STATE_NAVIGATION_TOTAL = "viewer.navigation-total"
         private const val DETAILS_MINIMUM_HEIGHT_FRACTION = 0.55f
         private const val MEDIA_ACTION_GAP_DP = 8
         private const val VIDEO_CONTROLS_HEIGHT_DP = 80
         private const val FULL_QUALITY_CROSSFADE_MILLIS = 180L
         private const val LOADING_PANEL_DELAY_MILLIS = 300L
 
+        /**
+         * [destination] names the gallery page [navigation] came from, so a viewer restored after
+         * a process death can rebuild the list from the page's cache (see
+         * [PhotoNavigationSourceProvider]).
+         */
         fun createIntent(
             context: Context,
             photo: GalleryAsset,
             userId: UserId,
             navigation: List<GalleryAsset> = listOf(photo),
+            destination: GalleryDestination? = null,
         ): Intent {
             val request = PhotoRequest.from(photo, userId.id)
             val currentIndex = navigation.indexOfFirst { it.stableId == photo.stableId }.coerceAtLeast(0)
@@ -1139,8 +1229,26 @@ class PhotoViewerActivity : FragmentActivity() {
                     },
                 )
                 putExtra(EXTRA_NAVIGATION_START, window.start)
+                putExtra(EXTRA_NAVIGATION_TOTAL, navigation.size)
                 putExtra(EXTRA_NAVIGATION_TOKEN, PhotoNavigationSources.publish(userId.id, navigation))
+                destination?.let { source ->
+                    val stored = GalleryNavigationCodec.encode(source)
+                    putExtra(EXTRA_SOURCE_DESTINATION, stored.destination)
+                    putExtra(EXTRA_SOURCE_ALBUM_UID, stored.albumUid)
+                    putExtra(EXTRA_SOURCE_ALBUM_NAME, stored.albumName)
+                    putExtra(EXTRA_SOURCE_TAG, stored.tag)
+                }
             }
         }
+
+        private fun sourceDestination(intent: Intent): GalleryDestination? =
+            GalleryNavigationCodec.decode(
+                StoredGalleryNavigation(
+                    destination = intent.getStringExtra(EXTRA_SOURCE_DESTINATION),
+                    albumUid = intent.getStringExtra(EXTRA_SOURCE_ALBUM_UID),
+                    albumName = intent.getStringExtra(EXTRA_SOURCE_ALBUM_NAME),
+                    tag = intent.getStringExtra(EXTRA_SOURCE_TAG),
+                ),
+            )
     }
 }

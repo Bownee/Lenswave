@@ -76,6 +76,7 @@
     <string name="proton_unlock_failed">Proton could not unlock the account keys</string>
     <string name="could_not_download_proton_photo">Could not download this Proton photo</string>
     <string name="could_not_display_photo">Could not display this photo</string>
+    <string name="no_more_photos_loaded">No more photos are loaded here. Go back to the gallery to keep browsing.</string>
     <string name="error">Error</string>
     <string name="could_not_read_metadata">Could not read metadata</string>
     <string name="no_maps_app">No maps app is available</string>
