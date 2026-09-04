@@ -140,6 +140,40 @@ class ProtonTimelineRepositoryTest {
         }
 
     @Test
+    fun `favourites keep newest-first order and only unknown photos are looked up on disk`() =
+        runTest {
+            cache.timelines[USER.id] = listOf(photo("v~c", 300L), photo("v~a", 100L))
+            cache.tags[USER.id to ProtonMediaTag.FAVORITES] = listOf(photo("v~b", 200L))
+            cache.thumbnails += listOf("v~c", "v~album")
+            repository.loadCached(USER)
+
+            repository.setFavorite(USER, setOf("v~a", "v~c", "v~album"), favorite = true)
+
+            val favorites =
+                repository.state.value.tags
+                    .getValue(ProtonMediaTag.FAVORITES)
+                    .photos
+            // The album-only photo has no capture time here and sorts last; c keeps its stored thumbnail.
+            assertEquals(listOf("v~c", "v~b", "v~a", "v~album"), favorites.map(ProtonGalleryPhoto::nodeUid))
+            assertEquals(listOf(true, false, false, true), favorites.map(ProtonGalleryPhoto::hasThumbnail))
+            assertEquals(listOf("v~album"), cache.stats)
+            assertEquals(
+                listOf("v~c", "v~b", "v~a", "v~album"),
+                cache.tags.getValue(USER.id to ProtonMediaTag.FAVORITES).map(ProtonGalleryPhoto::nodeUid),
+            )
+
+            repository.setFavorite(USER, setOf("v~b", "v~album"), favorite = false)
+
+            assertEquals(
+                listOf("v~c", "v~a"),
+                repository.state.value.tags
+                    .getValue(ProtonMediaTag.FAVORITES)
+                    .photos
+                    .map(ProtonGalleryPhoto::nodeUid),
+            )
+        }
+
+    @Test
     fun `a favourite toggle for another account leaves the published state and the cache alone`() =
         runTest {
             cache.timelines[USER.id] = listOf(photo("v~a1", 100L))
@@ -370,6 +404,7 @@ class ProtonTimelineRepositoryTest {
         val tags = mutableMapOf<Pair<String, ProtonMediaTag>, List<ProtonGalleryPhoto>>()
         val thumbnails = mutableSetOf<String>()
         val events = mutableListOf<String>()
+        val stats = mutableListOf<String>()
 
         override fun storedRenditions(userId: String): ProtonStoredRenditions =
             ProtonStoredRenditions(thumbnails.toSet(), emptySet()) { nodeUid -> nodeUid }
@@ -405,7 +440,10 @@ class ProtonTimelineRepositoryTest {
         override fun thumbnailExists(
             userId: String,
             nodeUid: String,
-        ): Boolean = nodeUid in thumbnails
+        ): Boolean {
+            stats += nodeUid
+            return nodeUid in thumbnails
+        }
 
         override fun reconcilePhotos(
             userId: String,

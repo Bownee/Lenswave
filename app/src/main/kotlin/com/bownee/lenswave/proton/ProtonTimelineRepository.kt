@@ -38,6 +38,9 @@ internal class ProtonTimelineRepository
         private val mutationMutex = Mutex()
         private val mutableState = MutableStateFlow(ProtonGalleryState())
 
+        /** Uid lookups over the published timeline, memoized per list instance; see [ProtonNodeUidIndex]. */
+        private val timelineIndex = ProtonNodeUidIndex(ProtonGalleryPhoto::nodeUid)
+
         val state: StateFlow<ProtonGalleryState> = mutableState.asStateFlow()
 
         /**
@@ -342,16 +345,11 @@ internal class ProtonTimelineRepository
             if (nodeUids.isEmpty()) return
             tagMutexes.getValue(ProtonMediaTag.FAVORITES).withLock {
                 mutationMutex.withLock {
-                    // A file stat per toggled photo, taken outside the update so a retried
-                    // update never touches the disk twice.
-                    val storedThumbnails =
-                        if (favorite) {
-                            nodeUids.associateWith { nodeUid ->
-                                cache.thumbnailExists(userId.id, nodeUid)
-                            }
-                        } else {
-                            emptyMap()
-                        }
+                    // The photos to add are resolved once, outside the update: the timeline
+                    // answers from its uid index, and only a photo it does not know (favourited
+                    // from an album, say) costs a file stat, so a retried update never touches
+                    // the disk twice.
+                    val additions = if (favorite) favoriteEntries(userId, nodeUids) ?: return else emptyList()
                     val next =
                         mutableState.updateAndGet { state ->
                             if (state.userId != userId.id) return@updateAndGet state
@@ -359,18 +357,7 @@ internal class ProtonTimelineRepository
                             val favorites = current?.photos.orEmpty()
                             val nextFavorites =
                                 if (favorite) {
-                                    val knownPhotos = state.photos.associateBy(ProtonGalleryPhoto::nodeUid)
-                                    (
-                                        favorites +
-                                            nodeUids.map { nodeUid ->
-                                                knownPhotos[nodeUid] ?: ProtonGalleryPhoto(
-                                                    nodeUid = nodeUid,
-                                                    captureTimeEpochSeconds = 0L,
-                                                    hasThumbnail = storedThumbnails.getValue(nodeUid),
-                                                )
-                                            }
-                                    ).distinctBy(ProtonGalleryPhoto::nodeUid)
-                                        .sortedByDescending(ProtonGalleryPhoto::captureTimeEpochSeconds)
+                                    ProtonNewestFirstListing.insert(favorites, additions)
                                 } else {
                                     favorites.filterNot { it.nodeUid in nodeUids }
                                 }
@@ -387,6 +374,21 @@ internal class ProtonTimelineRepository
                     // A listing that was never loaded has no file to keep in step.
                     if (favorites.hasLoaded) cache.writeTag(userId.id, ProtonMediaTag.FAVORITES, favorites.photos)
                 }
+            }
+        }
+
+        /** The favourites entries for [nodeUids], or null when the published state is not [userId]'s. */
+        private fun favoriteEntries(
+            userId: UserId,
+            nodeUids: Set<String>,
+        ): List<ProtonGalleryPhoto>? {
+            val state = mutableState.value.takeIf { it.userId == userId.id } ?: return null
+            return nodeUids.map { nodeUid ->
+                timelineIndex.find(state.photos, nodeUid) ?: ProtonGalleryPhoto(
+                    nodeUid = nodeUid,
+                    captureTimeEpochSeconds = 0L,
+                    hasThumbnail = cache.thumbnailExists(userId.id, nodeUid),
+                )
             }
         }
 
