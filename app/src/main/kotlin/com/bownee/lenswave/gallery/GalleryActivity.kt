@@ -65,7 +65,8 @@ import javax.inject.Inject
 @AndroidEntryPoint
 class GalleryActivity :
     FragmentActivity(),
-    UpdateAvailableDialogFragment.Listener {
+    UpdateAvailableDialogFragment.Listener,
+    TrashConfirmationDialogFragment.Listener {
     @Inject lateinit var accountManager: AccountManager
 
     @Inject lateinit var authOrchestrator: AuthOrchestrator
@@ -152,11 +153,7 @@ class GalleryActivity :
                 onConnectProton = ::connectProton,
                 onDisconnectProton = viewModel::disconnectProton,
             )
-        deletionCoordinator =
-            GalleryDeletionCoordinator(
-                activity = this,
-                onMoveToTrash = viewModel::trashPhotos,
-            )
+        deletionCoordinator = GalleryDeletionCoordinator(activity = this)
         buildInterface()
         onBackPressedDispatcher.addCallback(
             this,
@@ -180,6 +177,7 @@ class GalleryActivity :
 
     override fun onDestroy() {
         if (this::screen.isInitialized) screen.dispose()
+        settingsPresenter.dispose()
         unregisterReceiver(timeChangeReceiver)
         authCoordinator.unregister()
         super.onDestroy()
@@ -212,6 +210,8 @@ class GalleryActivity :
     override fun onUpdateRequested() = updatePresenter.onUpdateRequested()
 
     override fun onUpdateSnoozed(versionName: String) = updatePresenter.onUpdateSnoozed(versionName)
+
+    override fun onTrashConfirmed(nodeUids: List<String>) = viewModel.trashPhotos(nodeUids)
 
     private fun buildInterface() {
         screen =

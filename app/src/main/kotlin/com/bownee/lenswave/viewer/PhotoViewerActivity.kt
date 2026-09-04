@@ -1,7 +1,6 @@
 package com.bownee.lenswave.viewer
 
 import android.app.Activity
-import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -38,6 +37,7 @@ import com.bownee.lenswave.gallery.PhotoDeletionPolicy
 import com.bownee.lenswave.gallery.ProtonOriginalMediaSource
 import com.bownee.lenswave.gallery.ProtonThumbnailImageSource
 import com.bownee.lenswave.gallery.StoredGalleryNavigation
+import com.bownee.lenswave.gallery.TrashConfirmationDialogFragment
 import com.bownee.lenswave.metadata.PhotoMetadataHints
 import com.bownee.lenswave.metadata.PhotoMetadataReader
 import dagger.hilt.android.AndroidEntryPoint
@@ -64,7 +64,9 @@ import kotlin.math.roundToInt
  * [ViewerVideoController].
  */
 @AndroidEntryPoint
-class PhotoViewerActivity : FragmentActivity() {
+class PhotoViewerActivity :
+    FragmentActivity(),
+    TrashConfirmationDialogFragment.Listener {
     @Inject lateinit var originalMedia: ProtonOriginalMediaSource
 
     @Inject lateinit var thumbnailSource: ProtonThumbnailImageSource
@@ -1054,18 +1056,27 @@ class PhotoViewerActivity : FragmentActivity() {
     }
 
     private fun confirmTrashProtonPhoto() {
-        AlertDialog
-            .Builder(this)
-            .setTitle(R.string.move_to_proton_trash_question)
-            .setMessage(R.string.recover_from_proton_trash)
-            .setNegativeButton(R.string.cancel, null)
-            .setPositiveButton(R.string.move_to_trash) { _, _ -> trashProtonPhoto() }
-            .show()
+        if (supportFragmentManager.isStateSaved ||
+            supportFragmentManager.findFragmentByTag(TrashConfirmationDialogFragment.TAG) != null
+        ) {
+            return
+        }
+        TrashConfirmationDialogFragment
+            .create(listOf(request.nodeUid), singlePhoto = true)
+            .show(supportFragmentManager, TrashConfirmationDialogFragment.TAG)
+    }
+
+    /** The dialog may have been answered on a recreated activity; the photo it named is the one to trash. */
+    override fun onTrashConfirmed(nodeUids: List<String>) {
+        val target = navigationRequests.firstOrNull { it.nodeUid in nodeUids } ?: return
+        trashProtonPhoto(target)
     }
 
     /** The call runs in [mutationCoordinator]; its outcome comes back through [applyMutationOutcome]. */
-    private fun trashProtonPhoto() {
-        if (mutationCoordinator.trash(UserId(request.userId), request)) setActionsEnabled(false)
+    private fun trashProtonPhoto(target: PhotoRequest) {
+        if (mutationCoordinator.trash(UserId(target.userId), target) && target.stableId == request.stableId) {
+            setActionsEnabled(false)
+        }
     }
 
     private fun applySystemInsets() {

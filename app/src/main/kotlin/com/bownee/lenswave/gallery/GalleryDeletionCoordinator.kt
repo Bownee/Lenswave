@@ -1,18 +1,17 @@
 package com.bownee.lenswave.gallery
 
-import android.app.AlertDialog
 import android.widget.Toast
 import androidx.fragment.app.FragmentActivity
 import com.bownee.lenswave.R
 
 /**
- * Confirms a gallery selection's move to Proton Trash and reports the outcome. The mutation itself
- * runs in [GalleryViewModel], so a rotation while it is in flight neither cancels it nor loses its
- * result; this class only owns the dialog and the toasts.
+ * Confirms a gallery selection's move to Proton Trash and reports the outcome. The confirmation
+ * is a [TrashConfirmationDialogFragment] whose answer reaches the activity's
+ * [TrashConfirmationDialogFragment.Listener]; the mutation itself runs in [GalleryViewModel], so
+ * a rotation while it is in flight neither cancels it nor loses its result.
  */
 internal class GalleryDeletionCoordinator(
     private val activity: FragmentActivity,
-    private val onMoveToTrash: (nodeUids: List<String>) -> Unit,
 ) {
     fun delete(assets: List<GalleryAsset>) {
         when (val decision = PhotoDeletionPolicy.decide(assets.map { it.toPhotoTarget() })) {
@@ -50,14 +49,15 @@ internal class GalleryDeletionCoordinator(
     }
 
     private fun confirmMoveToTrash(photos: List<PhotoTarget>) {
-        val count = photos.size
-        AlertDialog
-            .Builder(activity)
-            .setTitle(q(R.plurals.move_to_proton_trash_count, count, count))
-            .setMessage(q(R.plurals.recover_from_proton_trash_count, count))
-            .setNegativeButton(R.string.cancel, null)
-            .setPositiveButton(R.string.move_to_trash) { _, _ -> onMoveToTrash(photos.map(PhotoTarget::nodeUid)) }
-            .show()
+        val fragmentManager = activity.supportFragmentManager
+        if (fragmentManager.isStateSaved ||
+            fragmentManager.findFragmentByTag(TrashConfirmationDialogFragment.TAG) != null
+        ) {
+            return
+        }
+        TrashConfirmationDialogFragment
+            .create(photos.map(PhotoTarget::nodeUid), singlePhoto = false)
+            .show(fragmentManager, TrashConfirmationDialogFragment.TAG)
     }
 
     private fun showMessage(
