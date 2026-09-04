@@ -163,9 +163,7 @@ class PhotoViewerActivity :
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // Set before any content: a secure window keeps the photos out of screenshots and recordings.
-        if (privacySettings.blockScreenshots) {
-            window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
-        }
+        applySecureWindowFlag()
         restoreNavigation(savedInstanceState)
         restoreNavigationSource()
         // A restored window may already have its edge near; the same check a swipe makes.
@@ -382,6 +380,20 @@ class PhotoViewerActivity :
     override fun onStart() {
         super.onStart()
         video.resume()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // A toggle in the settings takes effect on the way back, without recreating the viewer.
+        applySecureWindowFlag()
+    }
+
+    private fun applySecureWindowFlag() {
+        if (privacySettings.blockScreenshots) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        }
     }
 
     override fun onStop() {
