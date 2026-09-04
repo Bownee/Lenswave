@@ -279,6 +279,7 @@ class ProtonPhotoGateway
         private inner class ThumbnailWork : ProtonThumbnailWorkGateway {
             override suspend fun downloadNextQueuedThumbnailBatch(
                 userId: UserId,
+                allowPreviews: Boolean,
                 onProgress: suspend (ProtonThumbnailWorkProgress) -> Unit,
             ): ProtonThumbnailQueueStep =
                 withContext(Dispatchers.IO) {
@@ -290,6 +291,7 @@ class ProtonPhotoGateway
                                         userId.id,
                                         ProtonThumbnailDownloadPolicy.BACKGROUND_CLAIM_SIZE,
                                     ),
+                                allowPreviews = allowPreviews,
                                 claimPreviews = {
                                     previewQueue.claimReady(
                                         userId.id,
@@ -312,6 +314,7 @@ class ProtonPhotoGateway
                                     previewsPending = previewQueue.hasPending(userId.id),
                                     thumbnailRetryDelayMillis = thumbnailQueue.retryDelayMillis(userId.id),
                                     previewRetryDelayMillis = previewQueue.retryDelayMillis(userId.id),
+                                    allowPreviews = allowPreviews,
                                 )
                             }
                         }

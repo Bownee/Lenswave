@@ -39,6 +39,38 @@ class ProtonBackgroundBatchPolicyTest {
         }
 
     @Test
+    fun previewsAreNotClaimedWhileTheyWaitForTheCharger() =
+        runBlocking {
+            var previewClaims = 0
+            val batch =
+                ProtonBackgroundBatchPolicy.choose(thumbnailBatch = emptyList(), allowPreviews = false) {
+                    previewClaims++
+                    entries("preview")
+                }
+
+            assertNull(batch)
+            assertEquals(0, previewClaims)
+        }
+
+    @Test
+    fun deferredPreviewsAreFlaggedButNotPending() {
+        val idle =
+            ProtonBackgroundBatchPolicy.idle(
+                thumbnailsPending = false,
+                previewsPending = true,
+                previewRetryDelayMillis = 5_000L,
+                allowPreviews = false,
+            )
+
+        assertFalse(idle.hasPending)
+        assertTrue(idle.previewsDeferred)
+        assertNull(idle.retryAfterMillis)
+        assertFalse(
+            ProtonBackgroundBatchPolicy.idle(thumbnailsPending = true, previewsPending = false).previewsDeferred,
+        )
+    }
+
+    @Test
     fun idleReportsPendingWorkFromEitherQueue() {
         assertFalse(ProtonBackgroundBatchPolicy.idle(thumbnailsPending = false, previewsPending = false).hasPending)
         assertTrue(ProtonBackgroundBatchPolicy.idle(thumbnailsPending = true, previewsPending = false).hasPending)

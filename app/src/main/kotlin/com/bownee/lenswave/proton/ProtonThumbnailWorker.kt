@@ -1,6 +1,9 @@
 package com.bownee.lenswave.proton
 
+import android.app.ActivityManager
 import android.content.Context
+import android.os.BatteryManager
+import android.os.SystemClock
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
@@ -36,6 +39,7 @@ class ProtonThumbnailWorker(
         val repository = entryPoint.thumbnailWork()
         val attempt = (runAttemptCount + 1).coerceAtMost(ProtonThumbnailWorkPolicy.MAX_ATTEMPTS)
         var statusPublished = false
+        var networkMonitor: ProtonThumbnailNetworkMonitor? = null
         return try {
             val requestedUserId = UserId(userId)
             val session =
@@ -48,11 +52,14 @@ class ProtonThumbnailWorker(
                 return Result.failure()
             }
             val initialProgress = repository.thumbnailWorkProgress(requestedUserId)
-            if (!initialProgress.hasPendingWork) {
+            var previewsDeferred = false
+            if (!ProtonThumbnailWorkPolicy.hasPendingWork(initialProgress, previewsAllowed())) {
+                val previewsWaiting = initialProgress.previewsPending > 0
+                if (previewsWaiting) entryPoint.thumbnailScheduler().enqueueWhileCharging(requestedUserId)
                 return resolve(repository)
             }
-            val networkMonitor = ProtonThumbnailNetworkMonitor(applicationContext)
-            if (!networkMonitor.awaitValidatedUnmeteredNetwork(NETWORK_READY_TIMEOUT_MILLIS)) {
+            val monitor = ProtonThumbnailNetworkMonitor(applicationContext).also { networkMonitor = it }
+            if (!monitor.awaitValidatedUnmeteredNetwork(NETWORK_READY_TIMEOUT_MILLIS)) {
                 return resolve(
                     repository,
                     ProtonThumbnailWorkIssue.INCOMPLETE,
@@ -60,7 +67,7 @@ class ProtonThumbnailWorker(
                 )
             }
             val foregroundInfoFactory = ProtonThumbnailForegroundInfoFactory(applicationContext)
-            publishForeground(foregroundInfoFactory, initialProgress.notificationProgress())
+            publishForeground(foregroundInfoFactory, initialProgress.notificationProgress(), force = true)
             repository.updateThumbnailWorkStatus(
                 ProtonThumbnailWorkStatus.Running(attempt, ProtonThumbnailWorkPolicy.MAX_ATTEMPTS),
             )
@@ -73,14 +80,17 @@ class ProtonThumbnailWorker(
                     var sawFailure = false
                     var runIssue: ProtonThumbnailWorkIssue? = null
                     while (true) {
-                        if (!networkMonitor.awaitValidatedUnmeteredNetwork(NETWORK_READY_TIMEOUT_MILLIS)) {
+                        if (!monitor.awaitValidatedUnmeteredNetwork(NETWORK_READY_TIMEOUT_MILLIS)) {
                             completedWithinTime = true
                             runIssue = ProtonThumbnailWorkIssue.INCOMPLETE
                             break
                         }
                         when (
                             val step =
-                                repository.downloadNextQueuedThumbnailBatch(requestedUserId) { progress ->
+                                repository.downloadNextQueuedThumbnailBatch(
+                                    requestedUserId,
+                                    previewsAllowed(),
+                                ) { progress ->
                                     publishForeground(foregroundInfoFactory, progress.notificationProgress())
                                 }
                         ) {
@@ -95,12 +105,13 @@ class ProtonThumbnailWorker(
                             is ProtonThumbnailQueueStep.Idle -> {
                                 val wait = ProtonBackgroundBatchPolicy.idleWaitMillis(step, MAX_IDLE_WAIT_MILLIS)
                                 if (wait != null) {
-                                    // Backed-off entries come due soon: sleeping here keeps the run
-                                    // (and its foreground service) alive instead of relying on a
-                                    // WorkManager retry that cannot start from the background.
+                                    // A retry due within minutes is worth sleeping for: it keeps the
+                                    // run alive instead of relying on a WorkManager retry that cannot
+                                    // start from the background. Longer backoffs end the run.
                                     delay(wait + IDLE_WAIT_SLACK_MILLIS)
                                     continue
                                 }
+                                previewsDeferred = step.previewsDeferred
                                 completedWithinTime = true
                                 runIssue =
                                     when {
@@ -117,7 +128,9 @@ class ProtonThumbnailWorker(
             publishForeground(
                 foregroundInfoFactory,
                 repository.thumbnailWorkProgress(requestedUserId).notificationProgress(),
+                force = true,
             )
+            if (previewsDeferred) entryPoint.thumbnailScheduler().enqueueWhileCharging(requestedUserId)
             resolve(
                 repository,
                 if (completedWithinTime) issue else ProtonThumbnailWorkIssue.TIMEOUT,
@@ -131,24 +144,48 @@ class ProtonThumbnailWorker(
         } catch (error: Throwable) {
             LenswaveDiagnostics.reportFailure(LenswaveOperation.THUMBNAIL_WORKER, error)
             resolve(repository, ProtonThumbnailWorkIssue.ERROR, publishStatus = statusPublished)
+        } finally {
+            networkMonitor?.close()
         }
     }
 
     private var foregroundUnavailable = false
+    private var lastForegroundPublishMillis: Long? = null
+
+    /**
+     * Previews are a gigabyte for a large library, so they wait for the charger unless the app is
+     * on screen; thumbnails are small enough to download whenever unmetered network is available.
+     */
+    private fun previewsAllowed(): Boolean =
+        ProtonThumbnailWorkPolicy.previewsAllowed(
+            charging = applicationContext.getSystemService(BatteryManager::class.java)?.isCharging == true,
+            appVisible =
+                ActivityManager
+                    .RunningAppProcessInfo()
+                    .also(ActivityManager::getMyMemoryState)
+                    .importance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND,
+        )
 
     /**
      * Promotes the run to a foreground service so it can outlive the ten-minute background limit.
      * Android 12+ refuses that while the app is in the background, which is exactly when retries
      * fire; rather than failing the attempt, the run continues without a notification and lets
      * the platform stop it at the background limit, after which WorkManager reschedules it.
+     *
+     * Progress updates are rate limited: re-posting the notification after every few files is
+     * wasted work for the system and the battery.
      */
     private suspend fun publishForeground(
         factory: ProtonThumbnailForegroundInfoFactory,
         progress: ProtonThumbnailNotificationProgress,
+        force: Boolean = false,
     ) {
         if (foregroundUnavailable) return
+        val now = SystemClock.elapsedRealtime()
+        if (!ProtonThumbnailWorkPolicy.shouldPublishProgress(lastForegroundPublishMillis, now, force)) return
         try {
             setForeground(factory.create(workerId = id, progress = progress))
+            lastForegroundPublishMillis = now
         } catch (error: IllegalStateException) {
             if (!ProtonThumbnailWorkPolicy.isForegroundStartRefusal(error)) throw error
             foregroundUnavailable = true
@@ -186,16 +223,23 @@ class ProtonThumbnailWorker(
         fun thumbnailWork(): ProtonThumbnailWorkGateway
 
         fun accountSessionManager(): ProtonAccountSessionManager
+
+        fun thumbnailScheduler(): ProtonThumbnailScheduler
     }
 
     companion object {
         const val KEY_USER_ID = "user-id"
         private const val SESSION_READY_TIMEOUT_MILLIS = 30_000L
         private const val NETWORK_READY_TIMEOUT_MILLIS = 5_000L
-        private const val MAX_IDLE_WAIT_MILLIS = 16L * 60L * 1_000L
+
+        /** Sleeping longer than this inside a foreground service would keep the phone awake for nothing. */
+        private const val MAX_IDLE_WAIT_MILLIS = 2L * 60L * 1_000L
         private const val IDLE_WAIT_SLACK_MILLIS = 1_000L
 
-        fun request(userId: UserId): OneTimeWorkRequest =
+        fun request(
+            userId: UserId,
+            requiresCharging: Boolean = false,
+        ): OneTimeWorkRequest =
             OneTimeWorkRequestBuilder<ProtonThumbnailWorker>()
                 .setInputData(workDataOf(KEY_USER_ID to userId.id))
                 .setConstraints(
@@ -207,6 +251,7 @@ class ProtonThumbnailWorker(
                         .setRequiredNetworkType(NetworkType.NOT_REQUIRED)
                         .setRequiresBatteryNotLow(true)
                         .setRequiresStorageNotLow(true)
+                        .setRequiresCharging(requiresCharging)
                         .build(),
                 ).setBackoffCriteria(BackoffPolicy.LINEAR, 30L, TimeUnit.SECONDS)
                 .build()
@@ -228,6 +273,7 @@ internal data class ProtonThumbnailWorkResolution(
 internal object ProtonThumbnailWorkPolicy {
     const val MAX_ATTEMPTS = 25
     const val MAX_RUN_MILLIS = 5L * 60L * 60L * 1_000L + 30L * 60L * 1_000L
+    const val PROGRESS_PUBLISH_INTERVAL_MILLIS = 1_500L
 
     /**
      * `ForegroundServiceStartNotAllowedException` (API 31+) extends IllegalStateException; it is
@@ -235,6 +281,27 @@ internal object ProtonThumbnailWorkPolicy {
      */
     fun isForegroundStartRefusal(error: Throwable): Boolean =
         error::class.java.simpleName == "ForegroundServiceStartNotAllowedException"
+
+    /** Previews wait for the charger unless the app is on screen; thumbnails never wait. */
+    fun previewsAllowed(
+        charging: Boolean,
+        appVisible: Boolean,
+    ): Boolean = charging || appVisible
+
+    fun hasPendingWork(
+        progress: ProtonThumbnailWorkProgress,
+        allowPreviews: Boolean,
+    ): Boolean = progress.pending > 0 || (allowPreviews && progress.previewsPending > 0)
+
+    /** The notification is re-posted at most every [PROGRESS_PUBLISH_INTERVAL_MILLIS] unless forced. */
+    fun shouldPublishProgress(
+        lastPublishedAtMillis: Long?,
+        nowMillis: Long,
+        force: Boolean,
+    ): Boolean =
+        force ||
+            lastPublishedAtMillis == null ||
+            nowMillis - lastPublishedAtMillis >= PROGRESS_PUBLISH_INTERVAL_MILLIS
 
     fun resolve(
         runAttemptCount: Int,

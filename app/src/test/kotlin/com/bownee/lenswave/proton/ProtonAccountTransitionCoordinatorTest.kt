@@ -60,6 +60,10 @@ class ProtonAccountTransitionCoordinatorTest {
             events += "enqueue:${userId.id}"
         }
 
+        override fun enqueueWhileCharging(userId: UserId) {
+            events += "enqueue-charging:${userId.id}"
+        }
+
         override suspend fun resume(userId: UserId) {
             events += "resume:${userId.id}"
         }

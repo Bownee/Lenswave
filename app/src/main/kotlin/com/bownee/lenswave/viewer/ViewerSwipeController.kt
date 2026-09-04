@@ -163,9 +163,14 @@ internal class ViewerSwipeController(
         hidePeek()
     }
 
+    /** Direction of the last navigation: -1, 1, or 0 before any. Drives original prefetching. */
+    var lastNavigationOffset: Int = 0
+        private set
+
     fun navigatePhoto(offset: Int) {
         if (host.gesturesBlocked) return
         val adjacent = adjacentTo(host.request.stableId, offset) ?: return
+        lastNavigationOffset = Integer.signum(offset)
 
         host.beginNavigation()
         mediaTransform.cancelMediaAnimations()

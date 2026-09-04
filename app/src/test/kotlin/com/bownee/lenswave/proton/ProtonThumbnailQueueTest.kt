@@ -278,6 +278,28 @@ class ProtonThumbnailQueueTest {
             assertEquals(null, store.previewEntries[USER_ID])
         }
 
+    @Test
+    fun anEntryIsDroppedAfterTheLastAllowedRetry() =
+        runBlocking {
+            val store = FakeStore()
+            val clock = FakeClock()
+            val queue = ProtonThumbnailQueue(store, clock)
+            queue.replaceSource(USER_ID, "timeline", candidates("stubborn"))
+
+            repeat(ProtonThumbnailQueue.MAX_RETRY_COUNT - 1) {
+                assertEquals("stubborn", queue.claimReady(USER_ID, limit = 1).single().nodeUid)
+                queue.settle(USER_ID, emptySet(), setOf("stubborn"))
+                clock.value += 60L * 60L * 1_000L
+            }
+            assertEquals(1, queue.pendingCount(USER_ID))
+
+            queue.claimReady(USER_ID, limit = 1)
+            queue.settle(USER_ID, emptySet(), setOf("stubborn"))
+
+            assertEquals(0, queue.pendingCount(USER_ID))
+            assertEquals(emptyList<ProtonThumbnailQueueEntry>(), store.entries.getValue(USER_ID))
+        }
+
     private class FakeStore : ProtonThumbnailQueueStore {
         val entries = mutableMapOf<String, List<ProtonThumbnailQueueEntry>>()
         val previewEntries = mutableMapOf<String, List<ProtonThumbnailQueueEntry>>()

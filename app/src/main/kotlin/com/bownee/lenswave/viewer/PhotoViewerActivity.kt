@@ -833,12 +833,15 @@ class PhotoViewerActivity : FragmentActivity() {
     }
 
     /**
-     * Decrypts the neighbours' cached originals ahead of a swipe so the next photo opens from a
-     * ready file. Nothing is downloaded: only originals already in the encrypted cache qualify.
+     * Decrypts the next photo's cached original ahead of a swipe so it opens from a ready file.
+     * Only the direction of travel is prepared; on first open both neighbours are. Nothing is
+     * downloaded: only originals already in the encrypted cache qualify.
      */
     private fun prefetchAdjacentOriginals(stableId: String) {
+        val offsets = if (swipe.lastNavigationOffset == 0) listOf(-1, 1) else listOf(swipe.lastNavigationOffset)
         val neighbours =
-            listOfNotNull(swipe.adjacentTo(stableId, -1), swipe.adjacentTo(stableId, 1))
+            offsets
+                .mapNotNull { offset -> swipe.adjacentTo(stableId, offset) }
                 .filter { it.mediaKind != MediaKind.VIDEO }
         if (neighbours.isEmpty()) return
         lifecycleScope.launch(Dispatchers.IO) {

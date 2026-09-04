@@ -12,6 +12,13 @@ All notable changes to Lenswave. The format follows [Keep a Changelog](https://k
   re-enumerates the visible section quietly once its cached listing is older than 15 minutes
   (30 minutes for the album list). Returning from the background triggers an immediate check.
 
+- Battery: the download worker no longer sleeps inside its foreground service for more than two
+  minutes waiting on retries, gives up on a photo after six failed attempts until the next sync,
+  re-posts its notification at most every 1.5 seconds, keeps one network callback per run instead
+  of one per batch, and previews wait for the charger unless the app is on screen (a
+  charging-only run picks them up). The viewer prefetches the next original only in the direction
+  you are swiping.
+
 ### Fixed
 - The Proton session database is now keyed with the stored random passphrase. Earlier builds
   zeroed the passphrase before the database was opened, so it was effectively encrypted with a

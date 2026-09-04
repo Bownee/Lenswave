@@ -16,6 +16,9 @@ import javax.inject.Singleton
 interface ProtonThumbnailScheduler {
     fun enqueue(userId: UserId)
 
+    /** Queues a run that starts once the phone is charging, for the previews a normal run deferred. */
+    fun enqueueWhileCharging(userId: UserId)
+
     suspend fun resume(userId: UserId)
 
     suspend fun restart(userId: UserId)
@@ -37,6 +40,14 @@ class ProtonThumbnailWorkScheduler
             )
         }
 
+        override fun enqueueWhileCharging(userId: UserId) {
+            workManager.enqueueUniqueWork(
+                ProtonWorkNames.thumbnailsWhileCharging(userId),
+                ExistingWorkPolicy.KEEP,
+                ProtonThumbnailWorker.request(userId, requiresCharging = true),
+            )
+        }
+
         override suspend fun resume(userId: UserId) {
             withContext(Dispatchers.IO) {
                 val workName = ProtonWorkNames.thumbnails(userId)
@@ -54,6 +65,7 @@ class ProtonThumbnailWorkScheduler
 
         override suspend fun cancelAndAwait(userId: UserId) {
             withContext(Dispatchers.IO) {
+                workManager.cancelUniqueWork(ProtonWorkNames.thumbnailsWhileCharging(userId)).result.get()
                 workManager.cancelUniqueWork(ProtonWorkNames.thumbnails(userId)).result.get()
             }
         }

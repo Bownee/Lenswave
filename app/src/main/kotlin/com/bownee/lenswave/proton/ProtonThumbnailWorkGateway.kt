@@ -8,8 +8,10 @@ import me.proton.core.domain.entity.UserId
 
 /** The slice of [ProtonPhotoGateway] that the background thumbnail worker drives. */
 internal interface ProtonThumbnailWorkGateway {
+    /** [allowPreviews] false serves thumbnails only and reports deferred previews through the idle step. */
     suspend fun downloadNextQueuedThumbnailBatch(
         userId: UserId,
+        allowPreviews: Boolean,
         onProgress: suspend (ProtonThumbnailWorkProgress) -> Unit,
     ): ProtonThumbnailQueueStep
 

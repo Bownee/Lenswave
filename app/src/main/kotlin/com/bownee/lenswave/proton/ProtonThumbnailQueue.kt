@@ -73,6 +73,8 @@ internal sealed interface ProtonThumbnailQueueStep {
     data class Idle(
         val hasPending: Boolean,
         val retryAfterMillis: Long? = null,
+        /** Previews are waiting for the charger; not pending for this run, but a charging run is due. */
+        val previewsDeferred: Boolean = false,
     ) : ProtonThumbnailQueueStep
 }
 
@@ -186,7 +188,11 @@ internal class ProtonThumbnailQueue(
                 .onEach { entry -> claimed += entry.nodeUid }
         }
 
-    /** Removes successful entries and reschedules failed ones with backoff. */
+    /**
+     * Removes successful entries and reschedules failed ones with backoff. An entry that has
+     * failed [MAX_RETRY_COUNT] times is dropped until the next sync queues it afresh, so one bad
+     * photo cannot keep the worker retrying for days.
+     */
     suspend fun settle(
         userId: String,
         successfulNodeUids: Set<String>,
@@ -199,9 +205,15 @@ internal class ProtonThumbnailQueue(
             val entries = entries(userId)
             val completed = successfulNodeUids.mapNotNull(entries::remove)
             val now = clock.nowMillis()
+            var dropped = 0
             failedNodeUids.forEach { nodeUid ->
                 val entry = entries[nodeUid] ?: return@forEach
                 val retryCount = entry.retryCount + 1
+                if (retryCount >= MAX_RETRY_COUNT) {
+                    entries.remove(nodeUid)
+                    dropped++
+                    return@forEach
+                }
                 entries[nodeUid] =
                     entry.copy(
                         retryCount = retryCount,
@@ -213,7 +225,7 @@ internal class ProtonThumbnailQueue(
                 claimed.removeAll(settled)
                 if (claimed.isEmpty()) claimedNodeUids.remove(userId)
             }
-            if (completed.isNotEmpty() || failedNodeUids.any(entries::containsKey)) {
+            if (completed.isNotEmpty() || dropped > 0 || failedNodeUids.any(entries::containsKey)) {
                 persist(userId, entries)
             }
             completed
@@ -274,11 +286,13 @@ internal class ProtonThumbnailQueue(
         return (BASE_RETRY_MILLIS * multiplier).coerceAtMost(MAX_RETRY_MILLIS)
     }
 
-    private companion object {
-        const val BASE_RETRY_MILLIS = 30_000L
-        const val MAX_RETRY_MILLIS = 15L * 60L * 1_000L
-        const val MAX_RETRY_SHIFT = 5
-        val NEWEST_FIRST =
+    companion object {
+        /** Six failures span roughly half an hour of backoff before an entry is given up on. */
+        const val MAX_RETRY_COUNT = 6
+        private const val BASE_RETRY_MILLIS = 30_000L
+        private const val MAX_RETRY_MILLIS = 15L * 60L * 1_000L
+        private const val MAX_RETRY_SHIFT = 5
+        private val NEWEST_FIRST =
             compareByDescending(ProtonThumbnailQueueEntry::captureTimeEpochSeconds)
                 .thenBy(ProtonThumbnailQueueEntry::nodeUid)
     }

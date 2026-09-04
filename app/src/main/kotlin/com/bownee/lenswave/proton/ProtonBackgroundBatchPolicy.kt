@@ -14,14 +14,16 @@ internal data class ProtonBackgroundBatch(
 internal object ProtonBackgroundBatchPolicy {
     /**
      * Returns the thumbnail batch when it has entries; otherwise claims previews through
-     * [claimPreviews], which is only invoked when no thumbnail is ready. Null means nothing is
-     * ready right now.
+     * [claimPreviews], which is only invoked when no thumbnail is ready and [allowPreviews] holds.
+     * Null means nothing is ready right now.
      */
     suspend fun choose(
         thumbnailBatch: List<ProtonThumbnailQueueEntry>,
+        allowPreviews: Boolean = true,
         claimPreviews: suspend () -> List<ProtonThumbnailQueueEntry>,
     ): ProtonBackgroundBatch? {
         if (thumbnailBatch.isNotEmpty()) return ProtonBackgroundBatch(ProtonQueueName.THUMBNAILS, thumbnailBatch)
+        if (!allowPreviews) return null
         val previewBatch = claimPreviews()
         if (previewBatch.isNotEmpty()) return ProtonBackgroundBatch(ProtonQueueName.PREVIEWS, previewBatch)
         return null
@@ -30,17 +32,25 @@ internal object ProtonBackgroundBatchPolicy {
     /**
      * Idle only reports "nothing left" when both queues are empty, so deferred retries keep the
      * worker alive; [ProtonThumbnailQueueStep.Idle.retryAfterMillis] says how soon the earliest
-     * backed-off entry across both queues can be claimed again.
+     * backed-off entry across both queues can be claimed again. Previews that wait for the
+     * charger ([allowPreviews] false) are not pending work for this run but are flagged as
+     * deferred so the caller can schedule a charging run.
      */
     fun idle(
         thumbnailsPending: Boolean,
         previewsPending: Boolean,
         thumbnailRetryDelayMillis: Long? = null,
         previewRetryDelayMillis: Long? = null,
+        allowPreviews: Boolean = true,
     ): ProtonThumbnailQueueStep.Idle =
         ProtonThumbnailQueueStep.Idle(
-            hasPending = thumbnailsPending || previewsPending,
-            retryAfterMillis = listOfNotNull(thumbnailRetryDelayMillis, previewRetryDelayMillis).minOrNull(),
+            hasPending = thumbnailsPending || (allowPreviews && previewsPending),
+            retryAfterMillis =
+                listOfNotNull(
+                    thumbnailRetryDelayMillis,
+                    previewRetryDelayMillis.takeIf { allowPreviews },
+                ).minOrNull(),
+            previewsDeferred = !allowPreviews && previewsPending,
         )
 
     /**

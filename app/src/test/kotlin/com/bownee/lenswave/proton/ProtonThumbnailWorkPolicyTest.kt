@@ -1,6 +1,7 @@
 package com.bownee.lenswave.proton
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -78,5 +79,36 @@ class ProtonThumbnailWorkPolicyTest {
             resolution.status,
         )
         assertEquals("stopped-error", resolution.diagnosticState)
+    }
+
+    @Test
+    fun `previews wait for the charger unless the app is on screen`() {
+        assertTrue(ProtonThumbnailWorkPolicy.previewsAllowed(charging = true, appVisible = false))
+        assertTrue(ProtonThumbnailWorkPolicy.previewsAllowed(charging = false, appVisible = true))
+        assertFalse(ProtonThumbnailWorkPolicy.previewsAllowed(charging = false, appVisible = false))
+    }
+
+    @Test
+    fun `deferred previews are not pending work for the run`() {
+        val previewsOnly = ProtonThumbnailWorkProgress(stored = 5, pending = 0, previewsPending = 3)
+
+        assertTrue(ProtonThumbnailWorkPolicy.hasPendingWork(previewsOnly, allowPreviews = true))
+        assertFalse(ProtonThumbnailWorkPolicy.hasPendingWork(previewsOnly, allowPreviews = false))
+        assertTrue(
+            ProtonThumbnailWorkPolicy.hasPendingWork(
+                ProtonThumbnailWorkProgress(stored = 5, pending = 1),
+                allowPreviews = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `progress notifications are rate limited unless forced`() {
+        val interval = ProtonThumbnailWorkPolicy.PROGRESS_PUBLISH_INTERVAL_MILLIS
+
+        assertTrue(ProtonThumbnailWorkPolicy.shouldPublishProgress(null, 10L, force = false))
+        assertFalse(ProtonThumbnailWorkPolicy.shouldPublishProgress(10L, 10L + interval - 1, force = false))
+        assertTrue(ProtonThumbnailWorkPolicy.shouldPublishProgress(10L, 10L + interval, force = false))
+        assertTrue(ProtonThumbnailWorkPolicy.shouldPublishProgress(10L, 11L, force = true))
     }
 }
