@@ -1,9 +1,14 @@
 package com.bownee.lenswave.gallery
 
 import android.app.Activity
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.os.Bundle
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.core.graphics.Insets
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
@@ -45,7 +50,10 @@ import com.bownee.lenswave.update.UpdateAvailableDialogFragment
 import com.bownee.lenswave.viewer.PhotoViewerActivity
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import me.proton.core.accountmanager.domain.AccountManager
@@ -93,6 +101,19 @@ class GalleryActivity :
 
     // The panel starts hidden, which is what a null empty state renders, so the first render can skip it.
     private var renderedEmptyState: GalleryEmptyState? = null
+
+    // Day headers depend on the device zone; a zone or clock change bumps this so the rows are regrouped.
+    private val groupingGeneration = MutableStateFlow(0)
+    private var renderedGrouping = 0
+    private val timeChangeReceiver =
+        object : BroadcastReceiver() {
+            override fun onReceive(
+                context: Context,
+                intent: Intent,
+            ) {
+                groupingGeneration.update { generation -> generation + 1 }
+            }
+        }
     private val scrollPositions = GalleryScrollPositionStore()
     private var pendingScrollRestore: GalleryDestination? = null
     private var safeBottom = 0
@@ -149,6 +170,7 @@ class GalleryActivity :
             },
         )
         authCoordinator.register()
+        registerTimeChangeReceiver()
         observeGalleryState()
         if (savedInstanceState == null && LenswaveApplication.isAppUpdateStartupEnabled()) {
             updatePresenter.checkForUpdate()
@@ -163,8 +185,19 @@ class GalleryActivity :
 
     override fun onDestroy() {
         if (this::screen.isInitialized) screen.dispose()
+        unregisterReceiver(timeChangeReceiver)
         authCoordinator.unregister()
         super.onDestroy()
+    }
+
+    /** System broadcasts reach a non-exported receiver; the platform resets the default zone before sending. */
+    private fun registerTimeChangeReceiver() {
+        val filter =
+            IntentFilter().apply {
+                addAction(Intent.ACTION_TIMEZONE_CHANGED)
+                addAction(Intent.ACTION_TIME_CHANGED)
+            }
+        ContextCompat.registerReceiver(this, timeChangeReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -207,7 +240,8 @@ class GalleryActivity :
     private fun observeGalleryState() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                viewModel.uiState.collectLatest(::render)
+                combine(viewModel.uiState, groupingGeneration) { state, generation -> state to generation }
+                    .collectLatest { (state, generation) -> render(state, generation) }
             }
         }
         lifecycleScope.launch {
@@ -224,9 +258,13 @@ class GalleryActivity :
      * restore) is written after the rows are on screen, so a cancelled render leaves no record of
      * a page the grid never showed, and the newer state's render always submits its rows.
      */
-    private suspend fun render(state: GalleryUiState) {
+    private suspend fun render(
+        state: GalleryUiState,
+        grouping: Int,
+    ) {
         val destinationChanged = renderedDestination != state.destination
-        val contentChanged = GalleryRenderPolicy.contentChanged(renderedContent, state.content)
+        val contentChanged =
+            GalleryRenderPolicy.contentChanged(renderedContent, state.content) || renderedGrouping != grouping
         screen.setRefreshing(state.isRefreshing)
         notificationPermissionPrompter.requestIfNeeded(protonConnected = state.isProtonConnected)
         updateThumbnailCacheIdentity(state.currentUserId)
@@ -244,6 +282,7 @@ class GalleryActivity :
             adapter.submitRows(rows)
             renderedDestination = state.destination
             renderedContent = state.content
+            renderedGrouping = grouping
         }
         currentUiState = state
         if (contentChanged || destinationChanged) restorePendingScrollPosition(state)
