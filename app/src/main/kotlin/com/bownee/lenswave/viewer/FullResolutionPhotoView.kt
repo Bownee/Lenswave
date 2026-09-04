@@ -32,7 +32,6 @@ import com.bownee.lenswave.metadata.PhotoMetadataHints
 import java.io.Closeable
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.abs
 import kotlin.math.ceil
@@ -598,26 +597,18 @@ class FullResolutionPhotoView
             zoomAnimator?.cancel()
             zoomAnimator = null
             recycleDetail()
-            baseBitmap?.recycle()
+            // A placeholder belongs to the preview cache and may be handed to the next viewer.
+            if (!basePlaceholder) baseBitmap?.recycle()
+            basePlaceholder = false
             baseBitmap = null
             loadFuture?.cancel(true)
             detailFuture?.cancel(false)
+            // The decoder is recycled on the detail thread, queued behind any tile still decoding:
+            // decodeRegion cannot be interrupted and recycling underneath it crashes natively, so
+            // the executor drains its queue instead of being torn down on a timer.
+            releaseDecoder()
             decoderExecutor.shutdownNow()
-            detailExecutor.shutdownNow()
-            val retiredDecoder = decoder
-            val retiredDescriptor = descriptor
-            decoder = null
-            descriptor = null
-            Thread {
-                decoderExecutor.awaitTermination(2, TimeUnit.SECONDS)
-                detailExecutor.awaitTermination(2, TimeUnit.SECONDS)
-                retiredDecoder?.recycle()
-                retiredDescriptor?.close()
-            }.apply {
-                name = "Lenswave-photo-decoder-cleanup"
-                isDaemon = true
-                start()
-            }
+            detailExecutor.shutdown()
         }
 
         /**
