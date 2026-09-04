@@ -64,9 +64,16 @@ internal class ProtonAlbumRepository
             userId: UserId,
             forceRemote: Boolean,
         ) = albumsSyncMutex.withLock {
-            val cached = cache.readAlbumsSnapshot(userId.id)
-            val existing = cached.orEmpty()
-            val hasCachedSnapshot = cached != null
+            // A loaded state is the cached listing plus every mark since; re-reading the index
+            // only to learn that costs a decrypt and a parse the sync policy often discards.
+            val current = mutableAlbumsState.value
+            val (existing, hasCachedSnapshot) =
+                if (current.userId == userId.id && current.hasLoaded) {
+                    current.albums to true
+                } else {
+                    val cached = cache.readAlbumsSnapshot(userId.id)
+                    cached.orEmpty() to (cached != null)
+                }
             snapshotSync.sync(
                 userId = userId.id,
                 source = ProtonSyncSource.ALBUMS,
@@ -112,9 +119,14 @@ internal class ProtonAlbumRepository
             album: ProtonAlbumReference,
             forceRemote: Boolean,
         ) = albumPhotosSyncMutex.withLock {
-            val cached = cache.readAlbumPhotosSnapshot(userId.id, album.nodeUid)
-            val existing = cached.orEmpty()
-            val hasCachedSnapshot = cached != null
+            val current = mutableAlbumPhotosState.value
+            val (existing, hasCachedSnapshot) =
+                if (current.userId == userId.id && current.albumUid == album.nodeUid && current.hasLoaded) {
+                    current.photos to true
+                } else {
+                    val cached = cache.readAlbumPhotosSnapshot(userId.id, album.nodeUid)
+                    cached.orEmpty() to (cached != null)
+                }
             snapshotSync.sync(
                 userId = userId.id,
                 source = ProtonSyncSource.ALBUM_PHOTOS,

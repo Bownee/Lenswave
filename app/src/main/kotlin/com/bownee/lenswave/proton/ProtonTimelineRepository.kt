@@ -56,9 +56,17 @@ internal class ProtonTimelineRepository
             userId: UserId,
             forceRemote: Boolean,
         ) = syncMutex.withLock {
-            val cached = cache.readTimelineSnapshot(userId.id)
-            val existing = cached.orEmpty()
-            val hasCachedSnapshot = cached != null
+            // The published timeline is the cached one plus every mark since, so a loaded state
+            // answers "what is cached" without decrypting and parsing the index again, which the
+            // sync policy then often decides was fresh anyway.
+            val current = mutableState.value
+            val (existing, hasCachedSnapshot) =
+                if (current.userId == userId.id && current.hasLoaded) {
+                    current.photos to true
+                } else {
+                    val cached = cache.readTimelineSnapshot(userId.id)
+                    cached.orEmpty() to (cached != null)
+                }
             snapshotSync.sync(
                 userId = userId.id,
                 source = ProtonSyncSource.TIMELINE,
@@ -105,9 +113,18 @@ internal class ProtonTimelineRepository
             tag: ProtonMediaTag,
             forceRemote: Boolean,
         ) = tagMutexes.getValue(tag).withLock {
-            val cached = cache.readTagSnapshot(userId.id, tag)
-            val existing = cached.orEmpty()
-            val hasCachedSnapshot = cached != null
+            val current =
+                mutableState.value
+                    .takeIf { state -> state.userId == userId.id }
+                    ?.tags
+                    ?.get(tag)
+            val (existing, hasCachedSnapshot) =
+                if (current?.hasLoaded == true) {
+                    current.photos to true
+                } else {
+                    val cached = cache.readTagSnapshot(userId.id, tag)
+                    cached.orEmpty() to (cached != null)
+                }
             snapshotSync.sync(
                 userId = userId.id,
                 source = ProtonSyncSource.TIMELINE,
