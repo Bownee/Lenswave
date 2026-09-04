@@ -240,6 +240,7 @@ class GalleryListAdapter(
             if (photo == null) {
                 cell.visibility = View.INVISIBLE
                 image.tag = null
+                thumbnailLoader.forget(cell.thumbnailTarget)
                 image.setImageDrawable(null)
                 cell.loading.visibility = View.GONE
                 cell.videoBadge.visibility = View.GONE
@@ -324,6 +325,7 @@ class GalleryListAdapter(
             if (album == null) {
                 cell.visibility = View.INVISIBLE
                 cell.image.tag = null
+                thumbnailLoader.forget(cell.thumbnailTarget)
                 cell.image.setImageDrawable(null)
                 cell.loading.visibility = View.GONE
                 continue
