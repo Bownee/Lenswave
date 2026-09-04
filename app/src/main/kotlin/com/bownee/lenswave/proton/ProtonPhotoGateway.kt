@@ -98,14 +98,14 @@ class ProtonPhotoGateway internal constructor(
     internal val thumbnailWork: ProtonThumbnailWorkGateway = ThumbnailWork()
 
     /**
-     * The transition holds only what the grid needs: the cached listings, loaded first so the
-     * grid gets them as early as possible. Wiping the previous process's plaintext copies
-     * ([ProtonSessionCache.prepareUser], thousands of unlinks on a large cache) follows inside
-     * the same transition: nothing may materialize a new plaintext copy until the wipe is
-     * done, and no session operation can start before the transition ends. Everything else
-     * runs afterwards as an ordinary session operation, so thumbnail reads and the account
-     * state stop waiting on cache trimming and queue reconciliation, and a disconnect still
-     * waits for that housekeeping to finish before it erases the user's files.
+     * The transition holds only what the grid needs: the cached listings, loaded so the grid
+     * gets them as early as possible. Everything else runs afterwards as an ordinary session
+     * operation, so thumbnail reads and the account state stop waiting on cache trimming and
+     * queue reconciliation, and a disconnect still waits for that housekeeping to finish before
+     * it erases the user's files. Wiping the previous process's plaintext copies is not part
+     * of the transition either (thousands of unlinks on a large cache held every thumbnail load
+     * back); the original store wipes them, once per process, before it materializes or reads
+     * a plaintext copy.
      */
     override suspend fun activate(userId: UserId) {
         val transitioned =
@@ -125,7 +125,6 @@ class ProtonPhotoGateway internal constructor(
                     albums.reset()
                     timeline.loadCached(userId)
                     albums.loadCached(userId)
-                    cache.prepareUser(userId.id)
                 }
             }
         // An activation the guard skipped (the account is already active) changes nothing

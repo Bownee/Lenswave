@@ -71,21 +71,18 @@ class ProtonPhotoGatewayTest {
     }
 
     @Test
-    fun `activation publishes the cached listings before the wipe and housekeeps afterwards`() =
+    fun `activation publishes the cached listings and housekeeps afterwards`() =
         testScope.runTest {
             val gateway = gateway()
-            cache.onPrepareUser = { userId ->
-                val published = timeline.state.value
-                events +=
-                    "published:$userId:${published.hasLoaded}:${published.photos.size}:${albums.albumsState.value.hasLoaded}"
-            }
 
             gateway.activate(USER_A)
 
-            assertEquals(
-                listOf("readTimeline:a", "readAlbums:a", "published:a:true:4:true", "prepareUser:a"),
-                events.toList(),
-            )
+            // The transition reads the listings and nothing else; the wipe of stale plaintext
+            // copies is the original store's and the trim is housekeeping.
+            assertEquals(listOf("readTimeline:a", "readAlbums:a"), events.toList())
+            assertTrue(timeline.state.value.hasLoaded)
+            assertEquals(4, timeline.state.value.photos.size)
+            assertTrue(albums.albumsState.value.hasLoaded)
             assertEquals(0, thumbnailQueue.pendingCount(USER_A.id))
             runCurrent()
             assertEquals("trimUser:a", events.last())
@@ -121,7 +118,6 @@ class ProtonPhotoGatewayTest {
                     "clearUser:a",
                     "readTimeline:b",
                     "readAlbums:b",
-                    "prepareUser:b",
                 ),
                 events.toList(),
             )
@@ -158,12 +154,12 @@ class ProtonPhotoGatewayTest {
             delay(100L)
 
             assertFalse("the switch must wait for the housekeeping of the previous account", switch.isCompleted)
-            assertFalse("prepareUser:b" in events)
+            assertFalse("readTimeline:b" in events)
             releaseTrim.countDown()
             switch.await()
             trimmedB.await()
             assertTrue(events.indexOf("trimUser:a") < events.indexOf("clearUser:a"))
-            assertTrue(events.indexOf("clearUser:a") < events.indexOf("prepareUser:b"))
+            assertTrue(events.indexOf("clearUser:a") < events.indexOf("readTimeline:b"))
         }
 
     @Test
@@ -444,7 +440,6 @@ class ProtonPhotoGatewayTest {
         val albumPhotos = mutableMapOf<Pair<String, String>, List<ProtonGalleryPhoto>>()
         val thumbnails: MutableSet<String> = Collections.synchronizedSet(mutableSetOf())
         val previews: MutableSet<String> = Collections.synchronizedSet(mutableSetOf())
-        var onPrepareUser: (String) -> Unit = {}
         var onTrimUser: (String) -> Unit = {}
         var onClearUser: (String) -> Unit = {}
         var loadThumbnail: (isActive: () -> Boolean) -> Bitmap? = { error("no thumbnail load expected") }
@@ -635,11 +630,6 @@ class ProtonPhotoGatewayTest {
             queueStore.clear(userId)
             onClearUser(userId)
             events += "clearUser:$userId"
-        }
-
-        override fun prepareUser(userId: String) {
-            onPrepareUser(userId)
-            events += "prepareUser:$userId"
         }
 
         override fun trimUser(userId: String) {

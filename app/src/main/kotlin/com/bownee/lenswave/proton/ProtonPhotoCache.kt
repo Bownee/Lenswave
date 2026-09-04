@@ -379,10 +379,6 @@ internal class ProtonPhotoCache
             originals.onStored(userId, target)
         }
 
-        override fun prepareUser(userId: String) {
-            originals.wipeStaleDecryptedCopies()
-        }
-
         override fun trimUser(userId: String) {
             thumbnails.maintain(userId)
             previews.maintain(userId)

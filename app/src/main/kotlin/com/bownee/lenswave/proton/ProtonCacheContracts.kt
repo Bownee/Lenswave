@@ -199,12 +199,6 @@ interface ProtonSessionCache {
     /** Never throws: files that resist deletion are reported and swept on the next account transition. */
     fun clearUser(userId: String)
 
-    /**
-     * The cheap part of activation: plaintext copies left behind by a previous process are wiped
-     * before anything can materialize a new one next to them.
-     */
-    fun prepareUser(userId: String)
-
     /** Expiry and size-cap housekeeping; safe to run while the session is in use. */
     fun trimUser(userId: String)
 }
