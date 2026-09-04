@@ -172,7 +172,7 @@ class PhotoViewerActivity : FragmentActivity() {
         buildCollaborators()
         setContentView(screen.root)
         actions.addOnLayoutChangeListener { _, _, top, _, bottom, _, oldTop, _, oldBottom ->
-            if (top != oldTop || bottom != oldBottom) updateMediaBounds()
+            if (top != oldTop || bottom != oldBottom) scheduleMediaBoundsUpdate()
         }
         applySystemInsets()
     }
@@ -316,7 +316,7 @@ class PhotoViewerActivity : FragmentActivity() {
             mediaFrame.layoutParams = mediaParams
         }
         detailsSheet.minimumHeight = (availableHeight * DETAILS_MINIMUM_HEIGHT_FRACTION).roundToInt()
-        mediaFrame.post(::updateMediaBounds)
+        scheduleMediaBoundsUpdate()
         photoDetailsScroll.post(details::synchronizeWithImage)
     }
 
@@ -908,7 +908,7 @@ class PhotoViewerActivity : FragmentActivity() {
                 dp(16) + safeArea.right,
                 dp(10),
             )
-            actions.post(::updateMediaBounds)
+            scheduleMediaBoundsUpdate()
             detailsSheet.setPadding(
                 dp(16) + safeArea.left,
                 dp(8),
@@ -920,6 +920,21 @@ class PhotoViewerActivity : FragmentActivity() {
         ViewCompat.requestApplyInsets(root)
     }
 
+    private var mediaBoundsUpdatePending = false
+
+    /**
+     * The insets, the root layout and the action bar's layout all ask for the media bounds, often
+     * in the same frame and from inside layout callbacks; one posted pass serves them all.
+     */
+    private fun scheduleMediaBoundsUpdate() {
+        if (mediaBoundsUpdatePending) return
+        mediaBoundsUpdatePending = true
+        mediaFrame.post {
+            mediaBoundsUpdatePending = false
+            updateMediaBounds()
+        }
+    }
+
     private fun updateMediaBounds() {
         val inset =
             PhotoViewerMediaLayoutPolicy.verticalInset(
@@ -929,13 +944,16 @@ class PhotoViewerActivity : FragmentActivity() {
                 gap = dp(MEDIA_ACTION_GAP_DP),
             )
         if (inset <= 0) return
+        var changed = false
         listOf(photoView, thumbnailPreview, peekPreview, playerView, loadingPanel).forEach { media ->
-            (media.layoutParams as FrameLayout.LayoutParams).apply {
-                topMargin = inset
-                bottomMargin = inset
-                media.layoutParams = this
-            }
+            val params = media.layoutParams as FrameLayout.LayoutParams
+            if (params.topMargin == inset && params.bottomMargin == inset) return@forEach
+            params.topMargin = inset
+            params.bottomMargin = inset
+            media.layoutParams = params
+            changed = true
         }
+        if (!changed) return
         if (photoReady || thumbnailPreview.isVisible) photoDetailsScroll.post(details::synchronizeWithImage)
     }
 
