@@ -276,8 +276,14 @@ class ProtonPhotoGateway internal constructor(
             sessionGuard.withActiveSession(userId) {
                 // A load the grid cancelled mid-flight throws instead of returning null, so
                 // it is never mistaken for a corrupt thumbnail below.
-                renditions.loadThumbnail(userId, nodeUid) { job?.isActive != false } ?: run {
-                    invalidateThumbnailInActiveSession(userId, nodeUid)
+                try {
+                    renditions.loadThumbnail(userId, nodeUid) { job?.isActive != false } ?: run {
+                        invalidateThumbnailInActiveSession(userId, nodeUid)
+                        null
+                    }
+                } catch (_: ProtonRenditionUnavailableException) {
+                    // The file is intact but cannot be decrypted right now; the cell keeps its
+                    // placeholder and asks again on its next bind. Never invalidate or re-queue.
                     null
                 }
             }
