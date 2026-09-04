@@ -29,6 +29,7 @@ import androidx.core.view.ViewCompat
 import androidx.exifinterface.media.ExifInterface
 import com.bownee.lenswave.ExifOrientation
 import com.bownee.lenswave.R
+import com.bownee.lenswave.metadata.ExifSnapshot
 import com.bownee.lenswave.metadata.ImageMimeSniffer
 import com.bownee.lenswave.metadata.ImageOrientationPolicy
 import com.bownee.lenswave.metadata.PhotoMetadataHints
@@ -78,6 +79,9 @@ class FullResolutionPhotoView
         private var exifOrientation = ExifInterface.ORIENTATION_NORMAL
         private var loadedUri: Uri? = null
         private var mimeType: String? = null
+
+        /** The EXIF values the load parsed for the details sheet; null for a placeholder or an unparseable file. */
+        private var exifSnapshot: ExifSnapshot? = null
         private var baseBitmap: Bitmap? = null
 
         /** True while [baseBitmap] is a borrowed preview rather than a decoded original. */
@@ -183,15 +187,15 @@ class FullResolutionPhotoView
                             val mime = sniffMimeType(openedDescriptor)
                             // HEIF decoders rotate from the container themselves; only formats
                             // returned as stored need the EXIF tag applied on top.
-                            val orientation =
-                                ImageOrientationPolicy.effectiveOrientation(
-                                    mime,
-                                    ExifInterface(openedDescriptor.fileDescriptor)
-                                        .getAttributeInt(
-                                            ExifInterface.TAG_ORIENTATION,
-                                            ExifInterface.ORIENTATION_NORMAL,
-                                        ),
-                                )
+                            val exif = ExifInterface(openedDescriptor.fileDescriptor)
+                            val exifOrientationValue =
+                                exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+                            val orientation = ImageOrientationPolicy.effectiveOrientation(mime, exifOrientationValue)
+                            // The details sheet's rows come from this same parse; lifting them
+                            // here, off the main thread, spares the sheet a second parse of the
+                            // file whenever it is open. A parse that cannot be lifted leaves the
+                            // sheet to read the file itself.
+                            val exifSnapshot = runCatching { ExifSnapshot.from(exif, exifOrientationValue) }.getOrNull()
                             openedDecoder = requireNotNull(createRegionDecoder(openedDescriptor))
                             val sample =
                                 PhotoBaseDecodePolicy.sampleSize(
@@ -216,7 +220,15 @@ class FullResolutionPhotoView
                                         },
                                     ),
                                 )
-                            LoadedPhoto(openedDescriptor, openedDecoder, openedBitmap, sample, orientation, mime).also {
+                            LoadedPhoto(
+                                openedDescriptor,
+                                openedDecoder,
+                                openedBitmap,
+                                sample,
+                                orientation,
+                                mime,
+                                exifSnapshot,
+                            ).also {
                                 openedDescriptor = null
                                 openedDecoder = null
                                 openedBitmap = null
@@ -241,6 +253,7 @@ class FullResolutionPhotoView
                             orientationMatrix = ExifOrientation.matrix(loaded.orientation)
                             loadedUri = uri
                             mimeType = loaded.mimeType
+                            exifSnapshot = loaded.exif
                             // A placeholder may already be zoomed; the original takes over the same
                             // rendered geometry so the picture does not jump when it arrives. Both
                             // sizes are in oriented axes: the placeholder's were swapped for its
@@ -296,6 +309,7 @@ class FullResolutionPhotoView
             orientationMatrix = ExifOrientation.matrix(orientation)
             loadedUri = null
             mimeType = null
+            exifSnapshot = null
             imageWidth = if (rotationDegrees % 180 == 0) rawWidth else rawHeight
             imageHeight = if (rotationDegrees % 180 == 0) rawHeight else rawWidth
             resetTransform()
@@ -319,6 +333,7 @@ class FullResolutionPhotoView
             orientationMatrix = null
             loadedUri = null
             mimeType = null
+            exifSnapshot = null
             rotationDegrees = 0
             minScale = 1f
             scale = 1f
@@ -431,11 +446,12 @@ class FullResolutionPhotoView
 
         /**
          * What this view already knows about the decoded original at [uri]: its stored size, EXIF
-         * rotation and container format. Null while a placeholder or a different file is showing.
+         * rotation, container format and the EXIF values its load parsed. Null while a
+         * placeholder or a different file is showing.
          */
         fun metadataHints(uri: Uri): PhotoMetadataHints? {
             if (decoder == null || basePlaceholder || loadedUri != uri) return null
-            return PhotoMetadataHints(rawWidth, rawHeight, rotationDegrees, mimeType)
+            return PhotoMetadataHints(rawWidth, rawHeight, rotationDegrees, mimeType, exifSnapshot)
         }
 
         fun zoomIn() = setZoom((scale * 1.5f).coerceAtMost(maximumScale()))
@@ -740,6 +756,7 @@ class FullResolutionPhotoView
             val sampleSize: Int,
             val orientation: Int,
             val mimeType: String?,
+            val exif: ExifSnapshot?,
         ) : Closeable {
             override fun close() {
                 bitmap.recycle()
