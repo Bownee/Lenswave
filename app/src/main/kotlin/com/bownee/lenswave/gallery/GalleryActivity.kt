@@ -90,6 +90,9 @@ class GalleryActivity :
     private var currentUiState = GalleryUiState()
     private var renderedDestination: GalleryDestination? = null
     private var renderedContent: GalleryContent? = null
+
+    // The panel starts hidden, which is what a null empty state renders, so the first render can skip it.
+    private var renderedEmptyState: GalleryEmptyState? = null
     private val scrollPositions = GalleryScrollPositionStore()
     private var pendingScrollRestore: GalleryDestination? = null
     private var safeBottom = 0
@@ -244,7 +247,18 @@ class GalleryActivity :
         }
         currentUiState = state
         if (contentChanged || destinationChanged) restorePendingScrollPosition(state)
-        state.emptyState?.let { empty ->
+        renderEmptyState(state.emptyState)
+        updateNavigationControls()
+        if (destinationChanged) {
+            adapter.clearSelection()
+        }
+    }
+
+    /** The panel is small but re-applying it (three texts and a listener) on every publish is not free. */
+    private fun renderEmptyState(emptyState: GalleryEmptyState?) {
+        if (renderedEmptyState == emptyState) return
+        renderedEmptyState = emptyState
+        emptyState?.let { empty ->
             screen.showEmptyState(
                 title = empty.title,
                 message = empty.message,
@@ -256,10 +270,6 @@ class GalleryActivity :
                     },
             )
         } ?: screen.showContent()
-        updateNavigationControls()
-        if (destinationChanged) {
-            adapter.clearSelection()
-        }
     }
 
     /** Long photo pages are grouped on a worker thread; short ones inline so the first frame is complete. */
