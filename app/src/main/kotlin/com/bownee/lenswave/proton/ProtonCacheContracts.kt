@@ -9,11 +9,14 @@ import java.io.File
 
 /**
  * Snapshot readers return null when no valid listing is stored, so one read answers both "what
- * is cached" and "is anything cached"; a corrupt file is discarded and reads as absent.
- * Every hydrated photo carries its rendition availability from [storedRenditions]; pass one
- * snapshot to several reads to list the rendition directories only once.
+ * is cached" and "is anything cached"; a corrupt file is discarded and reads as absent, while a
+ * file that merely could not be read right now (a transient crypto or I/O failure) is kept and
+ * reads as absent for this call only.
+ * Every hydrated photo carries its rendition availability from [storedRenditions], which is
+ * memoized per user until a rendition changes; callers that already hold one pass it explicitly.
  */
 internal interface ProtonTimelineCache {
+    /** Memoized per user; a fresh listing only after a rendition was written, removed or swept. */
     fun storedRenditions(userId: String): ProtonStoredRenditions
 
     fun readTimelineSnapshot(
@@ -181,6 +184,7 @@ interface ProtonMediaCache {
 }
 
 interface ProtonSessionCache {
+    /** Never throws: files that resist deletion are reported and swept on the next account transition. */
     fun clearUser(userId: String)
 
     /**

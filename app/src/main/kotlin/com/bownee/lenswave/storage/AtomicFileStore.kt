@@ -60,11 +60,16 @@ internal object AtomicFileStore {
         }
     }
 
-    fun safeName(value: String): String =
-        MessageDigest
-            .getInstance("SHA-256")
-            .digest(value.toByteArray(Charsets.UTF_8))
-            .toHex()
+    /**
+     * SHA-256 of [value] as lower-case hex. The digest is reused per thread: `getInstance` is a
+     * provider lookup plus an allocation, and the cache calls this once per photo when it
+     * hydrates a listing, reconciles a sync or sweeps a directory.
+     */
+    fun safeName(value: String): String {
+        val digest = checkNotNull(SHA256.get())
+        digest.reset()
+        return digest.digest(value.toByteArray(Charsets.UTF_8)).toHex()
+    }
 
     /**
      * Lower-case hex without `String.format`, which costs tens of microseconds per byte on
@@ -81,4 +86,5 @@ internal object AtomicFileStore {
     }
 
     private val HEX_DIGITS = "0123456789abcdef".toCharArray()
+    private val SHA256 = ThreadLocal.withInitial { MessageDigest.getInstance("SHA-256") }
 }

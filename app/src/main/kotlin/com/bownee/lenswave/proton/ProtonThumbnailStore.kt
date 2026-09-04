@@ -44,16 +44,18 @@ internal class ProtonThumbnailStore
         fun exists(
             userId: String,
             nodeUid: String,
-        ): Boolean = file(userId, nodeUid).let { file -> file.isFile && file.length() > 0L }
+        ): Boolean = isStoredThumbnail(file(userId, nodeUid))
 
         /**
          * File names (without extension) of every stored thumbnail, from a single directory
-         * listing. Writes are atomic renames, so a listed name is a complete file.
+         * listing. Writes are atomic renames, so a listed name is a complete file; a zero-length
+         * file (a rename that hit the disk before its data did) is judged exactly as [exists] and
+         * [count] judge it, so a photo listed here is one the grid can actually load.
          */
         fun storedNames(userId: String): Set<String> =
             directory(userId)
-                .list()
-                ?.mapNotNullTo(HashSet()) { name -> name.removeSuffix(".thumb").takeIf { it != name } }
+                .listFiles()
+                ?.mapNotNullTo(HashSet()) { file -> file.nameWithoutExtension.takeIf { isStoredThumbnail(file) } }
                 .orEmpty()
 
         /** The decoded bitmap when it is already in memory; never touches disk or blocks on a decode. */
@@ -67,6 +69,11 @@ internal class ProtonThumbnailStore
          * and again before the decode; when it turns false the load throws [CancellationException]
          * instead of spending the decode on a cell that has scrolled away. Callers outside a
          * coroutine leave it at its default.
+         *
+         * Decrypt and decode run outside the shard lock, as they already do for [write]: holding
+         * it serialized every load that hashed into the same shard behind a decode. Two loads
+         * of the same key racing each other decode twice, which is rare (the grid asks once per
+         * bind) and cheaper than an in-flight map; the second one adopts the first's bitmap.
          */
         fun load(
             userId: String,
@@ -75,8 +82,52 @@ internal class ProtonThumbnailStore
         ): Bitmap? {
             val key = ThumbnailKey(userId, nodeUid)
             peek(userId, nodeUid)?.let { return it }
+            val file = file(userId, nodeUid)
+            if (!isStoredThumbnail(file)) {
+                // A zero-length file was never counted (see [count]), so there is nothing to adjust.
+                file.delete()
+                return null
+            }
+            if (!isActive()) throw CancellationException("Thumbnail load cancelled before decrypting")
+            val bytes =
+                try {
+                    secureFiles.read(scope(userId), file)
+                } catch (_: Exception) {
+                    discardUnreadable(key, file)
+                    return null
+                }
+            // A fling cancels loads faster than they decode; the decode is the part worth skipping.
+            if (!isActive()) throw CancellationException("Thumbnail load cancelled before decoding")
+            val bitmap = ProtonThumbnailCodec.decode(bytes)
+            if (bitmap == null) {
+                discardUnreadable(key, file)
+                return null
+            }
+            file.setLastModified(clock.nowMillis())
             return synchronized(lock(key)) {
-                bitmaps.get(key)?.takeUnless(Bitmap::isRecycled) ?: loadFromDisk(key, isActive)
+                val cached = bitmaps.get(key)?.takeUnless(Bitmap::isRecycled)
+                if (cached != null) {
+                    // A concurrent load or write got there first; theirs is at least as fresh.
+                    bitmap.recycle()
+                    cached
+                } else {
+                    bitmaps.put(key, bitmap)
+                    bitmap
+                }
+            }
+        }
+
+        /**
+         * Deletes a stored file that failed to decrypt or decode, unless a write replaced it
+         * meanwhile: a write publishes its bitmap under the shard lock right after committing.
+         */
+        private fun discardUnreadable(
+            key: ThumbnailKey,
+            file: File,
+        ) {
+            synchronized(lock(key)) {
+                if (bitmaps.get(key) != null) return
+                if (file.delete()) adjustCount(key.userId, -1)
             }
         }
 
@@ -129,14 +180,17 @@ internal class ProtonThumbnailStore
             }
         }
 
+        /**
+         * The first call lists the directory inside the map's own lock, so a write or removal
+         * that lands while the listing runs waits and then adjusts the stored count instead of
+         * being dropped by a `getOrPut` whose value is not in the map yet.
+         */
         fun count(userId: String): Int =
-            counts.getOrPut(userId) {
-                directory(userId)
-                    .listFiles()
-                    ?.count { file -> file.isFile && file.extension == "thumb" && file.length() > 0L }
-                    ?: 0
+            counts.computeIfAbsent(userId) {
+                directory(userId).listFiles()?.count(::isStoredThumbnail) ?: 0
             }
 
+        /** Only a count that has been established is adjusted; the next [count] lists from scratch otherwise. */
         private fun adjustCount(
             userId: String,
             delta: Int,
@@ -144,8 +198,9 @@ internal class ProtonThumbnailStore
             counts.computeIfPresent(userId) { _, count -> (count + delta).coerceAtLeast(0) }
         }
 
+        /** Drops abandoned partial writes and zero-length files, which can never be loaded or re-fetched otherwise. */
         fun maintain(userId: String) {
-            sweep(userId) { file -> isStalePartial(file) }
+            sweep(userId) { file -> isStalePartial(file) || isEmptyRendition(file) }
         }
 
         /** [retainedNames] are file names without extension, as [AtomicFileStore.safeName] produces them. */
@@ -154,7 +209,9 @@ internal class ProtonThumbnailStore
             retainedNames: Set<String>,
         ) {
             sweep(userId) { file ->
-                isStalePartial(file) || (file.extension != "part" && file.nameWithoutExtension !in retainedNames)
+                isStalePartial(file) ||
+                    isEmptyRendition(file) ||
+                    (file.extension != "part" && file.nameWithoutExtension !in retainedNames)
             }
         }
 
@@ -173,7 +230,7 @@ internal class ProtonThumbnailStore
             files.forEach { file ->
                 if (prunable(file)) {
                     file.delete()
-                } else if (file.isFile && file.extension == "thumb" && file.length() > 0L) {
+                } else if (isStoredThumbnail(file)) {
                     remaining++
                     remainingNames += file.nameWithoutExtension
                 }
@@ -209,35 +266,6 @@ internal class ProtonThumbnailStore
             return runCatching { secureFiles.read(scope(userId), file) }.getOrNull()
         }
 
-        private fun loadFromDisk(
-            key: ThumbnailKey,
-            isActive: () -> Boolean,
-        ): Bitmap? {
-            val file = file(key.userId, key.nodeUid)
-            if (!file.isFile || file.length() <= 0L) {
-                file.delete()
-                return null
-            }
-            if (!isActive()) throw CancellationException("Thumbnail load cancelled before decrypting")
-            val bytes =
-                try {
-                    secureFiles.read(scope(key.userId), file)
-                } catch (_: Exception) {
-                    file.delete()
-                    return null
-                }
-            // A fling cancels loads faster than they decode; the decode is the part worth skipping.
-            if (!isActive()) throw CancellationException("Thumbnail load cancelled before decoding")
-            val bitmap = ProtonThumbnailCodec.decode(bytes)
-            if (bitmap == null) {
-                file.delete()
-                return null
-            }
-            file.setLastModified(clock.nowMillis())
-            bitmaps.put(key, bitmap)
-            return bitmap
-        }
-
         /** Drops cached bitmaps whose file is gone, judged against one listing rather than a stat per key. */
         private fun pruneMemoryCache(
             userId: String,
@@ -269,6 +297,14 @@ internal class ProtonThumbnailStore
 
         private fun isStalePartial(file: File): Boolean =
             file.extension == "part" && isExpired(file, ProtonStorageLayout.STALE_PART_TTL_MILLIS)
+
+        /** A completed file with no bytes; partial writes are left to [isStalePartial]. */
+        private fun isEmptyRendition(file: File): Boolean =
+            file.extension != "part" && file.isFile && file.length() == 0L
+
+        /** The single definition of "stored" shared by [exists], [count], [storedNames] and the sweeps. */
+        private fun isStoredThumbnail(file: File): Boolean =
+            file.extension == "thumb" && file.isFile && file.length() > 0L
 
         /** The only decoded-thumbnail cache in the process, so it must hold a whole gallery screen. */
         private fun bitmapCacheSize(): Int =
