@@ -65,7 +65,7 @@ kotlin {
 
 android {
     namespace = "com.bownee.lenswave"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.bownee.lenswave"
