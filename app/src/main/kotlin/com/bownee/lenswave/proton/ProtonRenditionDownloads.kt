@@ -65,12 +65,51 @@ internal class ProtonRenditionDownloads
 
             val photosClient = clientProvider.get(userId)
             val failures = mutableMapOf<String, ThumbnailFailureKind>()
-            downloadChunks(pending) { chunk -> downloadChunk(photosClient, userId, chunk, onProgress) }
-                .forEach { result ->
-                    successful += result.successfulNodeUids
-                    failures += result.failures
+
+            suspend fun thumbnailPass(chunk: List<String>): ThumbnailBatchResult =
+                downloadThumbnailPass(photosClient, userId, chunk, ThumbnailType.THUMBNAIL, onProgress)
+            downloadChunks(pending, downloadChunk = ::thumbnailPass).forEach { result ->
+                successful += result.successfulNodeUids
+                failures += result.failures
+            }
+            // A node the SDK left unanswered in a batch is usually just slow, and answers when
+            // asked on its own; asking now keeps it away from the preview fallback, which would
+            // settle it on the wrong rendition.
+            val unanswered = failures.filterValues { kind -> kind == ThumbnailFailureKind.UNANSWERED }.keys.toList()
+            downloadChunks(
+                unanswered,
+                batchSize = 1,
+                maxConcurrent = ProtonThumbnailDownloadPolicy.MAX_CONCURRENT_SINGLE_NODE_PASSES,
+                downloadChunk = ::thumbnailPass,
+            ).forEach { result ->
+                successful += result.successfulNodeUids
+                result.successfulNodeUids.forEach(failures::remove)
+                failures += result.failures
+            }
+            val missing = pending.filterNot(successful::contains)
+            if (missing.isEmpty()) return ThumbnailBatchResult(successful, emptyMap())
+
+            val previewsStored = mutableSetOf<String>()
+            downloadChunks(missing) { chunk ->
+                downloadPreviewInPlaceOfThumbnail(photosClient, userId, chunk, onProgress, previewsStored)
+            }.forEach { result ->
+                successful += result.successfulNodeUids
+                result.successfulNodeUids.forEach(failures::remove)
+                result.failures.forEach { (nodeUid, previewKind) ->
+                    failures[nodeUid] = ThumbnailFallbackFailurePolicy.settle(failures[nodeUid], previewKind)
                 }
-            return ThumbnailBatchResult(successful, failures)
+            }
+            missing.filterNot(successful::contains).forEach { nodeUid ->
+                failures.putIfAbsent(nodeUid, ThumbnailFailureKind.OTHER)
+            }
+            val finalFailures = failures.filterKeys { nodeUid -> nodeUid !in successful }
+            if (previewsStored.isNotEmpty()) {
+                onProgress(ThumbnailBatchResult(emptySet(), emptyMap(), previewsStored = previewsStored.toSet()))
+            }
+            if (finalFailures.isNotEmpty()) {
+                onProgress(ThumbnailBatchResult(emptySet(), finalFailures))
+            }
+            return ThumbnailBatchResult(successful, finalFailures, previewsStored.toSet())
         }
 
         override fun removeThumbnail(
@@ -183,58 +222,32 @@ internal class ProtonRenditionDownloads
                     .awaitAll()
             }
 
-        private suspend fun downloadChunk(
+        /**
+         * The preview rendition stands in for a thumbnail Proton does not have. It is the same
+         * bytes the preview queue would fetch later, so they go into the preview store as well
+         * and the caller settles the node out of that queue; the mirror of the NOT_FOUND
+         * substitution in downloadPreviews.
+         */
+        private suspend fun downloadPreviewInPlaceOfThumbnail(
             photosClient: ProtonPhotosClient,
             userId: UserId,
             nodeUids: List<String>,
             onProgress: suspend (ThumbnailBatchResult) -> Unit,
-        ): ThumbnailBatchResult {
-            val thumbnailResult =
-                downloadThumbnailPass(
-                    photosClient,
-                    userId,
-                    nodeUids,
-                    ThumbnailType.THUMBNAIL,
-                    onProgress,
-                )
-            val successful = thumbnailResult.successfulNodeUids.toMutableSet()
-            val failures = thumbnailResult.failures.toMutableMap()
-            val missing = nodeUids.filterNot(successful::contains)
-            if (missing.isEmpty()) return ThumbnailBatchResult(successful, emptyMap())
-
-            // The preview rendition stands in for a missing thumbnail. It is the same bytes the
-            // preview queue would fetch later, so they go into the preview store as well and the
-            // caller settles the node out of that queue; the mirror of the NOT_FOUND substitution
-            // in downloadPreviews.
-            val previewsStored = mutableSetOf<String>()
-            val previewResult =
-                downloadThumbnailPass(
-                    photosClient,
-                    userId,
-                    missing,
-                    ThumbnailType.PREVIEW,
-                    onProgress,
-                    store = { nodeUid, bytes ->
-                        cache.writeThumbnail(userId.id, nodeUid, bytes)
-                        if (runCatching { cache.writePreview(userId.id, nodeUid, bytes) }.isSuccess) {
-                            previewsStored += nodeUid
-                        }
-                    },
-                )
-            successful += previewResult.successfulNodeUids
-            previewResult.failures.forEach { (nodeUid, kind) -> failures.record(nodeUid, kind) }
-            nodeUids.filterNot { nodeUid -> nodeUid in successful }.forEach { nodeUid ->
-                failures.putIfAbsent(nodeUid, ThumbnailFailureKind.OTHER)
-            }
-            val finalFailures = failures.filterKeys { nodeUid -> nodeUid !in successful }
-            if (previewsStored.isNotEmpty()) {
-                onProgress(ThumbnailBatchResult(emptySet(), emptyMap(), previewsStored = previewsStored.toSet()))
-            }
-            if (finalFailures.isNotEmpty()) {
-                onProgress(ThumbnailBatchResult(emptySet(), finalFailures))
-            }
-            return ThumbnailBatchResult(successful, finalFailures, previewsStored)
-        }
+            previewsStored: MutableSet<String>,
+        ): ThumbnailBatchResult =
+            downloadThumbnailPass(
+                photosClient,
+                userId,
+                nodeUids,
+                ThumbnailType.PREVIEW,
+                onProgress,
+                store = { nodeUid, bytes ->
+                    cache.writeThumbnail(userId.id, nodeUid, bytes)
+                    if (runCatching { cache.writePreview(userId.id, nodeUid, bytes) }.isSuccess) {
+                        synchronized(previewsStored) { previewsStored += nodeUid }
+                    }
+                },
+            )
 
         private suspend fun downloadThumbnailPass(
             photosClient: ProtonPhotosClient,
@@ -301,8 +314,8 @@ internal class ProtonRenditionDownloads
                 return ThumbnailPassCompletionPolicy.hasResponseForEveryNode(requested, successful, failures.keys)
             }
 
-            val idleMillis = ProtonThumbnailDownloadPolicy.idleTimeoutMillis(type)
             var wentQuiet = false
+            var answered = false
             val completed =
                 withTimeoutOrNull(timeoutMillis) {
                     coroutineScope {
@@ -311,11 +324,17 @@ internal class ProtonRenditionDownloads
                             while (true) {
                                 // The SDK sometimes answers only part of a batch and then stays
                                 // silent; a quiet flow ends the pass well before the deadline.
-                                val next = withTimeoutOrNull(idleMillis) { answers.receiveCatching() }
+                                // Before the first answer the SDK is still setting the batch up,
+                                // which can take longer than the idle window under load, so
+                                // only the deadline applies until then.
+                                val waitMillis =
+                                    ProtonThumbnailDownloadPolicy.answerWaitMillis(type, answered, timeoutMillis)
+                                val next = withTimeoutOrNull(waitMillis) { answers.receiveCatching() }
                                 if (next == null) {
                                     wentQuiet = true
                                     break
                                 }
+                                answered = true
                                 val thumbnail = next.getOrNull()
                                 if (thumbnail == null) {
                                     next.exceptionOrNull()?.let { error ->
@@ -351,7 +370,7 @@ internal class ProtonRenditionDownloads
                         LenswaveOperation.THUMBNAIL_DOWNLOAD
                     }
                 val reason =
-                    if (completed == null) {
+                    if (completed == null || (wentQuiet && !answered)) {
                         "deadline"
                     } else if (wentQuiet) {
                         "quiet"
@@ -401,6 +420,17 @@ internal object ProtonThumbnailDownloadPolicy {
 
     fun idleTimeoutMillis(type: ThumbnailType): Long =
         if (type == ThumbnailType.PREVIEW) PREVIEW_IDLE_TIMEOUT_MILLIS else SDK_IDLE_TIMEOUT_MILLIS
+
+    /**
+     * How long a pass waits for the next SDK answer. The idle window only starts once the SDK
+     * has answered at least once: before that it is still fetching the batch's metadata and
+     * keys, and giving up on a slow but working batch threw the whole batch away.
+     */
+    fun answerWaitMillis(
+        type: ThumbnailType,
+        answered: Boolean,
+        passTimeoutMillis: Long,
+    ): Long = if (answered) idleTimeoutMillis(type) else passTimeoutMillis
 
     /**
      * A single-node pass is one node's worth of transfer with the whole deadline to itself, so
