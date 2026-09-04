@@ -501,13 +501,32 @@ class GalleryViewModelTest {
             val periodic = backgroundScope.launch { viewModel.runPeriodicSync() }
             runCurrent()
 
-            assertEquals("the first check is immediate", listOf("syncTimeline:u:false", "enqueue:u"), events)
+            assertTrue(
+                "the start-up refresh just completed, so the immediate check does nothing: $events",
+                events.isEmpty(),
+            )
 
-            events.clear()
             advanceTimeBy(GalleryPeriodicSyncPolicy.CHECK_INTERVAL_MILLIS - 1L)
             runCurrent()
             assertTrue(events.isEmpty())
             advanceTimeBy(1L)
+            runCurrent()
+            assertEquals(listOf("syncTimeline:u:false", "enqueue:u"), events)
+
+            // A user-driven refresh shortly before a tick leaves the listing fresh: the tick does nothing.
+            events.clear()
+            advanceTimeBy(GalleryPeriodicSyncPolicy.CHECK_INTERVAL_MILLIS - 60_000L)
+            runCurrent()
+            viewModel.refreshAfterMutation()
+            runCurrent()
+            assertEquals(listOf("syncTimeline:u:false", "enqueue:u"), events)
+            events.clear()
+            advanceTimeBy(60_000L)
+            runCurrent()
+            assertTrue("a tick within the freshness limit of a refresh is skipped: $events", events.isEmpty())
+
+            // The next tick finds that refresh a freshness limit old and enumerates again.
+            advanceTimeBy(GalleryPeriodicSyncPolicy.CHECK_INTERVAL_MILLIS)
             runCurrent()
             assertEquals(listOf("syncTimeline:u:false", "enqueue:u"), events)
 

@@ -109,6 +109,9 @@ class GalleryViewModel internal constructor(
     private var manualRefreshGeneration = 0
     private var lastPeriodicCheckMillis: Long? = null
 
+    /** When the last refresh of the page on screen completed; every navigation refreshes, so it follows the page. */
+    private var lastRefreshCompletedMillis: Long? = null
+
     /**
      * Where each page was scrolled to. Owned here so a configuration change keeps every page's
      * position; the current page's position is also written to the saved state, so a process
@@ -291,14 +294,21 @@ class GalleryViewModel internal constructor(
     /**
      * Keeps the visible section current while the gallery is on screen. The caller scopes it
      * to the started lifecycle, so it pauses in the background and resumes with an immediate
-     * check when the last one is overdue. Each check is a quiet, non-forced refresh: the
-     * repository re-enumerates only once the cached listing is older than its freshness limit.
+     * check when the last one is overdue. A check asks for a quiet, non-forced refresh only when
+     * the last completed refresh is old enough for the repository to enumerate again (see
+     * [GalleryPeriodicSyncPolicy.shouldRefresh]); otherwise it does nothing.
      */
     suspend fun runPeriodicSync() {
         while (true) {
             delay(GalleryPeriodicSyncPolicy.delayUntilNextCheckMillis(lastPeriodicCheckMillis, clock.nowMillis()))
-            lastPeriodicCheckMillis = clock.nowMillis()
-            if (currentUserId != null && !sessionTransitioning) requestRefresh(manual = false)
+            val now = clock.nowMillis()
+            lastPeriodicCheckMillis = now
+            if (currentUserId != null &&
+                !sessionTransitioning &&
+                GalleryPeriodicSyncPolicy.shouldRefresh(lastRefreshCompletedMillis, now)
+            ) {
+                requestRefresh(manual = false)
+            }
         }
     }
 
@@ -451,6 +461,7 @@ class GalleryViewModel internal constructor(
                 protonThumbnailScheduler.enqueue(userId)
             }
         }
+        lastRefreshCompletedMillis = clock.nowMillis()
     }
 
     /**
