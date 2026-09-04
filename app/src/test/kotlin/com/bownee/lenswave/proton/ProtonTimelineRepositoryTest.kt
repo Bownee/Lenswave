@@ -72,6 +72,53 @@ class ProtonTimelineRepositoryTest {
         }
 
     @Test
+    fun `a favourite set while the favourites listing is enumerating survives the sync commit`() =
+        runTest {
+            cache.timelines[USER.id] = listOf(photo("v~a1", 100L), photo("v~x", 500L))
+            cache.tags[USER.id to ProtonMediaTag.FAVORITES] = emptyList()
+            repository.loadCached(USER)
+            tagListings.listings[ProtonMediaTag.FAVORITES] = listOf(photo("v~a1", 100L))
+
+            val sync = launch { repository.syncTagMetadata(USER, ProtonMediaTag.FAVORITES, forceRemote = false) }
+            runCurrent()
+            val toggle = launch { repository.setFavorite(USER, setOf("v~x"), favorite = true) }
+            runCurrent()
+
+            assertFalse("the toggle must wait for the sync in flight", toggle.isCompleted)
+            tagListings.release.complete(Unit)
+            sync.join()
+            toggle.join()
+
+            val favorites =
+                repository.state.value.tags
+                    .getValue(ProtonMediaTag.FAVORITES)
+            assertEquals(listOf("v~x", "v~a1"), favorites.photos.map(ProtonGalleryPhoto::nodeUid))
+            assertTrue(favorites.hasLoaded)
+            assertEquals(
+                listOf("v~x", "v~a1"),
+                cache.tags.getValue(USER.id to ProtonMediaTag.FAVORITES).map(ProtonGalleryPhoto::nodeUid),
+            )
+        }
+
+    @Test
+    fun `a favourite toggle for another account leaves the published state and the cache alone`() =
+        runTest {
+            cache.timelines[USER.id] = listOf(photo("v~a1", 100L))
+            cache.tags[USER.id to ProtonMediaTag.FAVORITES] = emptyList()
+            repository.loadCached(USER)
+
+            repository.setFavorite(UserId("other"), setOf("v~a1"), favorite = true)
+
+            assertTrue(
+                repository.state.value.tags
+                    .getValue(ProtonMediaTag.FAVORITES)
+                    .photos
+                    .isEmpty(),
+            )
+            assertTrue(cache.events.none { it.startsWith("writeTag") })
+        }
+
+    @Test
     fun `a tag listing is committed whole while the timeline has not loaded`() =
         runTest {
             cache.tags[USER.id to ProtonMediaTag.VIDEOS] = listOf(photo("v~old", 1L))

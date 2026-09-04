@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import me.proton.core.domain.entity.UserId
@@ -301,43 +302,66 @@ internal class ProtonTimelineRepository
             }
         }
 
-        internal fun setFavorite(
+        /**
+         * Applies a favourite toggle Proton has accepted. The favourites tag mutex keeps a
+         * favourites sync from committing a listing enumerated before the toggle on top of it,
+         * and the mutation mutex keeps a removal out; the next listing is built inside the
+         * state update so a thumbnail mark landing at the same time is not lost either.
+         */
+        internal suspend fun setFavorite(
             userId: UserId,
             nodeUids: Set<String>,
             favorite: Boolean,
         ) {
-            if (nodeUids.isEmpty() || mutableState.value.userId != userId.id) return
-            val current = mutableState.value
-            val currentFavoriteState = current.tags[ProtonMediaTag.FAVORITES]
-            val currentFavorites = currentFavoriteState?.photos.orEmpty()
-            val nextFavorites =
-                if (favorite) {
-                    val knownPhotos = current.photos.associateBy(ProtonGalleryPhoto::nodeUid)
-                    (
-                        currentFavorites +
-                            nodeUids.map { nodeUid ->
-                                knownPhotos[nodeUid] ?: ProtonGalleryPhoto(
-                                    nodeUid = nodeUid,
-                                    captureTimeEpochSeconds = 0L,
-                                    hasThumbnail = cache.thumbnailExists(userId.id, nodeUid),
-                                )
+            if (nodeUids.isEmpty()) return
+            tagMutexes.getValue(ProtonMediaTag.FAVORITES).withLock {
+                mutationMutex.withLock {
+                    // A file stat per toggled photo, taken outside the update so a retried
+                    // update never touches the disk twice.
+                    val storedThumbnails =
+                        if (favorite) {
+                            nodeUids.associateWith { nodeUid ->
+                                cache.thumbnailExists(userId.id, nodeUid)
                             }
-                    ).distinctBy(ProtonGalleryPhoto::nodeUid)
-                        .sortedByDescending(ProtonGalleryPhoto::captureTimeEpochSeconds)
-                } else {
-                    currentFavorites.filterNot { it.nodeUid in nodeUids }
+                        } else {
+                            emptyMap()
+                        }
+                    val next =
+                        mutableState.updateAndGet { state ->
+                            if (state.userId != userId.id) return@updateAndGet state
+                            val current = state.tags[ProtonMediaTag.FAVORITES]
+                            val favorites = current?.photos.orEmpty()
+                            val nextFavorites =
+                                if (favorite) {
+                                    val knownPhotos = state.photos.associateBy(ProtonGalleryPhoto::nodeUid)
+                                    (
+                                        favorites +
+                                            nodeUids.map { nodeUid ->
+                                                knownPhotos[nodeUid] ?: ProtonGalleryPhoto(
+                                                    nodeUid = nodeUid,
+                                                    captureTimeEpochSeconds = 0L,
+                                                    hasThumbnail = storedThumbnails.getValue(nodeUid),
+                                                )
+                                            }
+                                    ).distinctBy(ProtonGalleryPhoto::nodeUid)
+                                        .sortedByDescending(ProtonGalleryPhoto::captureTimeEpochSeconds)
+                                } else {
+                                    favorites.filterNot { it.nodeUid in nodeUids }
+                                }
+                            val nextState =
+                                ProtonTagState(
+                                    photos = nextFavorites,
+                                    hasLoaded = current?.hasLoaded == true,
+                                    refreshFailed = current?.refreshFailed == true,
+                                )
+                            state.copy(tags = state.tags + (ProtonMediaTag.FAVORITES to nextState))
+                        }
+                    if (next.userId != userId.id) return
+                    val favorites = next.tags.getValue(ProtonMediaTag.FAVORITES)
+                    // A listing that was never loaded has no file to keep in step.
+                    if (favorites.hasLoaded) cache.writeTag(userId.id, ProtonMediaTag.FAVORITES, favorites.photos)
                 }
-            if (currentFavoriteState?.hasLoaded == true) {
-                cache.writeTag(userId.id, ProtonMediaTag.FAVORITES, nextFavorites)
             }
-            updateTag(
-                ProtonMediaTag.FAVORITES,
-                ProtonTagState(
-                    photos = nextFavorites,
-                    hasLoaded = currentFavoriteState?.hasLoaded == true,
-                    refreshFailed = currentFavoriteState?.refreshFailed == true,
-                ),
-            )
         }
 
         internal suspend fun removePhotos(
