@@ -44,7 +44,7 @@ internal class GallerySettingsPresenter(
                     menu.add(Menu.NONE, SETTINGS_DISCONNECT_PROTON, 0, R.string.disconnect_proton)
                 }
                 menu.add(Menu.NONE, SETTINGS_PRIVACY, 1, R.string.privacy_and_data)
-                menu.add(Menu.NONE, SETTINGS_BLOCK_SCREENSHOTS, 2, R.string.block_screenshots_in_viewer).apply {
+                menu.add(Menu.NONE, SETTINGS_BLOCK_SCREENSHOTS, 2, R.string.block_screenshots).apply {
                     isCheckable = true
                     isChecked = privacySettings.blockScreenshots
                 }

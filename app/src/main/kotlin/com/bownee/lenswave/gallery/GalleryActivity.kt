@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.Bundle
+import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
@@ -145,6 +146,8 @@ class GalleryActivity :
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Set before any content: the thumbnails are the same photos the viewer keeps out of screenshots.
+        applyScreenshotPolicy()
         updatePresenter = GalleryUpdatePresenter(activity = this, appUpdateChecker = appUpdateChecker)
         updatePresenter.restore(savedInstanceState)
         configureEdgeToEdgeWindow()
@@ -181,6 +184,8 @@ class GalleryActivity :
 
     override fun onResume() {
         super.onResume()
+        // The setting is toggled from this screen's own menu; it takes effect without a recreation.
+        applyScreenshotPolicy()
         viewerLaunched = false
         // The collector below saw these while the viewer was still launched; now they are the gallery's.
         consumeViewerOutcomes(mutationCoordinator.outcomes.value)
@@ -194,6 +199,12 @@ class GalleryActivity :
         unregisterReceiver(timeChangeReceiver)
         authCoordinator.unregister()
         super.onDestroy()
+    }
+
+    /** Mirrors [ViewerPrivacySettings.blockScreenshots] into the window's secure flag. */
+    private fun applyScreenshotPolicy() {
+        val secure = WindowManager.LayoutParams.FLAG_SECURE
+        if (viewerPrivacySettings.blockScreenshots) window.addFlags(secure) else window.clearFlags(secure)
     }
 
     /** System broadcasts reach a non-exported receiver; the platform resets the default zone before sending. */
