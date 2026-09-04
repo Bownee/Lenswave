@@ -1,5 +1,6 @@
 package com.bownee.lenswave.proton
 
+import com.bownee.lenswave.LenswaveClock
 import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
@@ -65,6 +66,7 @@ internal class ProtonRenditionSync
         private val availability: ProtonRenditionAvailability,
         @ThumbnailQueue private val thumbnailQueue: ProtonThumbnailQueue,
         @PreviewQueue private val previewQueue: ProtonThumbnailQueue,
+        private val clock: LenswaveClock,
     ) {
         suspend fun downloadNextBatch(
             userId: UserId,
@@ -127,10 +129,12 @@ internal class ProtonRenditionSync
         ): ProtonThumbnailQueueStep {
             val nodeUids = entries.map(ProtonThumbnailQueueEntry::nodeUid)
             val progressMutex = Mutex()
+            val marks = PendingMarks()
             try {
                 source.downloadThumbnails(userId, nodeUids) { result ->
                     progressMutex.withLock {
-                        settleThumbnails(userId, result)
+                        settleThumbnails(userId, result, marks)
+                        publishMarks(userId, marks, force = false)
                         onProgress(progress(userId))
                     }
                 }
@@ -140,6 +144,9 @@ internal class ProtonRenditionSync
             } catch (_: Throwable) {
                 thumbnailQueue.settle(userId.id, emptySet(), nodeUids.toSet())
                 onProgress(progress(userId))
+            } finally {
+                // Whatever was stored is shown, however the batch ended.
+                publishMarks(userId, marks, force = true)
             }
             return ProtonThumbnailQueueStep.Processed
         }
@@ -151,23 +158,27 @@ internal class ProtonRenditionSync
         ): ProtonThumbnailQueueStep {
             val nodeUids = entries.map(ProtonThumbnailQueueEntry::nodeUid)
             val progressMutex = Mutex()
+            val marks = PendingMarks()
             try {
                 val result =
                     source.downloadPreviews(userId, nodeUids) { progress ->
                         progressMutex.withLock {
-                            settlePreviews(userId, progress)
+                            settlePreviews(userId, progress, marks)
+                            publishMarks(userId, marks, force = false)
                             onProgress(progress(userId))
                         }
                     }
                 // Settling the final result as well guarantees no claimed entry is left behind,
                 // which would otherwise keep the run spinning on a queue it can never drain.
-                progressMutex.withLock { settlePreviews(userId, result) }
+                progressMutex.withLock { settlePreviews(userId, result, marks) }
             } catch (error: CancellationException) {
                 previewQueue.release(userId.id, nodeUids)
                 throw error
             } catch (_: Throwable) {
                 previewQueue.settle(userId.id, emptySet(), nodeUids.toSet())
                 onProgress(progress(userId))
+            } finally {
+                publishMarks(userId, marks, force = true)
             }
             return ProtonThumbnailQueueStep.Processed
         }
@@ -175,14 +186,16 @@ internal class ProtonRenditionSync
         private suspend fun settlePreviews(
             userId: UserId,
             result: ThumbnailBatchResult,
+            marks: PendingMarks,
         ) {
             previewQueue.settle(userId.id, result.successfulNodeUids, result.failures.keys)
-            availability.previewsAvailable(userId, result.successfulNodeUids)
+            marks.previews += result.successfulNodeUids
         }
 
         private suspend fun settleThumbnails(
             userId: UserId,
             result: ThumbnailBatchResult,
+            marks: PendingMarks,
         ) {
             val completed = thumbnailQueue.settle(userId.id, result.successfulNodeUids, result.failures.keys)
             val completedNodeUids = completed.mapTo(mutableSetOf(), ProtonThumbnailQueueEntry::nodeUid)
@@ -191,16 +204,59 @@ internal class ProtonRenditionSync
             result.successfulNodeUids
                 .filterNot(completedNodeUids::contains)
                 .forEach { nodeUid -> source.removeThumbnail(userId, nodeUid) }
-            if (completed.isEmpty()) return
-            val timelineNodeUids = mutableSetOf<String>()
-            val albumCoverNodeUids = mutableSetOf<String>()
-            val albumPhotoNodeUids = mutableSetOf<String>()
             completed.forEach { entry ->
-                if (ProtonSyncKeys.QueueSource.TIMELINE in entry.sources) timelineNodeUids += entry.nodeUid
-                if (ProtonSyncKeys.QueueSource.ALBUM_COVERS in entry.sources) albumCoverNodeUids += entry.nodeUid
-                if (entry.sources.any(ProtonSyncKeys.QueueSource::isAlbumPhotos)) albumPhotoNodeUids += entry.nodeUid
+                if (ProtonSyncKeys.QueueSource.TIMELINE in entry.sources) marks.timeline += entry.nodeUid
+                if (ProtonSyncKeys.QueueSource.ALBUM_COVERS in entry.sources) marks.albumCovers += entry.nodeUid
+                if (entry.sources.any(ProtonSyncKeys.QueueSource::isAlbumPhotos)) marks.albumPhotos += entry.nodeUid
             }
-            availability.thumbnailsAvailable(userId, timelineNodeUids, albumCoverNodeUids, albumPhotoNodeUids)
+        }
+
+        /**
+         * Marking renditions available copies every listing the gallery observes, so the marks
+         * gathered over a batch are published at most every
+         * [ProtonThumbnailWorkPolicy.PROGRESS_PUBLISH_INTERVAL_MILLIS], and once more when the
+         * batch ends so nothing stored waits for the next one.
+         */
+        private fun publishMarks(
+            userId: UserId,
+            marks: PendingMarks,
+            force: Boolean,
+        ) {
+            if (marks.isEmpty()) return
+            val now = clock.nowMillis()
+            if (!ProtonThumbnailWorkPolicy.shouldPublishProgress(marks.lastPublishedMillis, now, force)) return
+            if (marks.timeline.isNotEmpty() || marks.albumCovers.isNotEmpty() || marks.albumPhotos.isNotEmpty()) {
+                availability.thumbnailsAvailable(
+                    userId,
+                    marks.timeline.toSet(),
+                    marks.albumCovers.toSet(),
+                    marks.albumPhotos.toSet(),
+                )
+            }
+            if (marks.previews.isNotEmpty()) availability.previewsAvailable(userId, marks.previews.toSet())
+            marks.clear(now)
+        }
+
+        /** Renditions stored since the last publication, and when that was. */
+        private class PendingMarks {
+            val timeline = mutableSetOf<String>()
+            val albumCovers = mutableSetOf<String>()
+            val albumPhotos = mutableSetOf<String>()
+            val previews = mutableSetOf<String>()
+
+            /** Null until the first publication so the first stored rendition shows at once. */
+            var lastPublishedMillis: Long? = null
+
+            fun isEmpty(): Boolean =
+                timeline.isEmpty() && albumCovers.isEmpty() && albumPhotos.isEmpty() && previews.isEmpty()
+
+            fun clear(publishedAtMillis: Long) {
+                timeline.clear()
+                albumCovers.clear()
+                albumPhotos.clear()
+                previews.clear()
+                lastPublishedMillis = publishedAtMillis
+            }
         }
     }
 

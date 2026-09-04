@@ -17,7 +17,7 @@ class ProtonRenditionSyncTest {
     private val previews = ProtonThumbnailQueue(store, clock, ProtonQueueName.PREVIEWS, flushScope)
     private val source = FakeSource()
     private val availability = FakeAvailability()
-    private val sync = ProtonRenditionSync(source, availability, thumbnails, previews)
+    private val sync = ProtonRenditionSync(source, availability, thumbnails, previews, clock)
 
     @Test
     fun `previews reported only in the final result still leave the queue`() =
@@ -95,12 +95,47 @@ class ProtonRenditionSyncTest {
             )
         }
 
+    @Test
+    fun `thumbnail marks are coalesced within the publish interval and flushed at batch end`() =
+        runBlocking {
+            thumbnails.replaceSource(USER.id, ProtonSyncKeys.QueueSource.TIMELINE, candidates("a", "b", "c"))
+            source.thumbnailProgress =
+                listOf("a", "b", "c").map { nodeUid -> ThumbnailBatchResult(setOf(nodeUid), emptyMap()) }
+            source.thumbnailResult = ThumbnailBatchResult(setOf("a", "b", "c"), emptyMap())
+
+            sync.downloadNextBatch(USER, allowPreviews = true) {}
+
+            assertEquals(
+                listOf(setOf("a"), setOf("b", "c")),
+                availability.thumbnailsAvailable.map(PublishedThumbnails::timeline),
+            )
+            assertEquals(0, thumbnails.pendingCount(USER.id))
+        }
+
+    @Test
+    fun `marks publish again once the interval has passed`() =
+        runBlocking {
+            thumbnails.replaceSource(USER.id, ProtonSyncKeys.QueueSource.TIMELINE, candidates("a", "b", "c"))
+            source.thumbnailProgress =
+                listOf("a", "b", "c").map { nodeUid -> ThumbnailBatchResult(setOf(nodeUid), emptyMap()) }
+            source.beforeProgress = { clock.value += ProtonThumbnailWorkPolicy.PROGRESS_PUBLISH_INTERVAL_MILLIS }
+
+            sync.downloadNextBatch(USER, allowPreviews = true) {}
+
+            assertEquals(
+                listOf(setOf("a"), setOf("b"), setOf("c")),
+                availability.thumbnailsAvailable.map(PublishedThumbnails::timeline),
+            )
+        }
+
     private fun candidates(vararg nodeUids: String) =
         nodeUids.mapIndexed { index, nodeUid -> ProtonThumbnailCandidate(nodeUid, index.toLong()) }
 
     private class FakeSource : ProtonRenditionSource {
         var thumbnailResult = ThumbnailBatchResult(emptySet(), emptyMap())
         var thumbnailFailure: Throwable? = null
+        var thumbnailProgress: List<ThumbnailBatchResult>? = null
+        var beforeProgress: () -> Unit = {}
         var previewProgress: List<ThumbnailBatchResult> = emptyList()
         var previewResult = ThumbnailBatchResult(emptySet(), emptyMap())
         var previewCalls = 0
@@ -114,7 +149,10 @@ class ProtonRenditionSyncTest {
             onProgress: suspend (ThumbnailBatchResult) -> Unit,
         ): ThumbnailBatchResult {
             thumbnailFailure?.let { throw it }
-            onProgress(thumbnailResult)
+            (thumbnailProgress ?: listOf(thumbnailResult)).forEach { result ->
+                beforeProgress()
+                onProgress(result)
+            }
             return thumbnailResult
         }
 
