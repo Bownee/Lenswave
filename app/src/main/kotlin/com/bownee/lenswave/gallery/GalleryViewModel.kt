@@ -121,16 +121,26 @@ class GalleryViewModel
             GalleryNavigationPolicy.parent(destination)?.let(::selectDestination)
         }
 
+        /**
+         * The cached album is loaded before the destination is published, so the screen goes
+         * straight from the album list to the album's photos in one render instead of showing an
+         * empty page first and rendering again when the cache arrives.
+         */
         fun openAlbum(album: ProtonAlbum) {
             val albumReference = album.reference()
             destination = GalleryDestination.AlbumPhotos(albumReference)
             saveDestination()
-            publishUiState()
             viewModelScope.launch {
-                currentUserId?.let { userId ->
-                    withContext(Dispatchers.IO) { protonRepository.loadCachedAlbum(userId, albumReference) }
-                    protonThumbnailScheduler.enqueue(userId)
+                val userId = currentUserId
+                try {
+                    if (userId != null) {
+                        withContext(Dispatchers.IO) { protonRepository.loadCachedAlbum(userId, albumReference) }
+                    }
+                } finally {
+                    // Whatever the cache said, the navigation must land; a later change wins.
+                    publishUiState()
                 }
+                if (userId != null) protonThumbnailScheduler.enqueue(userId)
                 requestRefresh(manual = false)
             }
         }
