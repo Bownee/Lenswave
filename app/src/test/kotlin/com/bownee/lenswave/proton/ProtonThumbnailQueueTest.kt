@@ -278,37 +278,6 @@ class ProtonThumbnailQueueTest {
             assertEquals(null, store.previewEntries[USER_ID])
         }
 
-    @Test
-    fun abandonedItemsLeaveTheQueueWithoutBeingReportedAsCompleted() =
-        runBlocking {
-            val store = FakeStore()
-            val queue = ProtonThumbnailQueue(store, FakeClock())
-            queue.replaceSource(USER_ID, "timeline", candidates("missing", "ok", "flaky"))
-            queue.claimReady(USER_ID, limit = 3)
-
-            val completed =
-                queue.settle(
-                    USER_ID,
-                    successfulNodeUids = setOf("ok"),
-                    failedNodeUids = setOf("flaky"),
-                    abandonedNodeUids = setOf("missing"),
-                )
-
-            assertEquals(listOf("ok"), completed.map(ProtonThumbnailQueueEntry::nodeUid))
-            assertEquals(listOf("flaky"), store.entries.getValue(USER_ID).map { it.nodeUid })
-            assertEquals(1, queue.pendingCount(USER_ID))
-        }
-
-    @Test(expected = IllegalArgumentException::class)
-    fun anItemCannotBeAbandonedAndRetriedAtOnce() =
-        runBlocking {
-            val queue = ProtonThumbnailQueue(FakeStore(), FakeClock())
-            queue.replaceSource(USER_ID, "timeline", candidates("photo"))
-
-            queue.settle(USER_ID, emptySet(), setOf("photo"), abandonedNodeUids = setOf("photo"))
-            Unit
-        }
-
     private class FakeStore : ProtonThumbnailQueueStore {
         val entries = mutableMapOf<String, List<ProtonThumbnailQueueEntry>>()
         val previewEntries = mutableMapOf<String, List<ProtonThumbnailQueueEntry>>()

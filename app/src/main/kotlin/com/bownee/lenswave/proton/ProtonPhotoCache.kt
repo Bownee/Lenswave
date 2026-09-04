@@ -379,8 +379,6 @@ internal class ProtonPhotoCache
         override fun trimUser(userId: String) {
             thumbnails.maintain(userId)
             previews.maintain(userId)
-            // Earlier builds kept a list of photos without a server preview; thumbnails now stand in.
-            LEGACY_ABANDONED_FILES.forEach { name -> File(userDirectory(userId), name).delete() }
             wipeStaleDecryptedCopies()
             expireFiles(decryptedDirectory(userId), ProtonStorageLayout.DECRYPTED_TTL_MILLIS)
         }
@@ -637,8 +635,4 @@ internal class ProtonPhotoCache
         }
 
         private fun safeName(value: String): String = AtomicFileStore.safeName(value)
-
-        private companion object {
-            val LEGACY_ABANDONED_FILES = listOf("thumbnail-abandoned.json", "preview-abandoned.json")
-        }
     }

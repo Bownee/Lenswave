@@ -55,7 +55,4 @@ internal object ProtonBackgroundBatchPolicy {
         val delay = idle.retryAfterMillis ?: return null
         return delay.takeIf { it <= maxWaitMillis }
     }
-
-    /** Failures that no retry can fix: Proton has no preview for this photo at all. */
-    fun isPermanent(kind: ThumbnailFailureKind): Boolean = kind == ThumbnailFailureKind.NOT_FOUND
 }

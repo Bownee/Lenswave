@@ -186,30 +186,18 @@ internal class ProtonThumbnailQueue(
                 .onEach { entry -> claimed += entry.nodeUid }
         }
 
-    /**
-     * Removes successful entries and reschedules failed ones with backoff. [abandonedNodeUids]
-     * are dropped without being reported as completed, for failures that no retry can fix.
-     */
+    /** Removes successful entries and reschedules failed ones with backoff. */
     suspend fun settle(
         userId: String,
         successfulNodeUids: Set<String>,
         failedNodeUids: Set<String>,
-        abandonedNodeUids: Set<String> = emptySet(),
     ): List<ProtonThumbnailQueueEntry> =
         mutex.withLock {
             require(successfulNodeUids.intersect(failedNodeUids).isEmpty()) {
                 "A thumbnail cannot succeed and fail in the same batch"
             }
-            require(
-                abandonedNodeUids.none { nodeUid ->
-                    nodeUid in successfulNodeUids || nodeUid in failedNodeUids
-                },
-            ) {
-                "An abandoned thumbnail cannot also succeed or be retried"
-            }
             val entries = entries(userId)
             val completed = successfulNodeUids.mapNotNull(entries::remove)
-            val abandoned = abandonedNodeUids.count { nodeUid -> entries.remove(nodeUid) != null }
             val now = clock.nowMillis()
             failedNodeUids.forEach { nodeUid ->
                 val entry = entries[nodeUid] ?: return@forEach
@@ -220,12 +208,12 @@ internal class ProtonThumbnailQueue(
                         retryAtMillis = now + retryDelayMillis(retryCount),
                     )
             }
-            val settled = successfulNodeUids + failedNodeUids + abandonedNodeUids
+            val settled = successfulNodeUids + failedNodeUids
             claimedNodeUids[userId]?.let { claimed ->
                 claimed.removeAll(settled)
                 if (claimed.isEmpty()) claimedNodeUids.remove(userId)
             }
-            if (completed.isNotEmpty() || abandoned > 0 || failedNodeUids.any(entries::containsKey)) {
+            if (completed.isNotEmpty() || failedNodeUids.any(entries::containsKey)) {
                 persist(userId, entries)
             }
             completed

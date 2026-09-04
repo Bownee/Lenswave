@@ -45,14 +45,6 @@ class ProtonBackgroundBatchPolicyTest {
         assertTrue(ProtonBackgroundBatchPolicy.idle(thumbnailsPending = false, previewsPending = true).hasPending)
     }
 
-    @Test
-    fun onlyMissingPreviewsArePermanentFailures() {
-        assertTrue(ProtonBackgroundBatchPolicy.isPermanent(ThumbnailFailureKind.NOT_FOUND))
-        ThumbnailFailureKind.entries
-            .filterNot { kind -> kind == ThumbnailFailureKind.NOT_FOUND }
-            .forEach { kind -> assertFalse(kind.name, ProtonBackgroundBatchPolicy.isPermanent(kind)) }
-    }
-
     private fun entries(vararg nodeUids: String) =
         nodeUids.map { nodeUid -> ProtonThumbnailQueueEntry(nodeUid, mapOf("timeline" to 1L)) }
 
