@@ -69,7 +69,9 @@ import javax.inject.Inject
 class GalleryActivity :
     FragmentActivity(),
     UpdateAvailableDialogFragment.Listener,
-    TrashConfirmationDialogFragment.Listener {
+    TrashConfirmationDialogFragment.Listener,
+    PrivacySettingsDialogFragment.Listener,
+    DisconnectProtonDialogFragment.Listener {
     @Inject lateinit var accountManager: AccountManager
 
     @Inject lateinit var authOrchestrator: AuthOrchestrator
@@ -224,6 +226,10 @@ class GalleryActivity :
     override fun onUpdateSnoozed(versionName: String) = updatePresenter.onUpdateSnoozed(versionName)
 
     override fun onTrashConfirmed(nodeUids: List<String>) = viewModel.trashPhotos(nodeUids)
+
+    override fun onTelemetryPreferenceSaved(enabled: Boolean) = settingsPresenter.saveTelemetryPreference(enabled)
+
+    override fun onDisconnectProtonConfirmed() = settingsPresenter.disconnectProtonConfirmed()
 
     private fun buildInterface() {
         screen =
