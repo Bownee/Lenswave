@@ -114,6 +114,9 @@ class PhotoViewerActivity :
     private var navigationRehydrationFailed = false
     private var edgeToast: Toast? = null
 
+    /** A zoom kept across recreation, applied once the restored photo's original is decoded. */
+    private var pendingZoomFactor: Float? = null
+
     /** The gallery's full list, when it is still in the process and lines up with [navigationRequests]. */
     private var navigationSource: PhotoNavigationSources.Source? = null
     private val navigationWindow: PhotoNavigationWindowPolicy.Window?
@@ -155,6 +158,7 @@ class PhotoViewerActivity :
         restoreResult(savedInstanceState)
         configureEdgeToEdgeWindow()
         buildInterface()
+        restoreViewingState(savedInstanceState)
         onBackPressedDispatcher.addCallback(
             this,
             object : OnBackPressedCallback(true) {
@@ -180,7 +184,30 @@ class PhotoViewerActivity :
         outState.putInt(STATE_NAVIGATION_START, if (navigationStart < 0) -1 else navigationStart + kept.start)
         outState.putInt(STATE_NAVIGATION_TOTAL, navigationTotal)
         RESULT_EXTRAS.forEach { extra -> outState.putBoolean(extra, resultIntent.getBooleanExtra(extra, false)) }
+        // How the photo is being looked at: the open sheet, the zoom, and where a video is.
+        outState.putBoolean(STATE_DETAILS_SHOWN, details.shown)
+        outState.putFloat(STATE_ZOOM_FACTOR, photoView.zoomFactor())
+        video.playbackState()?.let { playback ->
+            outState.putLong(STATE_VIDEO_POSITION, playback.positionMillis)
+            outState.putBoolean(STATE_VIDEO_PLAY_WHEN_READY, playback.playWhenReady)
+        }
         super.onSaveInstanceState(outState)
+    }
+
+    /** Re-applies what [onSaveInstanceState] kept of how the photo was being looked at; call once the views exist. */
+    private fun restoreViewingState(savedInstanceState: Bundle?) {
+        if (savedInstanceState == null) return
+        if (savedInstanceState.getBoolean(STATE_DETAILS_SHOWN, false)) details.restoreShown()
+        val zoom = savedInstanceState.getFloat(STATE_ZOOM_FACTOR, 1f)
+        if (zoom > ZOOM_RESTORE_THRESHOLD) pendingZoomFactor = zoom
+        if (savedInstanceState.containsKey(STATE_VIDEO_POSITION)) {
+            video.restorePlayback(
+                ViewerPlaybackState(
+                    positionMillis = savedInstanceState.getLong(STATE_VIDEO_POSITION, 0L),
+                    playWhenReady = savedInstanceState.getBoolean(STATE_VIDEO_PLAY_WHEN_READY, true),
+                ),
+            )
+        }
     }
 
     /** The saved state wins over the intent: the intent describes where the viewer was opened, not where it is. */
@@ -769,6 +796,10 @@ class PhotoViewerActivity :
                     photoReady = true
                     hideLoadingPanel()
                     setActionsEnabled(true)
+                    pendingZoomFactor?.let { zoom ->
+                        pendingZoomFactor = null
+                        photoView.restoreZoomFactor(zoom)
+                    }
                     if (details.shown) details.ensureMetadataLoaded()
                     postDetailsSynchronization()
                     if (thumbnailPreview.isVisible) {
@@ -855,6 +886,9 @@ class PhotoViewerActivity :
 
     /** Called by the swipe controller once the current media has slid away. */
     private fun commitNavigation(adjacent: PhotoRequest) {
+        // A zoom or playback position kept for the restored photo has no business on its neighbour.
+        pendingZoomFactor = null
+        video.discardPendingPlayback()
         setCurrentRequest(adjacent)
         extendNavigationWindow()
         resetPhotoStateForNavigation()
@@ -1209,6 +1243,13 @@ class PhotoViewerActivity :
         private const val STATE_NAVIGATION = "viewer.navigation"
         private const val STATE_NAVIGATION_START = "viewer.navigation-start"
         private const val STATE_NAVIGATION_TOTAL = "viewer.navigation-total"
+        private const val STATE_DETAILS_SHOWN = "viewer.details-shown"
+        private const val STATE_ZOOM_FACTOR = "viewer.zoom-factor"
+        private const val STATE_VIDEO_POSITION = "viewer.video-position"
+        private const val STATE_VIDEO_PLAY_WHEN_READY = "viewer.video-play-when-ready"
+
+        /** A zoom this close to fit is not worth re-applying over the clean fit the load produces. */
+        private const val ZOOM_RESTORE_THRESHOLD = 1.05f
         private const val DETAILS_MINIMUM_HEIGHT_FRACTION = 0.55f
         private const val MEDIA_ACTION_GAP_DP = 8
         private const val VIDEO_CONTROLS_HEIGHT_DP = 80

@@ -71,6 +71,12 @@ internal class ViewerVideoController(
     private var progressJob: Job? = null
     private var pendingPreviewClear: Runnable? = null
 
+    /** Applied by the next [show], so a recreated viewer resumes where the user was. */
+    private var pendingPlayback: ViewerPlaybackState? = null
+
+    /** True when [pause] stopped a playing video; the saved state should still say "playing". */
+    private var pausedWhilePlaying = false
+
     /** The media the player was last asked to show; null once [stop] has cleared it. */
     private var activeStableId: String? = null
 
@@ -149,7 +155,32 @@ internal class ViewerVideoController(
     }
 
     fun pause() {
-        player?.pause()
+        val active = player ?: return
+        if (active.playWhenReady) pausedWhilePlaying = true
+        active.pause()
+    }
+
+    /**
+     * Where the video on screen is and whether it is playing; null when no video is up. On this
+     * platform the state is saved after onStop, so a video [pause]d there still reports playing.
+     */
+    fun playbackState(): ViewerPlaybackState? {
+        val active = player ?: return null
+        if (activeStableId == null) return null
+        return ViewerPlaybackState(
+            positionMillis = active.currentPosition,
+            playWhenReady = active.playWhenReady || pausedWhilePlaying,
+        )
+    }
+
+    /** Applies [state] to the next [show]: the player seeks there before preparing, so the first frame is that one. */
+    fun restorePlayback(state: ViewerPlaybackState) {
+        pendingPlayback = state
+    }
+
+    /** Drops a restored state that was never applied, e.g. when the user swiped on before the video loaded. */
+    fun discardPendingPlayback() {
+        pendingPlayback = null
     }
 
     /**
@@ -161,6 +192,7 @@ internal class ViewerVideoController(
         progressJob?.cancel()
         progressJob = null
         activeStableId = null
+        pausedWhilePlaying = false
         player?.let { active ->
             active.stop()
             active.clearMediaItems()
@@ -210,8 +242,11 @@ internal class ViewerVideoController(
                 ProgressiveMediaSource.Factory(dataSourceFactory).createMediaSource(mediaItem),
             )
         }
+        val restored = pendingPlayback
+        pendingPlayback = null
+        if (restored != null) activePlayer.seekTo(restored.positionMillis)
         activePlayer.prepare()
-        activePlayer.playWhenReady = true
+        activePlayer.playWhenReady = restored?.playWhenReady ?: true
     }
 
     private fun ensurePlayer(): ExoPlayer =
@@ -261,3 +296,9 @@ internal class ViewerVideoController(
         const val FULL_QUALITY_CROSSFADE_MILLIS = 180L
     }
 }
+
+/** Playback position and state of the video on screen, carried across the viewer's recreation. */
+internal data class ViewerPlaybackState(
+    val positionMillis: Long,
+    val playWhenReady: Boolean,
+)
