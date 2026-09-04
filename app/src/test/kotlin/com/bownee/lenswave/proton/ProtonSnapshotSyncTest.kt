@@ -74,6 +74,39 @@ class ProtonSnapshotSyncTest {
             assertEquals(0L, metadata.readLastSuccessfulSync("user", KEY))
         }
 
+    @Test fun theCommitGateWrapsTheCommitTheStampAndTheResultButNotTheEnumeration() =
+        runTest {
+            sync.sync(
+                hasSnapshot = false,
+                enumerate = {
+                    events += "enumerate"
+                    "remote"
+                },
+                commit = {
+                    events += "commit:$it"
+                    "$it-narrowed"
+                },
+                commitGate = { gated ->
+                    events += "gate-open"
+                    gated()
+                    events += "gate-closed"
+                },
+            )
+
+            assertEquals(
+                listOf(
+                    "syncing",
+                    "enumerate",
+                    "gate-open",
+                    "commit:remote",
+                    "stamp:10000",
+                    "result:remote-narrowed",
+                    "gate-closed",
+                ),
+                events,
+            )
+        }
+
     @Test fun cancellationClearsSyncingAndRethrows() =
         runTest {
             val cancellation = CancellationException("account changed")
@@ -95,7 +128,11 @@ class ProtonSnapshotSyncTest {
         hasSnapshot: Boolean,
         forceRemote: Boolean = false,
         enumerate: suspend () -> String,
-        commit: (String) -> Unit = { events += "commit:$it" },
+        commit: (String) -> String = {
+            events += "commit:$it"
+            it
+        },
+        commitGate: suspend (suspend () -> Unit) -> Unit = { gated -> gated() },
     ) = sync(
         userId = "user",
         source = ProtonSyncSource.TIMELINE,
@@ -110,6 +147,7 @@ class ProtonSnapshotSyncTest {
         publishResult = { events += "result:$it" },
         publishCancelled = { events += "cancelled" },
         publishFailed = { events += "failed" },
+        commitGate = commitGate,
     )
 
     private fun fail(message: String): Nothing = throw AssertionError(message)

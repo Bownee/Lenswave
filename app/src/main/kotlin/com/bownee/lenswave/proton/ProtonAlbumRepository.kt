@@ -101,6 +101,7 @@ internal class ProtonAlbumRepository
                 commit = { albums ->
                     cache.reconcileAlbums(userId.id, albums.map(ProtonAlbum::nodeUid))
                     cache.writeAlbums(userId.id, albums)
+                    albums
                 },
                 publishResult = { albums -> emitAlbums(userId, albums, syncing = false) },
                 publishCancelled = { mutableAlbumsState.value = mutableAlbumsState.value.copy(syncing = false) },
@@ -145,7 +146,10 @@ internal class ProtonAlbumRepository
                         .map { item -> availability.photo(item.nodeUid.value, item.captureTime.epochSecond) }
                         .sortedByDescending(ProtonGalleryPhoto::captureTimeEpochSeconds)
                 },
-                commit = { photos -> cache.writeAlbumPhotos(userId.id, album.nodeUid, photos) },
+                commit = { photos ->
+                    cache.writeAlbumPhotos(userId.id, album.nodeUid, photos)
+                    photos
+                },
                 publishResult = { photos ->
                     emitAlbumPhotos(userId, album, photos, hasLoaded = true, syncing = false)
                 },
