@@ -47,6 +47,25 @@ internal object ProtonReconcileSafetyPolicy {
             throw ProtonSuspiciousListingException(listing, existing.size, removedCount)
         }
     }
+
+    /**
+     * [requireCommit] for a timeline whose cached listing could not be read: absent on a fresh
+     * account, or unreadable for a moment (a Keystore hiccup) or discarded as corrupt. The stored
+     * thumbnails stand in for the listing then; a fresh account has none and passes, while a
+     * remote listing that lacks most of the photos whose thumbnails are stored is refused just
+     * as it would be against the listing itself.
+     */
+    fun requireCommitOverStoredThumbnails(
+        listing: String,
+        storedThumbnailCount: Int,
+        remoteStoredThumbnailCount: Int,
+        forceRemote: Boolean,
+    ) {
+        val removedCount = storedThumbnailCount - remoteStoredThumbnailCount
+        if (!mayCommit(storedThumbnailCount, removedCount, forceRemote)) {
+            throw ProtonSuspiciousListingException(listing, storedThumbnailCount, removedCount)
+        }
+    }
 }
 
 /** An automatic refresh refused to reconcile a listing that [ProtonReconcileSafetyPolicy] judged suspicious. */

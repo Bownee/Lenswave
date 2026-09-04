@@ -164,6 +164,27 @@ class ProtonTimelineRepositoryTest {
         }
 
     @Test
+    fun `a timeline whose listing cannot be read is floored against its stored thumbnails`() =
+        runTest {
+            // No listing at all: a transient read failure and a fresh account look the same here.
+            cache.thumbnails += List(400) { index -> "v~p$index" }
+            clients.timeline = List(100) { index -> "v~p$index" to index.toLong() }
+
+            repository.syncMetadata(USER, forceRemote = false)
+
+            assertTrue(repository.state.value.refreshFailed)
+            assertFalse(repository.state.value.hasLoaded)
+            assertTrue(cache.events.none { it.startsWith("reconcilePhotos") || it.startsWith("writeIndex") })
+            assertTrue(failures.single().second is ProtonSuspiciousListingException)
+
+            repository.syncMetadata(USER, forceRemote = true)
+
+            assertEquals(100, repository.state.value.photos.size)
+            assertTrue(repository.state.value.hasLoaded)
+            assertEquals(listOf("writeIndex:100", "reconcilePhotos:0->100"), cache.events)
+        }
+
+    @Test
     fun `an automatic tag refresh that drops most of the tag keeps the cache and fails`() =
         runTest {
             val cached = List(400) { index -> photo("v~p$index", index.toLong()) }

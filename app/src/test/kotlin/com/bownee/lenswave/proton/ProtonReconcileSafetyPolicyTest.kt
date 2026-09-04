@@ -69,4 +69,14 @@ class ProtonReconcileSafetyPolicyTest {
             forceRemote = false,
         ) { it }
     }
+
+    @Test
+    fun `stored thumbnails stand in for a listing that could not be read`() {
+        assertThrows(ProtonSuspiciousListingException::class.java) {
+            ProtonReconcileSafetyPolicy.requireCommitOverStoredThumbnails("timeline", 400, 100, forceRemote = false)
+        }
+        ProtonReconcileSafetyPolicy.requireCommitOverStoredThumbnails("timeline", 400, 100, forceRemote = true)
+        ProtonReconcileSafetyPolicy.requireCommitOverStoredThumbnails("timeline", 0, 0, forceRemote = false)
+        ProtonReconcileSafetyPolicy.requireCommitOverStoredThumbnails("timeline", 400, 300, forceRemote = false)
+    }
 }

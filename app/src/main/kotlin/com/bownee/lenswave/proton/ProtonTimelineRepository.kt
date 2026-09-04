@@ -101,13 +101,25 @@ internal class ProtonTimelineRepository
                 },
                 commit = { photos ->
                     val remoteNodeUids = photos.map(ProtonGalleryPhoto::nodeUid)
-                    ProtonReconcileSafetyPolicy.requireCommit(
-                        listing = "timeline",
-                        existing = existing,
-                        remoteNodeUids = remoteNodeUids.toHashSet(),
-                        forceRemote = forceRemote,
-                        nodeUid = ProtonGalleryPhoto::nodeUid,
-                    )
+                    if (hasCachedSnapshot) {
+                        ProtonReconcileSafetyPolicy.requireCommit(
+                            listing = "timeline",
+                            existing = existing,
+                            remoteNodeUids = remoteNodeUids.toHashSet(),
+                            forceRemote = forceRemote,
+                            nodeUid = ProtonGalleryPhoto::nodeUid,
+                        )
+                    } else {
+                        // No listing could be read, so nothing is known to be removed; the stored
+                        // thumbnails say how much the cache holds and keep a transient read failure
+                        // from turning a truncated enumeration into a wipe.
+                        ProtonReconcileSafetyPolicy.requireCommitOverStoredThumbnails(
+                            listing = "timeline",
+                            storedThumbnailCount = cache.storedRenditions(userId.id).thumbnailCount,
+                            remoteStoredThumbnailCount = photos.count(ProtonGalleryPhoto::hasThumbnail),
+                            forceRemote = forceRemote,
+                        )
+                    }
                     // The new listing lands before anything is deleted: a crash between the two
                     // then leaves stray renditions for the next reconcile, not a listing that
                     // points at renditions which are gone.
