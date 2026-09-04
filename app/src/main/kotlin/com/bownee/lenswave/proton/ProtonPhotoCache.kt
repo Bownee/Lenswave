@@ -404,12 +404,24 @@ internal class ProtonPhotoCache
             }
         }
 
+        /**
+         * Best effort: a file that cannot be deleted right now is reported and left for
+         * [retainOnlyUser] to sweep on the next account transition. Throwing here would fail the
+         * session teardown, and the session manager retries a failed transition forever while
+         * showing the account as transitioning. The data key is deleted regardless, so whatever
+         * residue survives is unreadable and is discarded as corrupt by the next read.
+         */
         override fun clearUser(userId: String) {
             thumbnails.clearMemory(userId)
             previews.forget(userId)
             val indexDeleted = userDirectory(userId).deleteRecursively()
             val originalsDeleted = originals.clear(userId)
-            check(indexDeleted && originalsDeleted) { "Could not remove cached Proton media" }
+            if (!indexDeleted || !originalsDeleted) {
+                LenswaveDiagnostics.reportFailure(
+                    LenswaveOperation.CACHE_CLEAR,
+                    IllegalStateException("Could not remove all cached Proton media; residue is swept later"),
+                )
+            }
             secureFiles.deleteKey(scope(userId))
         }
 

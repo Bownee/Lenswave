@@ -183,6 +183,7 @@ interface ProtonMediaCache {
 }
 
 interface ProtonSessionCache {
+    /** Never throws: files that resist deletion are reported and swept on the next account transition. */
     fun clearUser(userId: String)
 
     /**
