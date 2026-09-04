@@ -68,17 +68,27 @@ internal object LenswaveDiagnostics {
         Log.i(TAG, stateSummary(operation, state, attempt, maximumAttempts))
     }
 
+    /**
+     * A state line never throws for its text: an operation that builds a state from runtime
+     * values must not crash playback over a log line. Anything outside the safe alphabet is
+     * replaced and the value cut to the safe length, so the result always matches
+     * [SAFE_DIAGNOSTIC_VALUE].
+     */
     internal fun stateSummary(
         operation: String,
         state: String,
         attempt: Int,
         maximumAttempts: Int,
     ): String {
-        require(SAFE_DIAGNOSTIC_VALUE.matches(operation))
-        require(SAFE_DIAGNOSTIC_VALUE.matches(state))
         require(attempt in 1..maximumAttempts)
-        return "operation=$operation state=$state attempt=$attempt maximumAttempts=$maximumAttempts"
+        val safeOperation = operation.safeDiagnosticValueOrSanitized()
+        val safeState = state.safeDiagnosticValueOrSanitized()
+        return "operation=$safeOperation state=$safeState attempt=$attempt maximumAttempts=$maximumAttempts"
     }
+
+    private fun String.safeDiagnosticValueOrSanitized(): String =
+        safeDiagnosticValue()
+            ?: replace(UNSAFE_DIAGNOSTIC_CHARACTER, "_").take(MAX_DIAGNOSTIC_VALUE_LENGTH).ifEmpty { "unknown" }
 
     internal fun failureSummary(
         operation: String,
@@ -163,7 +173,9 @@ internal object LenswaveDiagnostics {
     private const val TAG = "Lenswave"
     private const val MAX_STACK_FRAMES = 4
     private const val MAX_MESSAGE_LENGTH = 160
-    private val SAFE_DIAGNOSTIC_VALUE = Regex("[A-Za-z0-9_.-]{1,64}")
+    private const val MAX_DIAGNOSTIC_VALUE_LENGTH = 64
+    private val SAFE_DIAGNOSTIC_VALUE = Regex("[A-Za-z0-9_.-]{1,$MAX_DIAGNOSTIC_VALUE_LENGTH}")
+    private val UNSAFE_DIAGNOSTIC_CHARACTER = Regex("[^A-Za-z0-9_.-]")
     private val SAFE_STACK_FRAME =
         Regex(
             """at ([A-Za-z0-9_.${'$'}<>-]+\.[A-Za-z0-9_${'$'}<>-]+\([A-Za-z0-9_.: -]{1,100}\))""",
