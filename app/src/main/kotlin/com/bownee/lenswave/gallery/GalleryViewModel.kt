@@ -15,8 +15,12 @@ import com.bownee.lenswave.proton.ProtonGalleryState
 import com.bownee.lenswave.proton.ProtonThumbnailScheduler
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -25,6 +29,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -35,6 +40,16 @@ import me.proton.core.accountmanager.domain.AccountManager
 import me.proton.core.domain.entity.UserId
 import javax.inject.Inject
 
+/** What a photo mutation run by [GalleryViewModel] came to; the activity on screen reports it once. */
+internal sealed interface GalleryMutationEvent {
+    data class Trashed(
+        val successfulCount: Int,
+        val failedCount: Int,
+    ) : GalleryMutationEvent
+
+    data object TrashFailed : GalleryMutationEvent
+}
+
 @HiltViewModel
 class GalleryViewModel internal constructor(
     galleryText: GalleryText,
@@ -43,6 +58,7 @@ class GalleryViewModel internal constructor(
     private val protonThumbnailScheduler: ProtonThumbnailScheduler,
     private val accountSession: StateFlow<ProtonAccountSessionState>,
     private val navigationStore: GalleryNavigationStore,
+    private val deletionExecutor: PhotoDeletionExecutor,
     private val savedStateHandle: SavedStateHandle,
     private val clock: LenswaveClock,
     private val dispatchers: LenswaveDispatchers,
@@ -56,6 +72,7 @@ class GalleryViewModel internal constructor(
         protonThumbnailScheduler: ProtonThumbnailScheduler,
         accountSessionManager: ProtonAccountSessionManager,
         navigationStore: GalleryNavigationStore,
+        deletionExecutor: PhotoDeletionExecutor,
         savedStateHandle: SavedStateHandle,
         clock: LenswaveClock,
         dispatchers: LenswaveDispatchers,
@@ -66,6 +83,7 @@ class GalleryViewModel internal constructor(
         protonThumbnailScheduler = protonThumbnailScheduler,
         accountSession = accountSessionManager.state,
         navigationStore = navigationStore,
+        deletionExecutor = deletionExecutor,
         savedStateHandle = savedStateHandle,
         clock = clock,
         dispatchers = dispatchers,
@@ -91,6 +109,25 @@ class GalleryViewModel internal constructor(
      * death restores the page the user was looking at where they left it.
      */
     internal val scrollPositions = GalleryScrollPositionStore()
+
+    /**
+     * The stable ids of the selected photos. Owned here and written to the saved state, so a
+     * selection survives the activity's recreation; the activity re-applies it to the grid once
+     * the page's rows are on screen. A selection never outlives the page it was made on.
+     */
+    internal var selectedStableIds: Set<String> =
+        savedStateHandle.get<ArrayList<String>>(STATE_SELECTION)?.toSet().orEmpty()
+        private set
+
+    private var mutationInFlight = false
+
+    // A channel, not a shared flow: an outcome that arrives while no activity collects must wait
+    // for the next one rather than be dropped.
+    private val mutableMutationEvents =
+        Channel<GalleryMutationEvent>(capacity = MUTATION_EVENT_BUFFER, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+
+    /** Outcomes of the photo mutations run here, for the activity on screen to report once. */
+    internal val mutationEvents: Flow<GalleryMutationEvent> = mutableMutationEvents.receiveAsFlow()
 
     /**
      * Everything the UI state depends on that is owned by this view model. It joins the
@@ -185,6 +222,36 @@ class GalleryViewModel internal constructor(
             }
             if (userId != null) protonThumbnailScheduler.enqueue(userId)
             requestRefresh(manual = false)
+        }
+    }
+
+    internal fun setSelection(stableIds: Set<String>) {
+        if (selectedStableIds == stableIds) return
+        selectedStableIds = stableIds
+        savedStateHandle[STATE_SELECTION] = ArrayList(stableIds)
+    }
+
+    /**
+     * Moves the photos to Proton Trash. Runs in this scope, so the call is neither cancelled nor
+     * left unreported when the activity is recreated while it is in flight; the outcome reaches
+     * whichever activity collects [mutationEvents] next.
+     */
+    fun trashPhotos(nodeUids: List<String>) {
+        if (mutationInFlight || nodeUids.isEmpty()) return
+        val userId = currentUserId ?: return
+        mutationInFlight = true
+        viewModelScope.launch {
+            try {
+                val result = deletionExecutor.trashProton(userId, nodeUids)
+                setSelection(emptySet())
+                mutableMutationEvents.trySend(GalleryMutationEvent.Trashed(result.successfulCount, result.failedCount))
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Throwable) {
+                mutableMutationEvents.trySend(GalleryMutationEvent.TrashFailed)
+            } finally {
+                mutationInFlight = false
+            }
         }
     }
 
@@ -390,6 +457,7 @@ class GalleryViewModel internal constructor(
         savedStateHandle[STATE_ALBUM_NAME] = stored.albumName
         savedStateHandle[STATE_TAG] = stored.tag
         persistScrollPosition()
+        setSelection(emptySet())
         // A cold start reopens the tab root, never a deep collection or album.
         navigationStore.write(GalleryNavigationPolicy.root(destination))
     }
@@ -413,6 +481,8 @@ class GalleryViewModel internal constructor(
         const val STATE_TAG = "gallery.proton-tag"
         const val STATE_SCROLL_FIRST_VISIBLE = "gallery.scroll-first-visible"
         const val STATE_SCROLL_TOP_OFFSET = "gallery.scroll-top-offset"
+        const val STATE_SELECTION = "gallery.selection"
+        const val MUTATION_EVENT_BUFFER = 16
         const val UI_STATE_STOP_TIMEOUT_MILLIS = 5_000L
 
         private fun accountStatus(state: ProtonAccountSessionState): ProtonAccountStatus =

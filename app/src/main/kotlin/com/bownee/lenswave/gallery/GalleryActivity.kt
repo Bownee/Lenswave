@@ -30,6 +30,7 @@ import com.bownee.lenswave.gallery.GalleryDestination
 import com.bownee.lenswave.gallery.GalleryEmptyAction
 import com.bownee.lenswave.gallery.GalleryFastScrollLayoutPolicy
 import com.bownee.lenswave.gallery.GalleryGrouping
+import com.bownee.lenswave.gallery.GalleryMutationEvent
 import com.bownee.lenswave.gallery.GalleryNavigationPolicy
 import com.bownee.lenswave.gallery.GalleryNotificationPermissionPrompter
 import com.bownee.lenswave.gallery.GalleryRowSet
@@ -41,7 +42,6 @@ import com.bownee.lenswave.gallery.GalleryUiState
 import com.bownee.lenswave.gallery.GalleryUpdatePresenter
 import com.bownee.lenswave.gallery.GalleryViewModel
 import com.bownee.lenswave.gallery.LibraryAction
-import com.bownee.lenswave.gallery.PhotoDeletionExecutor
 import com.bownee.lenswave.gallery.ProtonThumbnailImageSource
 import com.bownee.lenswave.proton.ProtonAlbum
 import com.bownee.lenswave.update.AppUpdateChecker
@@ -71,8 +71,6 @@ class GalleryActivity :
     @Inject lateinit var authOrchestrator: AuthOrchestrator
 
     @Inject lateinit var thumbnailSource: ProtonThumbnailImageSource
-
-    @Inject lateinit var photoDeletionExecutor: PhotoDeletionExecutor
 
     @Inject lateinit var observeUserSettings: ObserveUserSettings
 
@@ -114,6 +112,7 @@ class GalleryActivity :
             }
         }
     private var pendingScrollRestore: GalleryDestination? = null
+    private var pendingSelectionRestore = false
     private var safeBottom = 0
     private var thumbnailCacheIdentity: GalleryThumbnailCacheIdentity? = null
 
@@ -156,9 +155,7 @@ class GalleryActivity :
         deletionCoordinator =
             GalleryDeletionCoordinator(
                 activity = this,
-                deletionExecutor = photoDeletionExecutor,
-                currentUserId = { currentUiState.currentUserId },
-                onSelectionCleared = { adapter.clearSelection() },
+                onMoveToTrash = viewModel::trashPhotos,
             )
         buildInterface()
         onBackPressedDispatcher.addCallback(
@@ -256,6 +253,14 @@ class GalleryActivity :
                 viewModel.runPeriodicSync()
             }
         }
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                viewModel.mutationEvents.collect { event ->
+                    if (event is GalleryMutationEvent.Trashed) adapter.clearSelection()
+                    deletionCoordinator.showOutcome(event)
+                }
+            }
+        }
     }
 
     /**
@@ -281,6 +286,7 @@ class GalleryActivity :
                 // The list still shows the previous page here, so its position can be captured.
                 saveScrollPosition()
                 pendingScrollRestore = state.destination
+                pendingSelectionRestore = true
             }
             adapter.submitRows(rows)
             renderedDestination = state.destination
@@ -288,12 +294,24 @@ class GalleryActivity :
             renderedGrouping = grouping
         }
         currentUiState = state
-        if (contentChanged || destinationChanged) restorePendingScrollPosition(state)
+        if (contentChanged || destinationChanged) {
+            restorePendingScrollPosition(state)
+            restorePendingSelection(state)
+        }
         renderEmptyState(state.emptyState)
         updateNavigationControls()
-        if (destinationChanged) {
-            adapter.clearSelection()
-        }
+    }
+
+    /**
+     * Applies the view model's selection to the grid: empty after a navigation, or the selection
+     * kept across a recreation once the page's rows are there to carry it.
+     */
+    private fun restorePendingSelection(state: GalleryUiState) {
+        if (!pendingSelectionRestore) return
+        val selection = viewModel.selectedStableIds
+        if (selection.isNotEmpty() && adapter.count == 0 && state.emptyState == null) return
+        pendingSelectionRestore = false
+        adapter.setSelection(selection)
     }
 
     /** The panel is small but re-applying it (three texts and a listener) on every publish is not free. */
@@ -412,6 +430,7 @@ class GalleryActivity :
     }
 
     private fun showSelection(selected: List<GalleryAsset>) {
+        viewModel.setSelection(selected.mapTo(LinkedHashSet(selected.size)) { it.stableId })
         screen.renderSelection(selectedCount = selected.size)
         updateNavigationControls()
     }

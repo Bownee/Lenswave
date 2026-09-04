@@ -58,6 +58,7 @@ class GalleryViewModelTest {
     private val accountManager = FakeAccountManager(events)
     private val session = MutableStateFlow(ProtonAccountSessionState())
     private val navigationStore = FakeNavigationStore()
+    private val deletionExecutor = FakeDeletionExecutor(events)
     private val savedState = SavedStateHandle()
     private val text = CountingText()
 
@@ -221,6 +222,55 @@ class GalleryViewModelTest {
         }
 
     @Test
+    fun `the selection is saved to the state and cleared by a navigation`() =
+        runTest(dispatcher) {
+            val viewModel = connectedViewModel()
+
+            viewModel.setSelection(setOf("p1", "p2"))
+
+            assertEquals(setOf("p1", "p2"), viewModel.selectedStableIds)
+            assertEquals(listOf("p1", "p2"), savedState.get<ArrayList<String>>("gallery.selection"))
+            assertEquals(setOf("p1", "p2"), viewModel().selectedStableIds)
+
+            viewModel.selectDestination(GalleryDestination.Library)
+            runCurrent()
+
+            assertTrue(viewModel.selectedStableIds.isEmpty())
+            assertTrue(savedState.get<ArrayList<String>>("gallery.selection").orEmpty().isEmpty())
+        }
+
+    @Test
+    fun `trashPhotos runs once at a time, clears the selection and reports the outcome to a late collector`() =
+        runTest(dispatcher) {
+            val viewModel = connectedViewModel()
+            viewModel.setSelection(setOf("p1"))
+
+            viewModel.trashPhotos(listOf("p1"))
+            viewModel.trashPhotos(listOf("p2"))
+            runCurrent()
+
+            assertEquals("a second call while one is in flight is dropped", listOf("trash:u:p1"), events)
+            deletionExecutor.result = PhotoMutationResult(successfulCount = 1, failedCount = 1)
+            deletionExecutor.held.single().complete(Unit)
+            runCurrent()
+
+            assertTrue(viewModel.selectedStableIds.isEmpty())
+            // The activity that started the call may be gone; the next one still hears the outcome.
+            val received = mutableListOf<GalleryMutationEvent>()
+            backgroundScope.launch { viewModel.mutationEvents.collect { received += it } }
+            runCurrent()
+            assertEquals(listOf(GalleryMutationEvent.Trashed(successfulCount = 1, failedCount = 1)), received)
+
+            deletionExecutor.failure = IllegalStateException("offline")
+            viewModel.trashPhotos(listOf("p2"))
+            runCurrent()
+            deletionExecutor.held.last().complete(Unit)
+            runCurrent()
+
+            assertEquals(GalleryMutationEvent.TrashFailed, received.last())
+        }
+
+    @Test
     fun `a manual refresh stays refreshing until the latest manual refresh has finished`() =
         runTest(dispatcher) {
             val viewModel = connectedViewModel()
@@ -368,6 +418,7 @@ class GalleryViewModelTest {
             protonThumbnailScheduler = scheduler,
             accountSession = session,
             navigationStore = navigationStore,
+            deletionExecutor = deletionExecutor,
             savedStateHandle = savedState,
             clock = SchedulerClock(),
             dispatchers = TestDispatchers(),
@@ -530,6 +581,24 @@ class GalleryViewModelTest {
 
         override suspend fun cancelAndAwait(userId: UserId) {
             events += "cancel:${userId.id}"
+        }
+    }
+
+    private class FakeDeletionExecutor(
+        private val events: MutableList<String>,
+    ) : PhotoDeletionExecutor {
+        var result = PhotoMutationResult(successfulCount = 1, failedCount = 0)
+        var failure: Throwable? = null
+        val held = mutableListOf<CompletableDeferred<Unit>>()
+
+        override suspend fun trashProton(
+            userId: UserId,
+            nodeUids: Collection<String>,
+        ): PhotoMutationResult {
+            events += "trash:${userId.id}:${nodeUids.joinToString(",")}"
+            CompletableDeferred<Unit>().also(held::add).await()
+            failure?.let { throw it }
+            return result
         }
     }
 

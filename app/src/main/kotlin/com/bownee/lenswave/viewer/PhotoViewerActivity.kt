@@ -20,7 +20,9 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.isVisible
 import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import com.bownee.lenswave.R
 import com.bownee.lenswave.UiStyle
 import com.bownee.lenswave.applyBottomOverlayInsets
@@ -29,10 +31,8 @@ import com.bownee.lenswave.dp
 import com.bownee.lenswave.gallery.GalleryAsset
 import com.bownee.lenswave.gallery.MediaKind
 import com.bownee.lenswave.gallery.PhotoDeletionDecision
-import com.bownee.lenswave.gallery.PhotoDeletionExecutor
 import com.bownee.lenswave.gallery.PhotoDeletionPolicy
 import com.bownee.lenswave.gallery.ProtonOriginalMediaSource
-import com.bownee.lenswave.gallery.ProtonPhotoMutations
 import com.bownee.lenswave.gallery.ProtonThumbnailImageSource
 import com.bownee.lenswave.metadata.PhotoMetadataHints
 import com.bownee.lenswave.metadata.PhotoMetadataReader
@@ -65,11 +65,9 @@ class PhotoViewerActivity : FragmentActivity() {
 
     @Inject lateinit var thumbnailSource: ProtonThumbnailImageSource
 
-    @Inject lateinit var photoMutations: ProtonPhotoMutations
-
     @Inject lateinit var metadataReader: PhotoMetadataReader
 
-    @Inject lateinit var photoDeletionExecutor: PhotoDeletionExecutor
+    @Inject lateinit var mutationCoordinator: ViewerMutationCoordinator
 
     private lateinit var screen: PhotoViewerScreen
     private val root get() = screen.root
@@ -101,8 +99,6 @@ class PhotoViewerActivity : FragmentActivity() {
     private var navigationWindow: PhotoNavigationWindowPolicy.Window? = null
     private var resolvedUri: Uri? = null
     private var photoTransitioning = false
-    private var deletionInProgress = false
-    private var favoriteInProgress = false
     private var dismissing = false
     private var photoReady = false
     private var previewStableId: String? = null
@@ -114,14 +110,21 @@ class PhotoViewerActivity : FragmentActivity() {
     /** Set in onDestroy; posted work that outlives the Activity checks it and does nothing. */
     private var destroyed = false
 
-    /** Accumulates what the gallery must refresh; a later result must not drop an earlier flag. */
+    /**
+     * Accumulates what the gallery must refresh; a later result must not drop an earlier flag,
+     * and a recreation must not drop any of them either (see [onSaveInstanceState]).
+     */
     private val resultIntent = Intent()
+
+    /** A mutation of the photo on screen is still running in [mutationCoordinator]. */
+    private val mutationInFlight: Boolean get() = mutationCoordinator.isInFlight(request.stableId)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         request = PhotoRequest.from(intent)
         navigationRequests = PhotoRequest.navigationFrom(intent).ifEmpty { listOf(request) }.toMutableList()
         restoreNavigationSource()
+        restoreResult(savedInstanceState)
         configureEdgeToEdgeWindow()
         buildInterface()
         onBackPressedDispatcher.addCallback(
@@ -130,7 +133,57 @@ class PhotoViewerActivity : FragmentActivity() {
                 override fun handleOnBackPressed() = handleBack()
             },
         )
+        observeMutationOutcomes()
         loadPhoto()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        RESULT_EXTRAS.forEach { extra -> outState.putBoolean(extra, resultIntent.getBooleanExtra(extra, false)) }
+        super.onSaveInstanceState(outState)
+    }
+
+    private fun restoreResult(savedInstanceState: Bundle?) {
+        if (savedInstanceState == null) return
+        RESULT_EXTRAS.forEach { extra -> if (savedInstanceState.getBoolean(extra, false)) recordResult(extra) }
+    }
+
+    private fun recordResult(extra: String) {
+        setResult(Activity.RESULT_OK, resultIntent.putExtra(extra, true))
+    }
+
+    /** Applies the outcome of every favourite or trash call, including one that finished while recreating. */
+    private fun observeMutationOutcomes() {
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                mutationCoordinator.outcomes.collect { outcomes -> outcomes.forEach(::applyMutationOutcome) }
+            }
+        }
+    }
+
+    private fun applyMutationOutcome(outcome: ViewerMutationCoordinator.Outcome) {
+        mutationCoordinator.consume(outcome)
+        when (outcome) {
+            is ViewerMutationCoordinator.Outcome.FavoriteSet -> {
+                if (outcome.succeeded) {
+                    updateNavigationRequest(outcome.stableId) { item -> item.withFavorite(outcome.favorite) }
+                    if (request.stableId == outcome.stableId) setCurrentRequest(request.withFavorite(outcome.favorite))
+                    recordResult(EXTRA_FAVORITE_CHANGED)
+                } else {
+                    Toast.makeText(this, R.string.could_not_update_favorite, Toast.LENGTH_LONG).show()
+                }
+                updateFavoriteButton()
+            }
+
+            is ViewerMutationCoordinator.Outcome.Trashed -> {
+                if (outcome.succeeded) {
+                    recordResult(EXTRA_PHOTO_DELETED)
+                    if (request.stableId == outcome.stableId) finish()
+                } else {
+                    Toast.makeText(this, R.string.could_not_move_to_proton_trash, Toast.LENGTH_LONG).show()
+                    setActionsEnabled(actionsEnabled)
+                }
+            }
+        }
     }
 
     override fun onDestroy() {
@@ -775,53 +828,22 @@ class PhotoViewerActivity : FragmentActivity() {
 
     private fun setActionsEnabled(enabled: Boolean) {
         actionsEnabled = enabled
-        deleteButton.isEnabled = enabled
-        deleteButton.alpha = if (enabled) 1f else 0.45f
+        deleteButton.isEnabled = enabled && !mutationInFlight
+        deleteButton.alpha = if (deleteButton.isEnabled) 1f else 0.45f
         updateFavoriteButton(enabled)
     }
 
     private fun updateFavoriteButton(enabled: Boolean = actionsEnabled) {
         favoriteButton.visibility = View.VISIBLE
-        favoriteButton.isEnabled = enabled && !favoriteInProgress
+        favoriteButton.isEnabled = enabled && !mutationInFlight
         favoriteButton.alpha = if (favoriteButton.isEnabled) 1f else 0.45f
         UiStyle.applyFavoriteIcon(favoriteButton, request.isFavorite)
     }
 
+    /** The call runs in [mutationCoordinator]; its outcome comes back through [applyMutationOutcome]. */
     private fun toggleFavorite() {
-        if (favoriteInProgress) return
-        val userId = UserId(request.userId)
-        val nodeUids = listOf(request.nodeUid)
-        val favorite = !request.isFavorite
-        favoriteInProgress = true
-        updateFavoriteButton()
-        lifecycleScope.launch {
-            try {
-                val result = photoMutations.setFavorite(userId, nodeUids, favorite)
-                if (result.updatedCount != 1) {
-                    Toast
-                        .makeText(
-                            this@PhotoViewerActivity,
-                            R.string.could_not_update_favorite,
-                            Toast.LENGTH_LONG,
-                        ).show()
-                    return@launch
-                }
-                setCurrentRequest(request.withFavorite(favorite))
-                updateNavigationRequest(request.stableId) { item -> item.withFavorite(favorite) }
-                setResult(Activity.RESULT_OK, resultIntent.putExtra(EXTRA_FAVORITE_CHANGED, true))
-            } catch (error: CancellationException) {
-                throw error
-            } catch (_: Throwable) {
-                Toast
-                    .makeText(
-                        this@PhotoViewerActivity,
-                        R.string.could_not_update_favorite,
-                        Toast.LENGTH_LONG,
-                    ).show()
-            } finally {
-                favoriteInProgress = false
-                updateFavoriteButton()
-            }
+        if (mutationCoordinator.setFavorite(UserId(request.userId), request, !request.isFavorite)) {
+            updateFavoriteButton()
         }
     }
 
@@ -922,45 +944,9 @@ class PhotoViewerActivity : FragmentActivity() {
             .show()
     }
 
+    /** The call runs in [mutationCoordinator]; its outcome comes back through [applyMutationOutcome]. */
     private fun trashProtonPhoto() {
-        if (deletionInProgress) return
-        val userId = UserId(request.userId)
-        val nodeUid = request.nodeUid
-        deletionInProgress = true
-        setActionsEnabled(false)
-        lifecycleScope.launch {
-            try {
-                val result = photoDeletionExecutor.trashProton(userId, listOf(nodeUid))
-                if (result.successfulCount == 1) {
-                    finishDeleted()
-                } else {
-                    deletionInProgress = false
-                    setActionsEnabled(true)
-                    Toast
-                        .makeText(
-                            this@PhotoViewerActivity,
-                            R.string.could_not_move_to_proton_trash,
-                            Toast.LENGTH_LONG,
-                        ).show()
-                }
-            } catch (error: CancellationException) {
-                throw error
-            } catch (_: Throwable) {
-                deletionInProgress = false
-                setActionsEnabled(true)
-                Toast
-                    .makeText(
-                        this@PhotoViewerActivity,
-                        R.string.could_not_move_to_proton_trash,
-                        Toast.LENGTH_LONG,
-                    ).show()
-            }
-        }
-    }
-
-    private fun finishDeleted() {
-        setResult(Activity.RESULT_OK, resultIntent.putExtra(EXTRA_PHOTO_DELETED, true))
-        finish()
+        if (mutationCoordinator.trash(UserId(request.userId), request)) setActionsEnabled(false)
     }
 
     private fun applySystemInsets() {
@@ -1083,6 +1069,7 @@ class PhotoViewerActivity : FragmentActivity() {
         const val EXTRA_NAVIGATION = "com.bownee.lenswave.extra.NAVIGATION"
         const val EXTRA_NAVIGATION_START = "com.bownee.lenswave.extra.NAVIGATION_START"
         const val EXTRA_NAVIGATION_TOKEN = "com.bownee.lenswave.extra.NAVIGATION_TOKEN"
+        private val RESULT_EXTRAS = listOf(EXTRA_PHOTO_DELETED, EXTRA_FAVORITE_CHANGED)
         private const val DETAILS_MINIMUM_HEIGHT_FRACTION = 0.55f
         private const val MEDIA_ACTION_GAP_DP = 8
         private const val VIDEO_CONTROLS_HEIGHT_DP = 80
