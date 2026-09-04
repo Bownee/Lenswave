@@ -38,6 +38,35 @@ class ProtonQueueFlushPolicyTest {
     }
 
     @Test
+    fun `a large queue needs proportionally more changes before an early write`() {
+        val limit = ProtonQueueFlushPolicy.MAX_UNFLUSHED_CHANGES
+        val perEntry = ProtonQueueFlushPolicy.ENTRIES_PER_IMMEDIATE_FLUSH
+
+        assertEquals(limit, ProtonQueueFlushPolicy.immediateFlushThreshold(entryCount = 0))
+        assertEquals(limit, ProtonQueueFlushPolicy.immediateFlushThreshold(entryCount = limit * perEntry))
+        assertEquals(limit, ProtonQueueFlushPolicy.immediateFlushThreshold(entryCount = -5))
+        assertEquals(500, ProtonQueueFlushPolicy.immediateFlushThreshold(entryCount = 500 * perEntry))
+
+        // Sixteen settles per background batch must not cancel the debounce on a large queue.
+        val batch = ProtonThumbnailDownloadPolicy.BACKGROUND_CLAIM_SIZE
+        assertNull(
+            ProtonQueueFlushPolicy.flushDelayMillis(
+                unflushedChanges = batch * 3,
+                flushScheduled = true,
+                entryCount = 8_000,
+            ),
+        )
+        assertEquals(
+            0L,
+            ProtonQueueFlushPolicy.flushDelayMillis(unflushedChanges = 500, flushScheduled = true, entryCount = 8_000),
+        )
+        assertEquals(
+            ProtonQueueFlushPolicy.FLUSH_DELAY_MILLIS,
+            ProtonQueueFlushPolicy.flushDelayMillis(unflushedChanges = 499, flushScheduled = false, entryCount = 8_000),
+        )
+    }
+
+    @Test
     fun `only every Nth batch forces a write`() {
         val interval = ProtonQueueFlushPolicy.BATCHES_PER_FORCED_FLUSH
         assertFalse(ProtonQueueFlushPolicy.shouldFlushAfterBatch(1))

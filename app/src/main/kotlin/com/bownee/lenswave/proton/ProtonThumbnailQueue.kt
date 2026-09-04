@@ -417,8 +417,11 @@ internal class ProtonThumbnailQueue(
         }
         val unflushed = (state.generation - state.writtenGeneration).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
         val delayMillis =
-            ProtonQueueFlushPolicy.flushDelayMillis(unflushed, flushScheduled = state.scheduledFlush != null)
-                ?: return
+            ProtonQueueFlushPolicy.flushDelayMillis(
+                unflushed,
+                flushScheduled = state.scheduledFlush != null,
+                entryCount = entriesByUser[userId]?.size ?: 0,
+            ) ?: return
         state.scheduledFlush?.cancel()
         state.scheduledFlush =
             flushScope.launch {

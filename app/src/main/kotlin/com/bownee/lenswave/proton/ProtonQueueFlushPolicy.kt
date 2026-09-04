@@ -4,15 +4,24 @@ package com.bownee.lenswave.proton
  * When an in-memory download queue is written back to its encrypted file.
  *
  * Every settle used to rewrite the whole queue; over a backfill of thousands of thumbnails that
- * is quadratic in bytes and sits inside the SDK receive loop. Changes are now coalesced: a write
- * is scheduled a few seconds after the first unflushed change, brought forward once enough
- * changes pile up, and forced by the callers only where the process could otherwise lose it:
- * a stopped worker, the run deadline, an idle run, and every [BATCHES_PER_FORCED_FLUSH]th batch.
- * Forcing it after every batch would put the quadratic rewrite straight back.
+ * is quadratic in bytes and sits inside the SDK receive loop. Changes are coalesced: a write is
+ * scheduled a few seconds after the first unflushed change and forced by the callers only where
+ * the process could otherwise lose it: a stopped worker, the run deadline, an idle run, and every
+ * [BATCHES_PER_FORCED_FLUSH]th batch. Those forced writes are what bound the re-download after a
+ * kill; the size trigger below is only a guard against a long burst of changes outrunning the
+ * debounce. It used to fire at a fixed [MAX_UNFLUSHED_CHANGES]: a background batch settles
+ * sixteen entries, so every second batch cancelled the debounce and rewrote the whole queue,
+ * which is the quadratic rewrite again. Now it scales with the queue, so a large queue is only
+ * rewritten early when a proportionally large part of it changed.
  */
 internal object ProtonQueueFlushPolicy {
     const val FLUSH_DELAY_MILLIS = 3_000L
+
+    /** The fewest unflushed changes that write at once; larger queues need proportionally more. */
     const val MAX_UNFLUSHED_CHANGES = 32
+
+    /** A queue writes at once when one entry in this many changed since the last write. */
+    const val ENTRIES_PER_IMMEDIATE_FLUSH = 16
 
     /** A forced write every few batches bounds what a killed process downloads again. */
     const val BATCHES_PER_FORCED_FLUSH = 8
@@ -21,16 +30,22 @@ internal object ProtonQueueFlushPolicy {
     const val MAX_WRITE_RETRY_DELAY_MILLIS = 5L * 60L * 1_000L
     private const val MAX_WRITE_RETRY_SHIFT = 7
 
+    /** How many unflushed changes a queue of [entryCount] entries tolerates before writing at once. */
+    fun immediateFlushThreshold(entryCount: Int): Int =
+        maxOf(MAX_UNFLUSHED_CHANGES, entryCount.coerceAtLeast(0) / ENTRIES_PER_IMMEDIATE_FLUSH)
+
     /**
-     * How long to wait before the next write, given [unflushedChanges] since the last one, or null
-     * when a write is already scheduled and can absorb this change. Zero means write at once.
+     * How long to wait before the next write, given [unflushedChanges] since the last one and the
+     * [entryCount] the queue holds now, or null when a write is already scheduled and can absorb
+     * this change. Zero means write at once.
      */
     fun flushDelayMillis(
         unflushedChanges: Int,
         flushScheduled: Boolean,
+        entryCount: Int = 0,
     ): Long? {
         if (unflushedChanges <= 0) return null
-        if (unflushedChanges >= MAX_UNFLUSHED_CHANGES) return 0L
+        if (unflushedChanges >= immediateFlushThreshold(entryCount)) return 0L
         return if (flushScheduled) null else FLUSH_DELAY_MILLIS
     }
 
