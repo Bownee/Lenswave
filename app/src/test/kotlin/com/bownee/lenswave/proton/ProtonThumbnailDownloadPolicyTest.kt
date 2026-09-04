@@ -68,6 +68,22 @@ class ProtonThumbnailDownloadPolicyTest {
     }
 
     @Test
+    fun thePassDeadlineFollowsTheRenditionNotTheQueue() {
+        assertEquals(
+            ProtonThumbnailDownloadPolicy.PREVIEW_PASS_TIMEOUT_MILLIS,
+            ProtonThumbnailDownloadPolicy.passTimeoutMillis(ThumbnailType.PREVIEW),
+        )
+        assertEquals(
+            ProtonThumbnailDownloadPolicy.SDK_PASS_TIMEOUT_MILLIS,
+            ProtonThumbnailDownloadPolicy.passTimeoutMillis(ThumbnailType.THUMBNAIL),
+        )
+        assertTrue(
+            ProtonThumbnailDownloadPolicy.PREVIEW_PASS_TIMEOUT_MILLIS >
+                ProtonThumbnailDownloadPolicy.SDK_PASS_TIMEOUT_MILLIS,
+        )
+    }
+
+    @Test
     fun passWaitsTheWholeDeadlineForTheFirstAnswer() {
         val deadline = ProtonThumbnailDownloadPolicy.SDK_PASS_TIMEOUT_MILLIS
 

@@ -55,4 +55,19 @@ class ThumbnailFallbackFailurePolicyTest {
             ThumbnailFallbackFailurePolicy.settle(ThumbnailFailureKind.UNANSWERED, ThumbnailFailureKind.OTHER),
         )
     }
+
+    @Test
+    fun deferredNodesAreSettledNeitherAsFailuresNorAsSuccesses() {
+        val failures =
+            mapOf(
+                "deferred" to ThumbnailFailureKind.NOT_FOUND,
+                "failed" to ThumbnailFailureKind.OTHER,
+            )
+
+        assertEquals(
+            mapOf("failed" to ThumbnailFailureKind.OTHER),
+            ThumbnailFallbackFailurePolicy.withoutDeferred(failures, setOf("deferred", "never-asked")),
+        )
+        assertEquals(failures, ThumbnailFallbackFailurePolicy.withoutDeferred(failures, emptySet()))
+    }
 }

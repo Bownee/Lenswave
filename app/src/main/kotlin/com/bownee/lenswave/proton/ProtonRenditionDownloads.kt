@@ -69,7 +69,7 @@ internal class ProtonRenditionDownloads
 
             suspend fun thumbnailPass(chunk: List<String>): ThumbnailBatchResult =
                 downloadThumbnailPass(photosClient, userId, chunk, ThumbnailType.THUMBNAIL, onProgress)
-            downloadChunks(pending, downloadChunk = ::thumbnailPass).forEach { result ->
+            downloadChunks(pending, downloadChunk = ::thumbnailPass).results.forEach { result ->
                 successful += result.successfulNodeUids
                 failures += result.failures
             }
@@ -82,7 +82,7 @@ internal class ProtonRenditionDownloads
                 batchSize = 1,
                 maxConcurrent = ProtonThumbnailDownloadPolicy.MAX_CONCURRENT_SINGLE_NODE_PASSES,
                 downloadChunk = ::thumbnailPass,
-            ).forEach { result ->
+            ).results.forEach { result ->
                 successful += result.successfulNodeUids
                 result.successfulNodeUids.forEach(failures::remove)
                 failures += result.failures
@@ -91,9 +91,15 @@ internal class ProtonRenditionDownloads
             if (missing.isEmpty()) return ThumbnailBatchResult(successful, emptyMap())
 
             val previewsStored = mutableSetOf<String>()
-            downloadChunks(missing) { chunk ->
-                downloadPreviewInPlaceOfThumbnail(photosClient, userId, chunk, onProgress, previewsStored)
-            }.forEach { result ->
+            // The fallback fetches full previews, so it is admitted like the preview queue: on the
+            // charger or with the app on screen. A chunk refused here is neither a success nor a
+            // failure; its nodes keep their thumbnail entry with no backoff step and are tried
+            // again by a run that may fetch previews.
+            val fallback =
+                downloadChunks(missing, mayStart = previewAdmission::previewsAllowed) { chunk ->
+                    downloadPreviewInPlaceOfThumbnail(photosClient, userId, chunk, onProgress, previewsStored)
+                }
+            fallback.results.forEach { result ->
                 successful += result.successfulNodeUids
                 result.successfulNodeUids.forEach(failures::remove)
                 result.failures.forEach { (nodeUid, previewKind) ->
@@ -103,7 +109,10 @@ internal class ProtonRenditionDownloads
             missing.filterNot(successful::contains).forEach { nodeUid ->
                 failures.putIfAbsent(nodeUid, ThumbnailFailureKind.OTHER)
             }
-            val finalFailures = failures.filterKeys { nodeUid -> nodeUid !in successful }
+            val finalFailures =
+                ThumbnailFallbackFailurePolicy
+                    .withoutDeferred(failures, fallback.deferredNodeUids)
+                    .filterKeys { nodeUid -> nodeUid !in successful }
             if (previewsStored.isNotEmpty()) {
                 onProgress(ThumbnailBatchResult(emptySet(), emptyMap(), previewsStored = previewsStored.toSet()))
             }
@@ -168,7 +177,7 @@ internal class ProtonRenditionDownloads
             // charger or a screen that may be gone before the batch is; the chunks not yet
             // started are dropped the moment it is.
             val mayStart = previewAdmission::previewsAllowed
-            downloadChunks(pending, mayStart = mayStart, downloadChunk = ::previewPass).forEach { result ->
+            downloadChunks(pending, mayStart = mayStart, downloadChunk = ::previewPass).results.forEach { result ->
                 successful += result.successfulNodeUids
                 failures += result.failures
             }
@@ -181,7 +190,7 @@ internal class ProtonRenditionDownloads
                 maxConcurrent = ProtonThumbnailDownloadPolicy.MAX_CONCURRENT_SINGLE_NODE_PASSES,
                 mayStart = mayStart,
                 downloadChunk = ::previewPass,
-            ).forEach { result ->
+            ).results.forEach { result ->
                 successful += result.successfulNodeUids
                 result.successfulNodeUids.forEach(failures::remove)
                 failures += result.failures
@@ -215,9 +224,9 @@ internal class ProtonRenditionDownloads
          * its whole deadline.
          *
          * [mayStart] is asked as each chunk gets its permit. A chunk it refuses is abandoned
-         * with neither successes nor failures: its nodes are not the ones at fault, so they
-         * take no backoff step, and stay claimed until the run that abandoned them is idle
-         * and the sync clears the claims a batch left behind.
+         * with neither successes nor failures and its nodes are reported as deferred: they are
+         * not the ones at fault, so they take no backoff step, and stay claimed until the run
+         * that abandoned them is idle and the sync clears the claims a batch left behind.
          */
         private suspend fun downloadChunks(
             nodeUids: List<String>,
@@ -225,19 +234,34 @@ internal class ProtonRenditionDownloads
             maxConcurrent: Int = ProtonThumbnailDownloadPolicy.MAX_CONCURRENT_BATCHES,
             mayStart: () -> Boolean = { true },
             downloadChunk: suspend (List<String>) -> ThumbnailBatchResult,
-        ): List<ThumbnailBatchResult> =
+        ): ChunkResults =
             coroutineScope {
                 val permits = Semaphore(maxConcurrent)
-                ProtonThumbnailDownloadPolicy
-                    .batches(nodeUids, batchSize)
-                    .map { chunk ->
-                        async {
-                            permits.withPermit {
-                                if (mayStart()) downloadChunk(chunk) else ThumbnailBatchResult(emptySet(), emptyMap())
+                val deferred = mutableSetOf<String>()
+                val results =
+                    ProtonThumbnailDownloadPolicy
+                        .batches(nodeUids, batchSize)
+                        .map { chunk ->
+                            async {
+                                permits.withPermit {
+                                    if (mayStart()) {
+                                        downloadChunk(chunk)
+                                    } else {
+                                        synchronized(deferred) { deferred += chunk }
+                                        null
+                                    }
+                                }
                             }
-                        }
-                    }.awaitAll()
+                        }.awaitAll()
+                        .filterNotNull()
+                ChunkResults(results, deferred)
             }
+
+        /** What the chunks of one [downloadChunks] call came to, and the nodes whose chunk never started. */
+        private class ChunkResults(
+            val results: List<ThumbnailBatchResult>,
+            val deferredNodeUids: Set<String>,
+        )
 
         /**
          * The preview rendition stands in for a thumbnail Proton does not have. It is the same
@@ -258,6 +282,7 @@ internal class ProtonRenditionDownloads
                 nodeUids,
                 ThumbnailType.PREVIEW,
                 onProgress,
+                timeoutMillis = ProtonThumbnailDownloadPolicy.PREVIEW_PASS_TIMEOUT_MILLIS,
                 store = { nodeUid, bytes ->
                     cache.writeThumbnail(userId.id, nodeUid, bytes)
                     if (runCatching { cache.writePreview(userId.id, nodeUid, bytes) }.isSuccess) {
@@ -272,7 +297,7 @@ internal class ProtonRenditionDownloads
             nodeUids: Collection<String>,
             type: ThumbnailType,
             onProgress: suspend (ThumbnailBatchResult) -> Unit,
-            timeoutMillis: Long = ProtonThumbnailDownloadPolicy.SDK_PASS_TIMEOUT_MILLIS,
+            timeoutMillis: Long = ProtonThumbnailDownloadPolicy.passTimeoutMillis(type),
             store: (nodeUid: String, bytes: ByteArray) -> Unit = { nodeUid, bytes ->
                 cache.writeThumbnail(userId.id, nodeUid, bytes)
             },
@@ -428,6 +453,13 @@ internal object ProtonThumbnailDownloadPolicy {
 
     /** Previews are a few hundred kilobytes each, so one pass of [SDK_BATCH_SIZE] gets longer. */
     const val PREVIEW_PASS_TIMEOUT_MILLIS = 90_000L
+
+    /**
+     * The deadline follows the rendition, whichever queue asked for it: a preview fetched in
+     * place of a missing thumbnail is still a preview's worth of bytes.
+     */
+    fun passTimeoutMillis(type: ThumbnailType): Long =
+        if (type == ThumbnailType.PREVIEW) PREVIEW_PASS_TIMEOUT_MILLIS else SDK_PASS_TIMEOUT_MILLIS
 
     /** A pass ends once the SDK has said nothing for this long; the deadlines above are the cap. */
     const val SDK_IDLE_TIMEOUT_MILLIS = 6_000L

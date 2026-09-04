@@ -34,6 +34,18 @@ internal object ThumbnailFallbackFailurePolicy {
         if (previewKind == ThumbnailFailureKind.NOT_FOUND) return thumbnail
         return if (previewKind.priority > thumbnail.priority) previewKind else thumbnail
     }
+
+    /**
+     * A node whose fallback pass never started (previews were not allowed at the time) is not
+     * a failure of any kind: the thumbnail failure that sent it to the fallback must not be
+     * settled either, or a "no thumbnail" answer would drop it before it ever got its preview.
+     * Such nodes stay claimed and untouched until a run that may fetch previews reaches them.
+     */
+    fun withoutDeferred(
+        failures: Map<String, ThumbnailFailureKind>,
+        deferredNodeUids: Set<String>,
+    ): Map<String, ThumbnailFailureKind> =
+        if (deferredNodeUids.isEmpty()) failures else failures.filterKeys { nodeUid -> nodeUid !in deferredNodeUids }
 }
 
 internal object ThumbnailFailureClassifier {
