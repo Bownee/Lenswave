@@ -27,6 +27,14 @@ interface ProtonThumbnailScheduler {
     suspend fun cancelAndAwait(userId: UserId)
 }
 
+/** The requests a running worker makes about itself; see [ProtonThumbnailFollowUpPolicy]. */
+internal interface ProtonThumbnailFollowUpScheduler {
+    fun enqueueFollowUp(
+        userId: UserId,
+        followUp: ProtonThumbnailFollowUp,
+    )
+}
+
 /**
  * Every run of one user shares one unique work name, so WorkManager never has two of them
  * runnable at once. Requests from the app use KEEP: a run that is queued or going is the run
@@ -36,11 +44,12 @@ interface ProtonThumbnailScheduler {
  * it, and a chain whose head was cancelled is replaced instead of extended.
  */
 @Singleton
-class ProtonThumbnailWorkScheduler
+internal class ProtonThumbnailWorkScheduler
     @Inject
     constructor(
         private val workManager: WorkManager,
-    ) : ProtonThumbnailScheduler {
+    ) : ProtonThumbnailScheduler,
+        ProtonThumbnailFollowUpScheduler {
         private val legacyWorkCancelled = AtomicBoolean(false)
 
         override fun enqueue(userId: UserId) {
@@ -53,11 +62,22 @@ class ProtonThumbnailWorkScheduler
         }
 
         override fun enqueueWhileCharging(userId: UserId) {
+            enqueueFollowUp(userId, ProtonThumbnailFollowUp(requiresCharging = true))
+        }
+
+        override fun enqueueFollowUp(
+            userId: UserId,
+            followUp: ProtonThumbnailFollowUp,
+        ) {
             cancelLegacyWork(userId)
             workManager.enqueueUniqueWork(
                 ProtonWorkNames.thumbnails(userId),
                 ExistingWorkPolicy.APPEND_OR_REPLACE,
-                ProtonThumbnailWorker.request(userId, requiresCharging = true),
+                ProtonThumbnailWorker.request(
+                    userId,
+                    requiresCharging = followUp.requiresCharging,
+                    initialDelayMillis = followUp.initialDelayMillis,
+                ),
             )
         }
 
@@ -114,4 +134,9 @@ class ProtonThumbnailWorkScheduler
 internal abstract class ProtonThumbnailSchedulerModule {
     @Binds
     abstract fun bindProtonThumbnailScheduler(implementation: ProtonThumbnailWorkScheduler): ProtonThumbnailScheduler
+
+    @Binds
+    abstract fun bindProtonThumbnailFollowUpScheduler(
+        implementation: ProtonThumbnailWorkScheduler,
+    ): ProtonThumbnailFollowUpScheduler
 }

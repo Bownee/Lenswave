@@ -27,9 +27,10 @@ import java.util.concurrent.TimeUnit
 
 /**
  * Drains the thumbnail and preview queues while a validated unmetered network is available.
- * Every outcome except a crash ends the run successfully: the next app open, sync tick or
- * charging run enqueues the worker again, which costs far less than WorkManager retrying a run
- * that would only find nothing due yet.
+ * Every outcome except a crash ends the run successfully: a WorkManager retry cannot start
+ * from the background, so a run that leaves work behind enqueues its own follow-up request
+ * instead ([ProtonThumbnailFollowUpPolicy]), under the same unique name and with the
+ * constraints and delay that describe what it is waiting for.
  */
 class ProtonThumbnailWorker(
     appContext: Context,
@@ -42,9 +43,7 @@ class ProtonThumbnailWorker(
                 applicationContext,
                 RepositoryEntryPoint::class.java,
             )
-        val repository = entryPoint.thumbnailWork()
         val runGuard = entryPoint.runGuard()
-        val transferCoordinator = entryPoint.transferCoordinator()
         // Unique work de-duplicates per name and per WorkManager instance; this is the
         // process-wide guarantee that two batch loops never share the queues, and so that the
         // release of stale claims below the gateway only ever comes from the single active run.
@@ -61,19 +60,24 @@ class ProtonThumbnailWorker(
             if (session.activeUserId != requestedUserId) {
                 return Result.failure()
             }
-            val initialProgress = repository.thumbnailWorkProgress(requestedUserId)
+            val run = Run(entryPoint, requestedUserId)
+            val initialProgress = run.repository.thumbnailWorkProgress(requestedUserId)
             if (!ProtonThumbnailWorkPolicy.hasPendingWork(initialProgress, previewsAllowed())) {
-                if (initialProgress.previewsPending == 0) return finish(ProtonThumbnailWorkOutcome.COMPLETE)
-                entryPoint.thumbnailScheduler().enqueueWhileCharging(requestedUserId)
-                return finish(ProtonThumbnailWorkOutcome.PREVIEWS_DEFERRED)
+                val outcome =
+                    if (initialProgress.previewsPending == 0) {
+                        ProtonThumbnailWorkOutcome.COMPLETE
+                    } else {
+                        ProtonThumbnailWorkOutcome.PREVIEWS_DEFERRED
+                    }
+                return run.end(outcome, initialProgress, lastIdle = null)
             }
             val monitor = ProtonThumbnailNetworkMonitor(applicationContext).also { networkMonitor = it }
             if (!monitor.awaitValidatedUnmeteredNetwork(NETWORK_READY_TIMEOUT_MILLIS)) {
-                return finish(ProtonThumbnailWorkOutcome.WAITING_FOR_NETWORK)
+                return run.end(ProtonThumbnailWorkOutcome.WAITING_FOR_NETWORK, initialProgress, lastIdle = null)
             }
             val foregroundInfoFactory = ProtonThumbnailForegroundInfoFactory(applicationContext)
             publishForeground(foregroundInfoFactory, initialProgress.notificationProgress(), force = true)
-            var previewsDeferred = false
+            var lastIdle: ProtonThumbnailQueueStep.Idle? = null
             val outcome =
                 withTimeoutOrNull(ProtonThumbnailWorkPolicy.MAX_RUN_MILLIS) {
                     var runOutcome: ProtonThumbnailWorkOutcome
@@ -86,10 +90,10 @@ class ProtonThumbnailWorker(
                         // is an idle step, so the loop below decides what a busy viewer means
                         // for this run instead of the claim sitting on the viewer's download.
                         val step =
-                            if (!transferCoordinator.awaitNoForegroundTransfer(FOREGROUND_YIELD_TIMEOUT_MILLIS)) {
+                            if (!run.transferCoordinator.awaitNoForegroundTransfer(FOREGROUND_YIELD_TIMEOUT_MILLIS)) {
                                 ProtonThumbnailWorkPolicy.foregroundBusyStep()
                             } else {
-                                repository.downloadNextQueuedThumbnailBatch(
+                                run.repository.downloadNextQueuedThumbnailBatch(
                                     requestedUserId,
                                     previewsAllowed(),
                                 ) { progress ->
@@ -100,6 +104,10 @@ class ProtonThumbnailWorker(
                             ProtonThumbnailQueueStep.Processed -> {}
 
                             is ProtonThumbnailQueueStep.Idle -> {
+                                // Every idle step is remembered, the one before a sleep too: a
+                                // run that ends on a timeout or a lost network still owes the
+                                // charging follow-up for the previews it saw deferred.
+                                lastIdle = step
                                 val wait = ProtonBackgroundBatchPolicy.idleWaitMillis(step, MAX_IDLE_WAIT_MILLIS)
                                 if (wait != null) {
                                     // A retry due within minutes is worth sleeping for: it keeps the
@@ -108,11 +116,10 @@ class ProtonThumbnailWorker(
                                     delay(wait + IDLE_WAIT_SLACK_MILLIS)
                                     continue
                                 }
-                                previewsDeferred = step.previewsDeferred
                                 runOutcome =
                                     when {
                                         step.hasPending -> ProtonThumbnailWorkOutcome.WAITING_FOR_RETRY
-                                        previewsDeferred -> ProtonThumbnailWorkOutcome.PREVIEWS_DEFERRED
+                                        step.previewsDeferred -> ProtonThumbnailWorkOutcome.PREVIEWS_DEFERRED
                                         else -> ProtonThumbnailWorkOutcome.COMPLETE
                                     }
                                 break
@@ -121,13 +128,9 @@ class ProtonThumbnailWorker(
                     }
                     runOutcome
                 } ?: ProtonThumbnailWorkOutcome.TIMED_OUT
-            publishForeground(
-                foregroundInfoFactory,
-                repository.thumbnailWorkProgress(requestedUserId).notificationProgress(),
-                force = true,
-            )
-            if (previewsDeferred) entryPoint.thumbnailScheduler().enqueueWhileCharging(requestedUserId)
-            finish(outcome)
+            val finalProgress = run.repository.thumbnailWorkProgress(requestedUserId)
+            publishForeground(foregroundInfoFactory, finalProgress.notificationProgress(), force = true)
+            run.end(outcome, finalProgress, lastIdle)
         } catch (error: CancellationException) {
             reportState("interrupted")
             throw error
@@ -143,6 +146,38 @@ class ProtonThumbnailWorker(
         } finally {
             networkMonitor?.close()
             runGuard.end()
+        }
+    }
+
+    /** What one admitted run needs, and how it ends: with the follow-up its outcome calls for. */
+    private inner class Run(
+        entryPoint: RepositoryEntryPoint,
+        private val userId: UserId,
+    ) {
+        val repository = entryPoint.thumbnailWork()
+        val transferCoordinator = entryPoint.transferCoordinator()
+        private val followUps = entryPoint.followUpScheduler()
+
+        /**
+         * Enqueues the follow-up before returning, while this run is still the running job under
+         * the unique name, so the scheduler chains it rather than dropping or cancelling it.
+         */
+        fun end(
+            outcome: ProtonThumbnailWorkOutcome,
+            progress: ProtonThumbnailWorkProgress,
+            lastIdle: ProtonThumbnailQueueStep.Idle?,
+        ): Result {
+            val allowPreviews = previewsAllowed()
+            val followUp =
+                ProtonThumbnailFollowUpPolicy.followUp(
+                    outcome,
+                    workRemaining = ProtonThumbnailWorkPolicy.hasPendingWork(progress, allowPreviews),
+                    previewsDeferred =
+                        lastIdle?.previewsDeferred == true || (!allowPreviews && progress.previewsPending > 0),
+                    retryAfterMillis = lastIdle?.retryAfterMillis,
+                )
+            if (followUp != null) followUps.enqueueFollowUp(userId, followUp)
+            return finish(outcome)
         }
     }
 
@@ -225,7 +260,7 @@ class ProtonThumbnailWorker(
 
         fun accountSessionManager(): ProtonAccountSessionManager
 
-        fun thumbnailScheduler(): ProtonThumbnailScheduler
+        fun followUpScheduler(): ProtonThumbnailFollowUpScheduler
 
         fun runGuard(): ProtonThumbnailRunGuard
 
@@ -245,21 +280,25 @@ class ProtonThumbnailWorker(
         fun request(
             userId: UserId,
             requiresCharging: Boolean = false,
+            initialDelayMillis: Long = 0L,
         ): OneTimeWorkRequest =
             OneTimeWorkRequestBuilder<ProtonThumbnailWorker>()
                 .setInputData(workDataOf(KEY_USER_ID to userId.id))
                 .setConstraints(
                     Constraints
                         .Builder()
-                        // A network JobScheduler constraint can be revoked as the phone enters
-                        // Doze, even after this worker has promoted itself to a foreground service.
-                        // The worker checks for validated unmetered access between batches instead.
-                        .setRequiredNetworkType(NetworkType.NOT_REQUIRED)
+                        // Unmetered is what the run needs, so a request enqueued without Wi-Fi
+                        // costs nothing until there is some. The constraint is not the whole
+                        // check: JobScheduler knows nothing about validation, and a network
+                        // constraint can be revoked as the phone enters Doze, so the worker
+                        // also checks for validated unmetered access between batches.
+                        .setRequiredNetworkType(NetworkType.UNMETERED)
                         .setRequiresBatteryNotLow(true)
                         .setRequiresStorageNotLow(true)
                         .setRequiresCharging(requiresCharging)
                         .build(),
-                ).setBackoffCriteria(BackoffPolicy.LINEAR, 30L, TimeUnit.SECONDS)
+                ).setInitialDelay(initialDelayMillis, TimeUnit.MILLISECONDS)
+                .setBackoffCriteria(BackoffPolicy.LINEAR, 30L, TimeUnit.SECONDS)
                 .build()
     }
 }
