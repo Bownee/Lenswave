@@ -72,7 +72,7 @@ class SecureFileStore(
     ) {
         val key = dataKey(scope)
         val payload = encrypt(key, bytes)
-        commitWith(scope, key) { AtomicFileStore.write(file, payload, failureMessage) }
+        AtomicFileStore.write(file, payload, failureMessage) { commit -> commitWith(scope, key, commit) }
     }
 
     fun writeText(
