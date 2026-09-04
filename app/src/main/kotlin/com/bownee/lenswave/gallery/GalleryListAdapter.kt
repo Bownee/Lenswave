@@ -2,6 +2,7 @@ package com.bownee.lenswave.gallery
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.drawable.BitmapDrawable
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -98,42 +99,11 @@ class GalleryListAdapter(
 
     override fun getItem(position: Int): GalleryRow = rows[position]
 
-    override fun hasStableIds(): Boolean = true
-
-    override fun getItemId(position: Int): Long =
-        when (val row = rows[position]) {
-            is GalleryRow.DateHeader -> {
-                row.key.hashCode().toLong()
-            }
-
-            is GalleryRow.SectionHeading -> {
-                row.key.hashCode().toLong()
-            }
-
-            is GalleryRow.Photos -> {
-                row.items
-                    .first()
-                    .stableId
-                    .hashCode()
-                    .toLong()
-            }
-
-            is GalleryRow.Albums -> {
-                row.items
-                    .first()
-                    .nodeUid
-                    .hashCode()
-                    .toLong()
-            }
-
-            is GalleryRow.Entries -> {
-                row.items
-                    .first()
-                    .key
-                    .hashCode()
-                    .toLong()
-            }
-        }
+    // No stable ids: the list runs in touch mode without a selected item, so after a data change
+    // it keeps the first visible position and matches scrap views by position, neither of which
+    // needs an id. Ids derived from String.hashCode could collide, which would only mislead that
+    // matching, so positions are the simplest correct choice.
+    override fun getItemId(position: Int): Long = position.toLong()
 
     override fun getViewTypeCount(): Int = 5
 
@@ -460,7 +430,8 @@ class GalleryListAdapter(
                 cell.loading.visibility = View.GONE
                 return
             }
-            image.setImageBitmap(bitmap)
+            // A rebind that delivers the bitmap already on screen must not invalidate the cell.
+            if (bitmap == null || (image.drawable as? BitmapDrawable)?.bitmap !== bitmap) image.setImageBitmap(bitmap)
             cell.loading.visibility = if (bitmap == null && !isFastScrolling) View.VISIBLE else View.GONE
             image.alpha = if (bitmap == null) 0.45f else 1f
         }
@@ -476,7 +447,7 @@ class GalleryListAdapter(
             val image = cell.image
             val album = cell.album ?: return
             if (image.tag != tag) return
-            image.setImageBitmap(bitmap)
+            if (bitmap == null || (image.drawable as? BitmapDrawable)?.bitmap !== bitmap) image.setImageBitmap(bitmap)
             cell.loading.visibility =
                 if (bitmap == null && album.coverPhotoNodeUid != null && !isFastScrolling) {
                     View.VISIBLE
