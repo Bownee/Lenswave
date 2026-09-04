@@ -95,6 +95,10 @@ class PhotoViewerActivity : FragmentActivity() {
     private lateinit var video: ViewerVideoController
     private lateinit var request: PhotoRequest
     private var navigationRequests: MutableList<PhotoRequest> = mutableListOf()
+
+    /** The gallery's full list and where [navigationRequests] sits in it; null after a process death. */
+    private var navigationSource: PhotoNavigationSources.Source? = null
+    private var navigationWindow: PhotoNavigationWindowPolicy.Window? = null
     private var resolvedUri: Uri? = null
     private var photoTransitioning = false
     private var deletionInProgress = false
@@ -117,6 +121,7 @@ class PhotoViewerActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
         request = PhotoRequest.from(intent)
         navigationRequests = PhotoRequest.navigationFrom(intent).ifEmpty { listOf(request) }.toMutableList()
+        restoreNavigationSource()
         configureEdgeToEdgeWindow()
         buildInterface()
         onBackPressedDispatcher.addCallback(
@@ -140,6 +145,7 @@ class PhotoViewerActivity : FragmentActivity() {
         swipe.release()
         photoView.close()
         video.release()
+        if (isFinishing) navigationSource?.let { PhotoNavigationSources.clear(it.token) }
         super.onDestroy()
     }
 
@@ -312,8 +318,49 @@ class PhotoViewerActivity : FragmentActivity() {
     }
 
     /**
+     * Finds the in-process gallery list the intent's window was cut from. The window is trusted
+     * only if it still lines up with that list; after a process death there is no list and the
+     * viewer keeps the window the intent carried.
+     */
+    private fun restoreNavigationSource() {
+        val source = PhotoNavigationSources.find(intent.getLongExtra(EXTRA_NAVIGATION_TOKEN, -1L)) ?: return
+        val start = intent.getIntExtra(EXTRA_NAVIGATION_START, -1)
+        val window = PhotoNavigationWindowPolicy.Window(start, start + navigationRequests.size)
+        val linesUp =
+            start >= 0 &&
+                window.end <= source.assets.size &&
+                source.assets[start].stableId == navigationRequests.first().stableId &&
+                source.assets[window.end - 1].stableId == navigationRequests.last().stableId
+        if (!linesUp) return
+        navigationSource = source
+        navigationWindow = window
+    }
+
+    /**
+     * Grows the navigation window from the gallery list while the user swipes towards an edge.
+     * Existing entries are kept (they may carry a resolved name or a changed favourite); the
+     * list is replaced rather than mutated so the swipe controller rebuilds its index, and the
+     * intent's window follows so a recreated Activity starts from where the user is.
+     */
+    private fun extendNavigationWindow() {
+        val source = navigationSource ?: return
+        val window = navigationWindow ?: return
+        val local = navigationRequests.indexOfFirst { it.stableId == request.stableId }
+        if (local < 0) return
+        val grown = PhotoNavigationWindowPolicy.extended(window, window.start + local, source.assets.size) ?: return
+        val extended = ArrayList<PhotoRequest>(grown.size)
+        source.assets.subList(grown.start, window.start).mapTo(extended) { PhotoRequest.from(it, source.userId) }
+        extended.addAll(navigationRequests)
+        source.assets.subList(window.end, grown.end).mapTo(extended) { PhotoRequest.from(it, source.userId) }
+        navigationRequests = extended
+        navigationWindow = grown
+        intent.putParcelableArrayListExtra(EXTRA_NAVIGATION, ArrayList(extended))
+        intent.putExtra(EXTRA_NAVIGATION_START, grown.start)
+    }
+
+    /**
      * Replaces one entry of the navigation list in place. The list keeps its identity and order,
-     * so the swipe controller's index stays valid and nothing copies two hundred requests.
+     * so the swipe controller's index stays valid and nothing copies the whole window.
      */
     private fun updateNavigationRequest(
         stableId: String,
@@ -635,6 +682,7 @@ class PhotoViewerActivity : FragmentActivity() {
     /** Called by the swipe controller once the current media has slid away. */
     private fun commitNavigation(adjacent: PhotoRequest) {
         setCurrentRequest(adjacent)
+        extendNavigationWindow()
         resetPhotoStateForNavigation()
         swipe.adoptPeekAsPreview()
         photoTransitioning = false
@@ -1033,6 +1081,8 @@ class PhotoViewerActivity : FragmentActivity() {
         const val EXTRA_PHOTO_DELETED = "com.bownee.lenswave.extra.PHOTO_DELETED"
         const val EXTRA_FAVORITE_CHANGED = "com.bownee.lenswave.extra.FAVORITE_CHANGED"
         const val EXTRA_NAVIGATION = "com.bownee.lenswave.extra.NAVIGATION"
+        const val EXTRA_NAVIGATION_START = "com.bownee.lenswave.extra.NAVIGATION_START"
+        const val EXTRA_NAVIGATION_TOKEN = "com.bownee.lenswave.extra.NAVIGATION_TOKEN"
         private const val DETAILS_MINIMUM_HEIGHT_FRACTION = 0.55f
         private const val MEDIA_ACTION_GAP_DP = 8
         private const val VIDEO_CONTROLS_HEIGHT_DP = 80
@@ -1047,20 +1097,19 @@ class PhotoViewerActivity : FragmentActivity() {
         ): Intent {
             val request = PhotoRequest.from(photo, userId.id)
             val currentIndex = navigation.indexOfFirst { it.stableId == photo.stableId }.coerceAtLeast(0)
-            val from = (currentIndex - NAVIGATION_RADIUS).coerceAtLeast(0)
-            val to = (currentIndex + NAVIGATION_RADIUS + 1).coerceAtMost(navigation.size)
+            val window = PhotoNavigationWindowPolicy.initial(currentIndex, navigation.size)
+            // The intent carries a small window, parcelled directly; the full list stays in the
+            // process and the viewer grows the window from it while the user swipes.
             return request.writeTo(Intent(context, PhotoViewerActivity::class.java)).apply {
                 putParcelableArrayListExtra(
                     EXTRA_NAVIGATION,
-                    ArrayList(
-                        navigation.subList(from, to).map {
-                            PhotoRequest.from(it, userId.id).toBundle()
-                        },
-                    ),
+                    navigation.subList(window.start, window.end).mapTo(ArrayList(window.size)) {
+                        PhotoRequest.from(it, userId.id)
+                    },
                 )
+                putExtra(EXTRA_NAVIGATION_START, window.start)
+                putExtra(EXTRA_NAVIGATION_TOKEN, PhotoNavigationSources.publish(userId.id, navigation))
             }
         }
-
-        private const val NAVIGATION_RADIUS = 100
     }
 }
