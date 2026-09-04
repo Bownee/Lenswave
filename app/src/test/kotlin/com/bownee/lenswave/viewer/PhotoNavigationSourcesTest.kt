@@ -34,6 +34,21 @@ class PhotoNavigationSourcesTest {
         tokens.forEach(PhotoNavigationSources::clear)
     }
 
+    @Test
+    fun `clearing a token that resolves to nothing, or no token at all, is harmless`() {
+        val token = PhotoNavigationSources.publish("u", listOf(asset("kept")))
+
+        PhotoNavigationSources.clear(PhotoNavigationSources.NO_TOKEN)
+        PhotoNavigationSources.clear(token + 1_000)
+
+        assertEquals(token, PhotoNavigationSources.find(token)?.token)
+        // A viewer clears the token its intent carried when it finishes, even after it rebuilt
+        // its own source and never adopted this list; clearing twice must not matter either.
+        PhotoNavigationSources.clear(token)
+        PhotoNavigationSources.clear(token)
+        assertNull(PhotoNavigationSources.find(token))
+    }
+
     private fun asset(stableId: String) =
         GalleryAsset(stableId = stableId, capturedAtEpochMillis = 0L, nodeUid = stableId, hasThumbnail = true)
 }

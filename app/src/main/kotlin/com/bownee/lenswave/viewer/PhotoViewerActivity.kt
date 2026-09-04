@@ -126,6 +126,10 @@ class PhotoViewerActivity :
 
     /** The gallery's full list, when it is still in the process and lines up with [navigationRequests]. */
     private var navigationSource: PhotoNavigationSources.Source? = null
+
+    /** The token the intent carried, cleared when the viewer finishes whether or not its list was adopted. */
+    private val intentNavigationToken: Long
+        get() = intent.getLongExtra(EXTRA_NAVIGATION_TOKEN, PhotoNavigationSources.NO_TOKEN)
     private val navigationWindow: PhotoNavigationWindowPolicy.Window?
         get() =
             navigationStart.takeIf { it >= 0 }?.let {
@@ -365,7 +369,13 @@ class PhotoViewerActivity :
         swipe.release()
         photoView.close()
         video.release()
-        if (isFinishing) navigationSource?.let { PhotoNavigationSources.clear(it.token) }
+        if (isFinishing) {
+            // The intent's list goes whether or not it was adopted: a window that no longer lined
+            // up, or a source rebuilt after a process death, would otherwise leave the gallery's
+            // full list retained until RETAINED_SOURCES pushes it out.
+            PhotoNavigationSources.clear(intentNavigationToken)
+            navigationSource?.let { PhotoNavigationSources.clear(it.token) }
+        }
         super.onDestroy()
     }
 
@@ -551,7 +561,7 @@ class PhotoViewerActivity :
      * keeps the window it was restored with.
      */
     private fun restoreNavigationSource() {
-        val source = PhotoNavigationSources.find(intent.getLongExtra(EXTRA_NAVIGATION_TOKEN, -1L)) ?: return
+        val source = PhotoNavigationSources.find(intentNavigationToken) ?: return
         val window = navigationWindow ?: return
         val linesUp =
             window.end <= source.assets.size &&
