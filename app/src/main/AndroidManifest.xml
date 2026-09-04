@@ -3,15 +3,9 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission
-        android:name="android.permission.READ_EXTERNAL_STORAGE"
-        android:maxSdkVersion="32" />
-    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
-    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
-    <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" />
-    <uses-permission
-        android:name="android.permission.FOREGROUND_SERVICE"
-        tools:node="remove" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission
         android:name="android.permission.USE_BIOMETRIC"
         tools:node="remove" />
@@ -71,7 +65,7 @@
         android:theme="@style/Theme.Lenswave"
         tools:replace="android:theme">
         <activity
-            android:name=".GalleryActivity"
+            android:name=".gallery.GalleryActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -80,17 +74,9 @@
         </activity>
 
         <activity
-            android:name=".PhotoEditorActivity"
-            android:exported="false" />
-
-        <activity
-            android:name=".PhotoViewerActivity"
+            android:name=".viewer.PhotoViewerActivity"
             android:exported="false"
             android:theme="@style/Theme.Lenswave.PhotoViewer" />
-
-        <activity
-            android:name=".ProtonPhotoPickerActivity"
-            android:exported="false" />
 
         <activity
             android:name="me.proton.core.auth.presentation.ui.AddAccountActivity"
@@ -234,23 +220,11 @@
                 tools:node="remove" />
         </provider>
 
-        <service
-            android:name="com.google.android.gms.metadata.ModuleDependencies"
-            android:enabled="false"
-            android:exported="false"
-            tools:ignore="MissingClass">
-            <intent-filter>
-                <action android:name="com.google.android.gms.metadata.MODULE_DEPENDENCIES" />
-            </intent-filter>
-            <meta-data
-                android:name="photopicker_activity:0:required"
-                android:value="" />
-        </service>
-
-        <!-- Lenswave never promotes its bounded thumbnail worker to a foreground service. -->
+        <!-- WorkManager promotes long-running thumbnail downloads to a data-sync service. -->
         <service
             android:name="androidx.work.impl.foreground.SystemForegroundService"
-            tools:node="remove" />
+            android:foregroundServiceType="dataSync"
+            tools:node="merge" />
 
         <!-- WorkManager uses JobScheduler on Lenswave's API 29+ devices. -->
         <service

@@ -8,26 +8,29 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.bownee.lenswave.LenswaveClock
 import com.bownee.lenswave.storage.AtomicFileStore
 import com.bownee.lenswave.storage.SecureFileStore
-import java.io.ByteArrayOutputStream
-import java.io.File
-import java.util.UUID
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.io.ByteArrayOutputStream
+import java.io.File
+import java.util.UUID
 
 @RunWith(AndroidJUnit4::class)
 class ProtonPhotoCacheInstrumentedTest {
-    @Test fun encryptedIndexCorruptionIsInvalidatedAndActivePartsArePreserved() {
+    @Test fun encryptedIndexCorruptionIsInvalidatedAndOriginalsOutliveTheirDecryptedCopies() {
         val context = isolatedContext()
         val userId = "cache-${UUID.randomUUID()}"
         val clock = FakeClock(System.currentTimeMillis())
-        val cache = ProtonPhotoCache(context, SecureFileStore(), clock)
-        val index = File(
-            context.filesDir,
-            "proton-photo-cache/${AtomicFileStore.safeName(userId)}/index.json",
-        )
+        val cache = createCache(context, SecureFileStore(File(context.filesDir, "secure-keys")), clock)
+        val index =
+            File(
+                context.filesDir,
+                "proton-photo-cache/${AtomicFileStore.safeName(userId)}/index.json",
+            )
         try {
             cache.writeIndex(userId, listOf(ProtonGalleryPhoto("node", 123L, false)))
             assertEquals(listOf("node"), cache.readIndex(userId).map(ProtonGalleryPhoto::nodeUid))
@@ -40,32 +43,189 @@ class ProtonPhotoCacheInstrumentedTest {
             assertTrue(cache.readIndex(userId).isEmpty())
             assertFalse(cache.hasTimelineSnapshot(userId))
 
-            val activePart = cache.createOriginalTarget(userId, "active").first
-            activePart.writeText("in progress")
+            // A download in flight survives reconciliation while its photo is still listed and
+            // is dropped with everything else once the photo has left the timeline.
+            val activeTarget = cache.createOriginalTarget(userId, "active").first
+            activeTarget.writeText("in progress")
+            cache.reconcilePhotos(userId, emptyList(), listOf("active"))
+            assertTrue(activeTarget.exists())
             cache.reconcilePhotos(userId, emptyList(), emptyList())
-            assertTrue(activePart.exists())
-            clock.value += 25L * 60L * 60L * 1_000L
-            cache.reconcilePhotos(userId, emptyList(), emptyList())
-            assertFalse(activePart.exists())
+            assertFalse(activeTarget.exists())
 
             val (plaintext, encrypted) = cache.createOriginalTarget(userId, "bounded")
             plaintext.writeText("decrypted private content")
             assertTrue(cache.commitOriginal(userId, "bounded", plaintext, encrypted).isFile)
+            // The decrypted copy expires after 30 minutes; the encrypted original stays until the
+            // size cap or a disconnect removes it, so a later read simply decrypts it again.
             clock.value += 61L * 60L * 1_000L
-            assertEquals(null, cache.readOriginal(userId, "bounded"))
-            assertFalse(encrypted.exists())
+            assertEquals("decrypted private content", cache.readOriginal(userId, "bounded")?.readText())
+            assertTrue(encrypted.exists())
         } finally {
             cache.clearUser(userId)
             context.testRoot.deleteRecursively()
         }
     }
 
-    @Test fun thumbnailRetentionIsEnforcedDuringTheActiveSession() {
+    @Test fun thumbnailDatasetSurvivesMaintenanceAndAndroidCacheClearing() {
         val context = isolatedContext()
         val userId = "retention-${UUID.randomUUID()}"
         val clock = FakeClock(System.currentTimeMillis())
-        val cache = ProtonPhotoCache(context, SecureFileStore(), clock)
-        val thumbnail = ByteArrayOutputStream().use { output ->
+        val cache = createCache(context, SecureFileStore(File(context.filesDir, "secure-keys")), clock)
+        val thumbnail = validThumbnail()
+        try {
+            cache.writeThumbnail(userId, "old", thumbnail)
+            // Filesystems may round last-modified values, so retain a wide deterministic gap.
+            clock.value += 60_000
+            cache.writeThumbnail(userId, "current", thumbnail)
+
+            clock.value += 8L * 24L * 60L * 60L * 1_000L
+            context.cacheDir.deleteRecursively()
+            context.cacheDir.mkdirs()
+            cache.trimUser(userId)
+
+            assertTrue(cache.thumbnailExists(userId, "old"))
+            assertTrue(cache.thumbnailExists(userId, "current"))
+            assertEquals(2, cache.thumbnailCount(userId))
+            assertTrue(cache.loadThumbnail(userId, "old") != null)
+        } finally {
+            cache.clearUser(userId)
+            context.testRoot.deleteRecursively()
+        }
+    }
+
+    @Test fun thumbnailValidationRequiresACompletePixelDecode() {
+        val context = isolatedContext()
+        val userId = "decode-${UUID.randomUUID()}"
+        val nodeUid = "truncated"
+        val secureFiles = SecureFileStore(File(context.filesDir, "secure-keys"))
+        val cache = createCache(context, secureFiles, FakeClock(System.currentTimeMillis()))
+        val truncatedThumbnail = validThumbnail().copyOf(33)
+        val thumbnailFile =
+            File(
+                context.filesDir,
+                "proton-photo-cache/${AtomicFileStore.safeName(userId)}/thumbnails/" +
+                    "${AtomicFileStore.safeName(nodeUid)}.thumb",
+            )
+        try {
+            assertFalse(
+                runCatching {
+                    cache.writeThumbnail(userId, nodeUid, truncatedThumbnail)
+                }.isSuccess,
+            )
+
+            secureFiles.write(
+                "proton-media:$userId",
+                thumbnailFile,
+                truncatedThumbnail,
+                "Could not write test thumbnail",
+            )
+            assertTrue(cache.thumbnailExists(userId, nodeUid))
+            assertNull(cache.loadThumbnail(userId, nodeUid))
+            assertFalse(thumbnailFile.exists())
+        } finally {
+            cache.clearUser(userId)
+            context.testRoot.deleteRecursively()
+        }
+    }
+
+    @Test fun decodedThumbnailsAreSizedOnceAndSharedAcrossConsumers() {
+        val context = isolatedContext()
+        val userId = "decoded-${UUID.randomUUID()}"
+        val secureFiles = SecureFileStore(File(context.filesDir, "secure-keys"))
+        val clock = FakeClock(System.currentTimeMillis())
+        val cache = createCache(context, secureFiles, clock)
+        val output = ByteArrayOutputStream()
+        val source = Bitmap.createBitmap(1_200, 600, Bitmap.Config.ARGB_8888)
+        try {
+            assertTrue(source.compress(Bitmap.CompressFormat.PNG, 100, output))
+            cache.writeThumbnail(userId, "large", output.toByteArray())
+
+            val first = cache.loadThumbnail(userId, "large")
+            val second = cache.loadThumbnail(userId, "large")
+
+            assertEquals(480, first?.width)
+            assertEquals(240, first?.height)
+            assertSame(first, second)
+
+            val restoredStore = ProtonThumbnailStore(context, secureFiles, clock)
+            val restored = restoredStore.load(userId, "large")
+            assertEquals(480, restored?.width)
+            assertEquals(240, restored?.height)
+            assertSame(restored, restoredStore.load(userId, "large"))
+        } finally {
+            source.recycle()
+            cache.clearUser(userId)
+            context.testRoot.deleteRecursively()
+        }
+    }
+
+    @Test fun thumbnailQueueCaptureTimesSurviveProcessRestoration() {
+        val context = isolatedContext()
+        val userId = "queue-${UUID.randomUUID()}"
+        val cache =
+            createCache(
+                context,
+                SecureFileStore(File(context.filesDir, "secure-keys")),
+                FakeClock(System.currentTimeMillis()),
+            )
+        val entries =
+            listOf(
+                ProtonThumbnailQueueEntry(
+                    nodeUid = "newest",
+                    sourceCaptureTimes = mapOf("timeline" to 300L, "album:one" to 300L),
+                ),
+                ProtonThumbnailQueueEntry(
+                    nodeUid = "older",
+                    sourceCaptureTimes = mapOf("timeline" to 100L),
+                    retryCount = 2,
+                    retryAtMillis = 4_000L,
+                ),
+            )
+        try {
+            cache.writeQueue(userId, ProtonQueueName.THUMBNAILS, entries)
+            cache.writeQueue(userId, ProtonQueueName.PREVIEWS, entries.take(1))
+
+            assertEquals(entries, cache.readQueue(userId, ProtonQueueName.THUMBNAILS))
+            assertEquals(entries.take(1), cache.readQueue(userId, ProtonQueueName.PREVIEWS))
+        } finally {
+            cache.clearUser(userId)
+            context.testRoot.deleteRecursively()
+        }
+    }
+
+    @Test fun tagIndexesAreEncryptedPersistedAndReconciledWithTheTimeline() {
+        val context = isolatedContext()
+        val userId = "tags-${UUID.randomUUID()}"
+        val cache =
+            createCache(
+                context,
+                SecureFileStore(File(context.filesDir, "secure-keys")),
+                FakeClock(System.currentTimeMillis()),
+            )
+        val retained = ProtonGalleryPhoto("volume~retained", 200L, false)
+        val removed = ProtonGalleryPhoto("volume~removed", 100L, false)
+        try {
+            cache.writeIndex(userId, listOf(retained, removed))
+            cache.writeTag(userId, ProtonMediaTag.VIDEOS, listOf(retained, removed))
+
+            assertTrue(cache.hasTagSnapshot(userId, ProtonMediaTag.VIDEOS))
+            assertEquals(listOf(retained, removed), cache.readTag(userId, ProtonMediaTag.VIDEOS))
+
+            cache.reconcilePhotos(
+                userId,
+                cachedNodeUids = listOf(retained.nodeUid, removed.nodeUid),
+                remoteNodeUids = listOf(retained.nodeUid),
+            )
+
+            assertEquals(listOf(retained), cache.readTag(userId, ProtonMediaTag.VIDEOS))
+        } finally {
+            cache.clearUser(userId)
+            context.testRoot.deleteRecursively()
+        }
+    }
+
+    private fun validThumbnail(): ByteArray =
+        ByteArrayOutputStream().use { output ->
             val bitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
             try {
                 assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output))
@@ -74,23 +234,6 @@ class ProtonPhotoCacheInstrumentedTest {
             }
             output.toByteArray()
         }
-        try {
-            cache.writeThumbnail(userId, "old", thumbnail)
-            // Filesystems may round last-modified values, so retain a wide deterministic gap.
-            clock.value += 60_000
-            cache.writeThumbnail(userId, "current", thumbnail)
-
-            cache.trimThumbnails(userId, limitBytes = Long.MAX_VALUE, ttlMillis = 30_000)
-            assertFalse(cache.thumbnailExists(userId, "old"))
-            assertTrue(cache.thumbnailExists(userId, "current"))
-
-            cache.trimThumbnails(userId, limitBytes = 1, ttlMillis = Long.MAX_VALUE)
-            assertFalse(cache.thumbnailExists(userId, "current"))
-        } finally {
-            cache.clearUser(userId)
-            context.testRoot.deleteRecursively()
-        }
-    }
 
     private fun isolatedContext(): IsolatedCacheContext {
         val context = ApplicationProvider.getApplicationContext<Context>()
@@ -98,7 +241,24 @@ class ProtonPhotoCacheInstrumentedTest {
         return IsolatedCacheContext(context, root)
     }
 
-    private class IsolatedCacheContext(context: Context, val testRoot: File) : ContextWrapper(context) {
+    private fun createCache(
+        context: Context,
+        secureFiles: SecureFileStore,
+        clock: LenswaveClock,
+    ): ProtonPhotoCache =
+        ProtonPhotoCache(
+            context,
+            secureFiles,
+            clock,
+            ProtonThumbnailStore(context, secureFiles, clock),
+            ProtonPreviewStore(context, secureFiles, clock),
+            ProtonOriginalStore(context, secureFiles, clock),
+        )
+
+    private class IsolatedCacheContext(
+        context: Context,
+        val testRoot: File,
+    ) : ContextWrapper(context) {
         private val testFiles = File(testRoot, "files").apply { mkdirs() }
         private val testCache = File(testRoot, "cache").apply { mkdirs() }
 
@@ -107,7 +267,9 @@ class ProtonPhotoCacheInstrumentedTest {
         override fun getCacheDir(): File = testCache
     }
 
-    private class FakeClock(var value: Long) : LenswaveClock {
+    private class FakeClock(
+        var value: Long,
+    ) : LenswaveClock {
         override fun nowMillis(): Long = value
     }
 }

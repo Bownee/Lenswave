@@ -2,20 +2,20 @@ package com.bownee.lenswave.storage
 
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import java.io.File
-import java.util.UUID
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.io.File
+import java.util.UUID
 
 @RunWith(AndroidJUnit4::class)
 class SecureFileStoreInstrumentedTest {
     @Test
     fun payloadIsAuthenticatedEncryptedAndDestroyedWithItsKey() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
-        val store = SecureFileStore()
+        val store = SecureFileStore(context)
         val scope = "instrumentation-${UUID.randomUUID()}"
         val target = File(context.cacheDir, "$scope.bin")
         val plaintext = "private Proton token and photo metadata".toByteArray()

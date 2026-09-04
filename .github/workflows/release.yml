@@ -13,38 +13,18 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  validate:
-    name: Validate reviewed unsigned release
+  provenance:
+    name: Verify tag provenance
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    outputs:
-      version_name: ${{ steps.app_version.outputs.version_name }}
-
+    timeout-minutes: 10
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-
-      - name: Set up JDK 21.0.8
-        uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
-        with:
-          distribution: temurin
-          java-version: "21.0.8+9.0.LTS"
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5
-
-      - name: Install exact Android SDK tools
-        shell: bash
-        run: |
-          set +o pipefail
-          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
-            "platform-tools" "platforms;android-36" "build-tools;36.0.0" >/dev/null
-          set -o pipefail
+          persist-credentials: false
 
       - name: Verify release provenance and version
-        id: app_version
         shell: bash
         run: |
           git fetch --no-tags origin main
@@ -56,55 +36,63 @@ jobs:
             echo "Release tag must point at the reviewed tip of main." >&2
             exit 1
           }
-          version_name="$(grep '^VERSION_NAME=' version.properties | cut -d= -f2-)"
-          version_code="$(grep '^VERSION_CODE=' version.properties | cut -d= -f2-)"
+          chmod +x scripts/app-version.sh
+          version_name="$(scripts/app-version.sh | grep '^version_name=' | cut -d= -f2-)"
           test "$GITHUB_REF_NAME" = "v$version_name" || {
             echo "Tag $GITHUB_REF_NAME does not match version.properties (v$version_name)." >&2
             exit 1
           }
-          test -n "$version_code"
-          echo "version_name=$version_name" >> "$GITHUB_OUTPUT"
 
-      - name: Test, lint, inventory, and build without signing secrets
+  validate:
+    name: Validate reviewed unsigned release
+    needs: provenance
+    uses: ./.github/workflows/verify.yml
+    with:
+      assemble-debug: true
+      upload-name: release-verify-${{ github.sha }}
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
+      security-events: write
+
+  package:
+    name: Package unsigned release
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Android build environment
+        uses: ./.github/actions/setup-android
+
+      - name: Build unsigned release and SBOM
         run: |
-          chmod +x gradlew
-          ./gradlew \
-            testDebugUnitTest \
-            jacocoDebugCoverageVerification \
-            assembleRelease verifySbomLicenses \
-            --no-configuration-cache \
-            --stacktrace
-          # AGP 9.3/Kotlin FIR lint analysis can race when debug and release UAST run concurrently.
-          ./gradlew lintDebug lintRelease \
-            --max-workers=1 \
-            --no-configuration-cache \
-            --stacktrace
+          chmod +x gradlew scripts/*.sh
+          ./gradlew assembleRelease verifySbomLicenses --no-configuration-cache --stacktrace
 
       - name: Prepare unsigned artifacts
         shell: bash
         run: |
+          version="${{ needs.validate.outputs.version_name }}"
           mkdir -p unsigned metadata
-          maximum_bytes=$((65 * 1024 * 1024))
-          for abi in arm64-v8a; do
-            source_apk="app/build/outputs/apk/release/app-$abi-release-unsigned.apk"
-            apk_bytes="$(stat -c%s "$source_apk")"
-            printf '%s %s bytes\n' "$abi" "$apk_bytes" | tee -a metadata/apk-sizes.txt
-            test "$apk_bytes" -le "$maximum_bytes" || {
-              echo "$abi release APK exceeds the 65 MiB budget." >&2
-              exit 1
-            }
-            cp \
-              "$source_apk" \
-              "unsigned/Lenswave-v${{ steps.app_version.outputs.version_name }}-$abi-unsigned.apk"
-          done
+          scripts/check-apk-size.sh app/build/outputs/apk/release/app-arm64-v8a-release-unsigned.apk \
+            | tee metadata/apk-sizes.txt
+          cp app/build/outputs/apk/release/app-arm64-v8a-release-unsigned.apk \
+            "unsigned/Lenswave-v$version-arm64-v8a-unsigned.apk"
           cp build/reports/cyclonedx/bom.json metadata/Lenswave.cdx.json
           cp build/reports/cyclonedx/bom.xml metadata/Lenswave.cdx.xml
           cp LICENSE metadata/
           git archive \
             --format=tar.gz \
-            --prefix="Lenswave-v${{ steps.app_version.outputs.version_name }}/" \
-            --output="metadata/Lenswave-source-v${{ steps.app_version.outputs.version_name }}.tar.gz" \
+            --prefix="Lenswave-v$version/" \
+            --output="metadata/Lenswave-source-v$version.tar.gz" \
             "$GITHUB_SHA"
+          (cd unsigned && sha256sum ./*.apk > ../metadata/unsigned-sha256.txt)
 
       - name: Upload verified unsigned release
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -118,7 +106,7 @@ jobs:
 
   sign_and_publish:
     name: Sign in protected environment and publish
-    needs: validate
+    needs: [validate, package]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     environment: production-signing
@@ -131,6 +119,12 @@ jobs:
         with:
           name: unsigned-release-${{ github.sha }}
           path: input
+
+      - name: Verify the artifact is the one the package job produced
+        shell: bash
+        run: |
+          cd input/unsigned
+          sha256sum -c ../metadata/unsigned-sha256.txt
 
       - name: Install exact Android signing tools
         shell: bash
@@ -146,31 +140,31 @@ jobs:
           STORE_PASSWORD: ${{ secrets.LENSWAVE_SIGNING_STORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.LENSWAVE_SIGNING_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.LENSWAVE_SIGNING_KEY_PASSWORD }}
+          VERSION_NAME: ${{ needs.validate.outputs.version_name }}
         run: |
           set -euo pipefail
           test -n "$KEYSTORE_BASE64"
           test -n "$STORE_PASSWORD"
           test -n "$KEY_ALIAS"
           test -n "$KEY_PASSWORD"
+          apksigner="$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner"
           key_file="$RUNNER_TEMP/lenswave-release.p12"
           trap 'rm -f "$key_file"' EXIT
           printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$key_file"
           mkdir -p dist
-          for abi in arm64-v8a; do
-            unsigned="input/unsigned/Lenswave-v${{ needs.validate.outputs.version_name }}-$abi-unsigned.apk"
-            signed="dist/Lenswave-v${{ needs.validate.outputs.version_name }}-$abi.apk"
-            "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" sign \
-              --ks "$key_file" \
-              --ks-pass env:STORE_PASSWORD \
-              --ks-key-alias "$KEY_ALIAS" \
-              --key-pass env:KEY_PASSWORD \
-              --out "$signed" \
-              "$unsigned"
-            "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" verify \
-              --verbose --print-certs "$signed"
-            (cd dist && sha256sum "$(basename "$signed")" > "$(basename "$signed").sha256")
-          done
+          unsigned="input/unsigned/Lenswave-v$VERSION_NAME-arm64-v8a-unsigned.apk"
+          signed="dist/Lenswave-v$VERSION_NAME-arm64-v8a.apk"
+          "$apksigner" sign \
+            --ks "$key_file" \
+            --ks-pass env:STORE_PASSWORD \
+            --ks-key-alias "$KEY_ALIAS" \
+            --key-pass env:KEY_PASSWORD \
+            --out "$signed" \
+            "$unsigned"
+          "$apksigner" verify --verbose --print-certs "$signed"
+          (cd dist && sha256sum "$(basename "$signed")" > "$(basename "$signed").sha256")
           cp input/metadata/* dist/
+          rm -f dist/unsigned-sha256.txt
 
       - name: Create GitHub Release
         shell: bash

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- A plain triangle whose centroid sits on the icon centre, so it reads as centred inside a circle. -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M9.3,7.1 L17.4,12 L9.3,16.9 Z" />
+</vector>

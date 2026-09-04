@@ -8,20 +8,28 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
-class DatabasePassphraseStore @Inject constructor(
-    @ApplicationContext context: Context,
+class DatabasePassphraseStore internal constructor(
+    context: Context,
     private val secureFiles: SecureFileStore,
+    fileName: String,
+    private val scope: String,
 ) {
-    private val passphraseFile = File(context.noBackupFilesDir, "proton-session.key")
+    @Inject
+    constructor(
+        @ApplicationContext context: Context,
+        secureFiles: SecureFileStore,
+    ) : this(context, secureFiles, DEFAULT_FILE_NAME, DEFAULT_SCOPE)
+
+    private val passphraseFile = File(context.noBackupFilesDir, fileName)
 
     @Synchronized
     fun getOrCreate(): ByteArray {
         if (passphraseFile.isFile) {
-            return secureFiles.read(DATABASE_KEY_SCOPE, passphraseFile)
+            return secureFiles.read(scope, passphraseFile)
         }
         val passphrase = ByteArray(PASSPHRASE_BYTES).also(SecureRandom()::nextBytes)
         secureFiles.write(
-            DATABASE_KEY_SCOPE,
+            scope,
             passphraseFile,
             passphrase,
             "Could not protect the Proton database key",
@@ -30,7 +38,8 @@ class DatabasePassphraseStore @Inject constructor(
     }
 
     private companion object {
-        const val DATABASE_KEY_SCOPE = "proton-session-database-key"
+        const val DEFAULT_FILE_NAME = "proton-session.key"
+        const val DEFAULT_SCOPE = "proton-session-database-key"
         const val PASSPHRASE_BYTES = 32
     }
 }

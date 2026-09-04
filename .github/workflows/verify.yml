@@ -1,0 +1,114 @@
+name: Verify
+
+# Shared by the CI and release workflows so both gate on exactly the same checks.
+on:
+  workflow_call:
+    inputs:
+      assemble-debug:
+        description: Also build the debug and minified variants and check the R8 contract.
+        type: boolean
+        default: false
+      fetch-depth:
+        description: Git history depth for the checkout.
+        type: string
+        default: "1"
+      upload-name:
+        description: Name of the evidence artifact.
+        type: string
+        required: true
+    outputs:
+      version_name:
+        description: VERSION_NAME from version.properties.
+        value: ${{ jobs.verify.outputs.version_name }}
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    # The caller's job permissions cap these; callers grant the same set.
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
+      security-events: write
+    outputs:
+      version_name: ${{ steps.app_version.outputs.version_name }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: ${{ inputs.fetch-depth }}
+          persist-credentials: false
+
+      - name: Set up Android build environment
+        uses: ./.github/actions/setup-android
+
+      - name: Read app version
+        id: app_version
+        shell: bash
+        run: scripts/app-version.sh >> "$GITHUB_OUTPUT"
+
+      - name: Style, unit tests, coverage, and lint
+        run: |
+          ./gradlew \
+            ktlintCheck \
+            testDebugUnitTest \
+            jacocoDebugCoverageVerification \
+            lintDebug lintRelease \
+            --stacktrace
+
+      - name: Build release variant and SBOM
+        run: |
+          # CycloneDX resolves every configuration and is not configuration-cache compatible,
+          # so it runs in its own invocation and leaves the cache intact for everything else.
+          ./gradlew assembleRelease verifySbomLicenses --no-configuration-cache --stacktrace
+
+      - name: Build debug and minified variants
+        if: inputs.assemble-debug
+        run: ./gradlew assembleDebug assembleMinified --stacktrace
+
+      - name: Verify minified instrumentation contract
+        if: inputs.assemble-debug
+        shell: bash
+        run: scripts/verify-minified-contract.sh app/build/outputs/mapping/minified
+
+      - name: Check release APK size budget
+        shell: bash
+        run: |
+          mkdir -p reports
+          scripts/check-apk-size.sh app/build/outputs/apk/release/app-arm64-v8a-release-unsigned.apk \
+            | tee reports/apk-sizes.txt
+
+      - name: Upload lint findings to code scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
+        with:
+          sarif_file: app/build/reports/lint-results-debug.sarif
+          category: android-lint
+
+      - name: Prepare evidence
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p dist reports
+          version="${{ steps.app_version.outputs.version_name }}"
+          if [ -f app/build/outputs/apk/debug/app-arm64-v8a-debug.apk ]; then
+            cp app/build/outputs/apk/debug/app-arm64-v8a-debug.apk "dist/Lenswave-v$version-arm64-v8a-debug.apk"
+          fi
+          cp build/reports/cyclonedx/bom.* reports/ 2>/dev/null || true
+          cp app/build/reports/lint-results-*.html reports/ 2>/dev/null || true
+          cp -r app/build/reports/jacoco reports/coverage 2>/dev/null || true
+          cp -r app/build/test-results reports/unit-test-results 2>/dev/null || true
+          find reports -maxdepth 2 -type d | sort
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ inputs.upload-name }}
+          path: |
+            dist/*.apk
+            reports/**
+          if-no-files-found: error
+          retention-days: 30

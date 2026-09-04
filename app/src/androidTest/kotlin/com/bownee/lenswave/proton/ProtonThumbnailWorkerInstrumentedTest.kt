@@ -10,10 +10,10 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class ProtonThumbnailWorkerInstrumentedTest {
-    @Test fun requestIsAccountKeyedUnmeteredAndResourceBounded() {
+    @Test fun requestIsAccountKeyedAndNotStoppedByDozeNetworkTracking() {
         val request = ProtonThumbnailWorker.request(UserId("user"))
         assertEquals("user", request.workSpec.input.getString(ProtonThumbnailWorker.KEY_USER_ID))
-        assertEquals(NetworkType.UNMETERED, request.workSpec.constraints.requiredNetworkType)
+        assertEquals(NetworkType.NOT_REQUIRED, request.workSpec.constraints.requiredNetworkType)
         assertTrue(request.workSpec.constraints.requiresBatteryNotLow())
         assertTrue(request.workSpec.constraints.requiresStorageNotLow())
         assertTrue(request.workSpec.backoffDelayDuration >= 10_000L)

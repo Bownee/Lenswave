@@ -1,11 +1,11 @@
 package com.bownee.lenswave.storage
 
-import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import java.io.File
 
 class AtomicFileStoreTest {
     @get:Rule
@@ -19,7 +19,12 @@ class AtomicFileStoreTest {
         AtomicFileStore.write(target, "second", "write failed")
 
         assertEquals("second", target.readText())
-        assertFalse(temporaryFolder.root.listFiles().orEmpty().any { it.name.endsWith(".part") })
+        assertFalse(
+            temporaryFolder.root
+                .listFiles()
+                .orEmpty()
+                .any { it.name.endsWith(".part") },
+        )
     }
 
     @Test

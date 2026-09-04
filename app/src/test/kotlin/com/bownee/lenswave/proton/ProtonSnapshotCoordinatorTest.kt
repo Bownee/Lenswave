@@ -24,15 +24,24 @@ class ProtonSnapshotCoordinatorTest {
 
     private class FakeMetadata : ProtonSyncMetadataStore {
         private val values = mutableMapOf<Pair<String, String>, Long>()
-        override fun readLastSuccessfulSync(userId: String, source: String): Long =
-            values[userId to source] ?: 0L
 
-        override fun writeLastSuccessfulSync(userId: String, source: String, timestampMillis: Long) {
+        override fun readLastSuccessfulSync(
+            userId: String,
+            source: String,
+        ): Long = values[userId to source] ?: 0L
+
+        override fun writeLastSuccessfulSync(
+            userId: String,
+            source: String,
+            timestampMillis: Long,
+        ) {
             values[userId to source] = timestampMillis
         }
     }
 
-    private class FakeClock(var value: Long) : LenswaveClock {
+    private class FakeClock(
+        var value: Long,
+    ) : LenswaveClock {
         override fun nowMillis(): Long = value
     }
 }

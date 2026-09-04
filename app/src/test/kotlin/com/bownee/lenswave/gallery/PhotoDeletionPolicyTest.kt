@@ -6,40 +6,18 @@ import org.junit.Test
 
 class PhotoDeletionPolicyTest {
     @Test
-    fun `active photos are moved to the matching source trash`() {
-        val decision = PhotoDeletionPolicy.decide(listOf(deviceTarget("one")))
+    fun `photos are moved to trash`() {
+        val decision = PhotoDeletionPolicy.decide(listOf(target("one")))
 
         val plan = (decision as PhotoDeletionDecision.Allowed).plan
-        assertEquals(PhotoSource.DEVICE, plan.source)
         assertEquals(PhotoDeletionOperation.MOVE_TO_TRASH, plan.operation)
-        assertEquals("content://media/one", (plan.targets.single() as PhotoTarget.Device).uri)
+        assertEquals("one", plan.targets.single().nodeUid)
     }
 
     @Test
-    fun `trashed photos are deleted permanently`() {
-        val decision = PhotoDeletionPolicy.decide(listOf(protonTarget("one", trashed = true)))
-
-        val plan = (decision as PhotoDeletionDecision.Allowed).plan
-        assertEquals(PhotoDeletionOperation.DELETE_PERMANENTLY, plan.operation)
-        assertEquals("one", (plan.targets.single() as PhotoTarget.Proton).nodeUid)
+    fun `nothing selected is not a deletion`() {
+        assertTrue(PhotoDeletionPolicy.decide(emptyList()) is PhotoDeletionDecision.Empty)
     }
 
-    @Test
-    fun `mixed primary sources require an explicit user choice`() {
-        val decision = PhotoDeletionPolicy.decide(listOf(deviceTarget("one"), protonTarget("two")))
-
-        assertTrue(decision is PhotoDeletionDecision.MixedSources)
-    }
-
-    private fun deviceTarget(id: String) = PhotoTarget.Device(
-        stableId = id,
-        uri = "content://media/$id",
-        isTrashed = false,
-    )
-
-    private fun protonTarget(id: String, trashed: Boolean = false) = PhotoTarget.Proton(
-        stableId = id,
-        nodeUid = id,
-        isTrashed = trashed,
-    )
+    private fun target(id: String) = PhotoTarget(stableId = id, nodeUid = id)
 }

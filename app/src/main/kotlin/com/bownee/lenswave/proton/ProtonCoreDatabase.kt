@@ -70,6 +70,9 @@ import me.proton.core.usersettings.data.entity.OrganizationKeysEntity
 import me.proton.core.usersettings.data.entity.UserSettingsEntity
 import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
 
+// Proton Core still ships the deprecated public-address entities alongside their replacements and
+// its own migrations expect both tables, so they stay listed until Core drops them.
+@Suppress("DEPRECATION")
 @Database(
     entities = [
         AccountEntity::class,
@@ -142,18 +145,23 @@ abstract class ProtonCoreDatabase :
     NotificationDatabase,
     DeviceRecoveryDatabase,
     AuthDatabase {
-
     companion object {
-        fun create(context: Context, passphraseStore: DatabasePassphraseStore): ProtonCoreDatabase {
+        fun create(
+            context: Context,
+            passphraseStore: DatabasePassphraseStore,
+            name: String = NAME,
+        ): ProtonCoreDatabase {
             System.loadLibrary("sqlcipher")
+            // The factory keeps this array by reference and SQLCipher reads it on the first real
+            // open, so it must stay intact for the lifetime of the database. Never zero it here.
             val passphrase = passphraseStore.getOrCreate()
-            return try {
-                Room.databaseBuilder(context, ProtonCoreDatabase::class.java, "proton-session.db")
-                    .openHelperFactory(SupportOpenHelperFactory(passphrase))
-                    .build()
-            } finally {
-                passphrase.fill(0)
-            }
+            ProtonDatabaseKeyMigration.rekeyLegacyDatabase(context.getDatabasePath(name), passphrase)
+            return Room
+                .databaseBuilder(context, ProtonCoreDatabase::class.java, name)
+                .openHelperFactory(SupportOpenHelperFactory(passphrase))
+                .build()
         }
+
+        private const val NAME = "proton-session.db"
     }
 }

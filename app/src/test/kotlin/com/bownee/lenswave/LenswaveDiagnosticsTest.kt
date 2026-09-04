@@ -8,40 +8,57 @@ import org.junit.Test
 
 class LenswaveDiagnosticsTest {
     @Test
-    fun protonFailureIncludesOnlyStructuredNonSensitiveFields() {
-        val innerError = ProtonSdkError(
-            message = "inner secret",
-            type = "NetworkTimeout",
-            domain = ProtonSdkError.ErrorDomain.Network,
-            primaryCode = 408,
-            secondaryCode = 2,
-            context = "https://example.test/users/private",
+    fun workerStateContainsOnlyBoundedStructuredFields() {
+        assertEquals(
+            "operation=thumbnail-worker state=retry-timeout attempt=2 maximumAttempts=25",
+            LenswaveDiagnostics.stateSummary(
+                operation = "thumbnail-worker",
+                state = "retry-timeout",
+                attempt = 2,
+                maximumAttempts = 25,
+            ),
         )
-        val sdkError = ProtonSdkError(
-            message = "outer secret",
-            type = "ApiResponse",
-            domain = ProtonSdkError.ErrorDomain.Api,
-            primaryCode = 401,
-            secondaryCode = 10,
-            context = """
-                java.lang.IllegalArgumentException: private-account-id
-                    at retrofit2.RequestFactory.Builder.parseMethodAnnotation(RequestFactory.java:232)
-                    at me.proton.drive.sdk.internal.ApiProviderBridge.execute(ApiProviderBridge.kt:117)
-                    at unsafe.Exfiltrate.frame(/private/account:42)
-                    at safe.Third.frame(Unknown Source)
-                    at safe.Fourth.frame(Native Method)
-                    at safe.Fifth.frame(Fifth.kt:5)
-            """.trimIndent(),
-            innerError = innerError,
-        )
+    }
 
-        val summary = LenswaveDiagnostics.failureSummary(
-            operation = "timeline-sync",
-            error = ProtonDriveSdkException(error = sdkError),
-        )
+    @Test
+    fun protonFailureIncludesOnlyStructuredNonSensitiveFields() {
+        val innerError =
+            ProtonSdkError(
+                message = "inner secret",
+                type = "NetworkTimeout",
+                domain = ProtonSdkError.ErrorDomain.Network,
+                primaryCode = 408,
+                secondaryCode = 2,
+                context = "https://example.test/users/private",
+            )
+        val sdkError =
+            ProtonSdkError(
+                message = "outer secret",
+                type = "ApiResponse",
+                domain = ProtonSdkError.ErrorDomain.Api,
+                primaryCode = 401,
+                secondaryCode = 10,
+                context =
+                    """
+                    java.lang.IllegalArgumentException: private-account-id
+                        at retrofit2.RequestFactory.Builder.parseMethodAnnotation(RequestFactory.java:232)
+                        at me.proton.drive.sdk.internal.ApiProviderBridge.execute(ApiProviderBridge.kt:117)
+                        at unsafe.Exfiltrate.frame(/private/account:42)
+                        at safe.Third.frame(Unknown Source)
+                        at safe.Fourth.frame(Native Method)
+                        at safe.Fifth.frame(Fifth.kt:5)
+                    """.trimIndent(),
+                innerError = innerError,
+            )
+
+        val summary =
+            LenswaveDiagnostics.failureSummary(
+                operation = "timeline-sync",
+                error = ProtonDriveSdkException(error = sdkError),
+            )
 
         assertEquals(
-                "operation=timeline-sync failure=ProtonDriveSdkException " +
+            "operation=timeline-sync failure=ProtonDriveSdkException " +
                 "sdkDomain=Api sdkType=ApiResponse sdkPrimaryCode=401 sdkSecondaryCode=10 " +
                 "innerDomain=Network innerType=NetworkTimeout innerPrimaryCode=408 innerSecondaryCode=2 " +
                 "sdkFrame1=retrofit2.RequestFactory.Builder.parseMethodAnnotation(RequestFactory.java:232) " +
@@ -59,16 +76,18 @@ class LenswaveDiagnosticsTest {
 
     @Test
     fun unsafeSdkErrorTypeIsOmitted() {
-        val sdkError = ProtonSdkError(
-            message = "ignored",
-            type = "type with user-data\nforged-log-line",
-            domain = ProtonSdkError.ErrorDomain.BusinessLogic,
-        )
+        val sdkError =
+            ProtonSdkError(
+                message = "ignored",
+                type = "type with user-data\nforged-log-line",
+                domain = ProtonSdkError.ErrorDomain.BusinessLogic,
+            )
 
-        val summary = LenswaveDiagnostics.failureSummary(
-            operation = "client-create",
-            error = ProtonDriveSdkException(error = sdkError),
-        )
+        val summary =
+            LenswaveDiagnostics.failureSummary(
+                operation = "client-create",
+                error = ProtonDriveSdkException(error = sdkError),
+            )
 
         assertEquals(
             "operation=client-create failure=ProtonDriveSdkException sdkDomain=BusinessLogic",

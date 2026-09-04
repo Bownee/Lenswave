@@ -1,82 +1,144 @@
 package com.bownee.lenswave.gallery
 
-import com.bownee.lenswave.proton.ProtonAlbumReference
+import android.graphics.Bitmap
 import com.bownee.lenswave.proton.ProtonAlbumPhotosState
+import com.bownee.lenswave.proton.ProtonAlbumReference
 import com.bownee.lenswave.proton.ProtonAlbumsState
-import com.bownee.lenswave.proton.ProtonGalleryPhoto
+import com.bownee.lenswave.proton.ProtonFavoriteResult
 import com.bownee.lenswave.proton.ProtonGalleryState
+import com.bownee.lenswave.proton.ProtonMediaTag
+import com.bownee.lenswave.proton.ProtonOriginalStream
 import com.bownee.lenswave.proton.ProtonPhotoGateway
-import com.bownee.lenswave.proton.ProtonTrashState
+import com.bownee.lenswave.proton.ProtonTrashResult
 import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
 import kotlinx.coroutines.flow.StateFlow
 import me.proton.core.domain.entity.UserId
-
-interface DevicePhotoSource {
-    suspend fun loadPhotos(): List<GalleryAsset>
-    suspend fun loadTrashedPhotos(): List<GalleryAsset>
-    suspend fun calculateSha1(photo: GalleryAsset): ByteArray
-}
-
-interface CombinedPhotoMatcher {
-    suspend fun resolveMatches(
-        userId: UserId,
-        devicePhotos: List<GalleryAsset>,
-        protonPhotos: List<ProtonGalleryPhoto>,
-        forceRecheck: Boolean = false,
-        onProgress: suspend (CombinedMatchProgress) -> Unit,
-    )
-
-    suspend fun clear(userId: UserId)
-}
-
-interface CombinedMatchStore {
-    fun read(userId: String): CombinedMatchSnapshot
-    fun write(userId: String, snapshot: CombinedMatchSnapshot)
-    fun append(
-        userId: String,
-        timelineFingerprint: String,
-        records: Collection<DevicePhotoMatchRecord>,
-    )
-    fun clear(userId: String)
-}
-
-interface ProtonDuplicateSource {
-    suspend fun getOriginalFileName(userId: UserId, nodeUid: String): String?
-    suspend fun findPhotoDuplicates(
-        userId: UserId,
-        name: String,
-        generateSha1: suspend () -> ByteArray,
-    ): List<String>
-}
+import java.io.File
 
 interface ProtonGalleryReader {
     val state: StateFlow<ProtonGalleryState>
     val albumsState: StateFlow<ProtonAlbumsState>
     val albumPhotosState: StateFlow<ProtonAlbumPhotosState>
-    val trashState: StateFlow<ProtonTrashState>
 
-    suspend fun syncThumbnails(userId: UserId, forceRemote: Boolean = false, maxThumbnailDownloads: Int? = null)
-    suspend fun syncAlbums(userId: UserId, forceRemote: Boolean = false, maxThumbnailDownloads: Int? = null)
-    suspend fun loadCachedAlbum(userId: UserId, album: ProtonAlbumReference)
-    suspend fun syncAlbumPhotos(userId: UserId, album: ProtonAlbumReference, forceRemote: Boolean = false)
-    suspend fun syncTrash(userId: UserId, forceRemote: Boolean = false)
+    suspend fun syncTimelineMetadata(
+        userId: UserId,
+        forceRemote: Boolean = false,
+    )
+
+    suspend fun syncTagMetadata(
+        userId: UserId,
+        tag: ProtonMediaTag,
+        forceRemote: Boolean = false,
+    )
+
+    suspend fun syncAlbumsMetadata(
+        userId: UserId,
+        forceRemote: Boolean = false,
+    )
+
+    suspend fun loadCachedAlbum(
+        userId: UserId,
+        album: ProtonAlbumReference,
+    )
+
+    suspend fun syncAlbumPhotoMetadata(
+        userId: UserId,
+        album: ProtonAlbumReference,
+        forceRemote: Boolean = false,
+    )
 }
 
 interface ProtonSessionLifecycle {
     suspend fun activate(userId: UserId)
+
     suspend fun disconnect(userId: UserId)
+}
+
+/** Decoded thumbnails for grid cells and viewer placeholders. */
+interface ProtonThumbnailImageSource {
+    /** Null when no thumbnail is stored; the gateway re-queues it for download. */
+    suspend fun loadThumbnail(
+        userId: UserId,
+        nodeUid: String,
+    ): Bitmap?
+
+    /**
+     * The thumbnail only if it is already decoded in memory. Never touches disk or suspends, so
+     * grid cells can bind it in the same frame; null means [loadThumbnail] must be called.
+     */
+    fun peekThumbnail(
+        userId: UserId,
+        nodeUid: String,
+    ): Bitmap?
+}
+
+/** Full-resolution media for the viewer. */
+interface ProtonOriginalMediaSource {
+    suspend fun downloadOriginal(
+        userId: UserId,
+        nodeUid: String,
+    ): File
+
+    /** Hands [onReady] a stream that can be read while the download is still in flight. */
+    suspend fun downloadOriginalProgressively(
+        userId: UserId,
+        nodeUid: String,
+        onReady: suspend (ProtonOriginalStream) -> Unit,
+    ): File
+
+    /** Materializes an already cached original without downloading; null when not cached. */
+    suspend fun prepareCachedOriginal(
+        userId: UserId,
+        nodeUid: String,
+    ): File?
+
+    /**
+     * The stored screen-sized preview decoded for a display whose longer edge is
+     * [targetLongEdge] pixels; null when none is downloaded yet. Never hits the network.
+     */
+    suspend fun loadPreview(
+        userId: UserId,
+        nodeUid: String,
+        targetLongEdge: Int,
+    ): Bitmap?
+
+    suspend fun getOriginalFileName(
+        userId: UserId,
+        nodeUid: String,
+    ): String?
+}
+
+/** Remote edits to photos; each result reports how many nodes succeeded and failed. */
+interface ProtonPhotoMutations {
+    suspend fun setFavorite(
+        userId: UserId,
+        nodeUids: Collection<String>,
+        favorite: Boolean,
+    ): ProtonFavoriteResult
+
+    suspend fun trashPhotos(
+        userId: UserId,
+        nodeUids: Collection<String>,
+    ): ProtonTrashResult
 }
 
 @Module
 @InstallIn(SingletonComponent::class)
 internal abstract class GalleryDataModule {
-    @Binds abstract fun bindDevicePhotoSource(implementation: DevicePhotoRepository): DevicePhotoSource
-    @Binds abstract fun bindCombinedPhotoMatcher(implementation: CombinedPhotoRepository): CombinedPhotoMatcher
-    @Binds abstract fun bindCombinedMatchStore(implementation: CombinedPhotoCache): CombinedMatchStore
+    @Binds abstract fun bindGalleryNavigationStore(
+        implementation: SharedPreferencesGalleryNavigationStore,
+    ): GalleryNavigationStore
+
     @Binds abstract fun bindProtonGalleryReader(implementation: ProtonPhotoGateway): ProtonGalleryReader
+
     @Binds abstract fun bindProtonSessionLifecycle(implementation: ProtonPhotoGateway): ProtonSessionLifecycle
-    @Binds abstract fun bindProtonDuplicateSource(implementation: ProtonPhotoGateway): ProtonDuplicateSource
+
+    @Binds abstract fun bindProtonThumbnailImageSource(implementation: ProtonPhotoGateway): ProtonThumbnailImageSource
+
+    @Binds abstract fun bindProtonOriginalMediaSource(implementation: ProtonPhotoGateway): ProtonOriginalMediaSource
+
+    @Binds abstract fun bindProtonPhotoMutations(implementation: ProtonPhotoGateway): ProtonPhotoMutations
 }

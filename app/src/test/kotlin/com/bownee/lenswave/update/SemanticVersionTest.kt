@@ -25,6 +25,5 @@ class SemanticVersionTest {
         assertNull(SemanticVersion.parse("release-1.2.3"))
     }
 
-    private fun requireVersion(value: String): SemanticVersion =
-        requireNotNull(SemanticVersion.parse(value))
+    private fun requireVersion(value: String): SemanticVersion = requireNotNull(SemanticVersion.parse(value))
 }
