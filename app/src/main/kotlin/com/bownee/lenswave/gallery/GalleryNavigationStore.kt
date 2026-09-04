@@ -76,9 +76,12 @@ internal object GalleryNavigationCodec {
 }
 
 /**
- * Loads the gallery's preference files off the main thread at process start. The platform caches
- * a SharedPreferences per file for the process, so the first read on the main thread (the view
- * model's saved destination, the notification prompt flag) then finds the file already parsed.
+ * Starts loading the gallery's preference files off the main thread at process start. The
+ * platform caches one SharedPreferences per file for the process and parses it on its own
+ * background thread once requested, so the first main-thread read (the view model's saved
+ * destination in its constructor, the notification prompt flag) either finds the file parsed
+ * or blocks only for the remainder of a load that began here rather than for all of it. There
+ * is no guarantee the load has finished by the time the activity starts.
  */
 internal object GalleryPreferenceWarmUp {
     fun warm(context: Context) {

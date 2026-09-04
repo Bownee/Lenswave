@@ -50,6 +50,9 @@ class GalleryViewModel
     ) : ViewModel() {
         private val uiStateFactory = GalleryUiStateFactory(AndroidGalleryText(context.resources))
 
+        // The stored destination is needed for the initial state, so it is read here on the main
+        // thread; GalleryPreferenceWarmUp starts the file load at process start, and this read
+        // waits only for whatever part of it is still outstanding.
         private var destination =
             restoreNavigation(savedStateHandle)
                 ?: navigationStore.read()
