@@ -40,6 +40,9 @@ internal class ProtonPhotoCache
          */
         private val renditions = ConcurrentHashMap<String, ProtonStoredRenditions>()
 
+        /** Queues whose file could not be read for a transient reason; see [readQueue] and [writeQueue]. */
+        private val unreadQueues: MutableSet<Pair<String, ProtonQueueName>> = ConcurrentHashMap.newKeySet()
+
         /** Metadata hydration only needs availability; authenticated contents are validated when read. */
         override fun thumbnailExists(
             userId: String,
@@ -237,51 +240,67 @@ internal class ProtonPhotoCache
             )
         }
 
+        /**
+         * The queue hydrates as empty when its file cannot be read right now, since the store
+         * contract has no "unknown"; the queue is remembered in [unreadQueues] so the next
+         * [writeQueue] merges rather than replaces the file, which still holds the good copy.
+         */
         override fun readQueue(
             userId: String,
             queue: ProtonQueueName,
-        ): List<ProtonThumbnailQueueEntry> =
-            readSnapshot(userId, queueFile(userId, queue)) { text ->
-                val array = JSONArray(text)
-                buildList {
-                    for (position in 0 until array.length()) {
-                        val value = array.getJSONObject(position)
-                        val sourceCaptureTimes =
-                            value.optJSONObject("sourceCaptureTimes")?.let { stored ->
-                                buildMap {
-                                    val sources = stored.keys()
-                                    while (sources.hasNext()) {
-                                        val source = sources.next()
-                                        put(source, stored.getLong(source))
-                                    }
-                                }
-                            } ?: run {
-                                val legacySources = value.getJSONArray("sources")
-                                buildMap {
-                                    for (sourcePosition in 0 until legacySources.length()) {
-                                        put(legacySources.getString(sourcePosition), Long.MIN_VALUE)
-                                    }
+        ): List<ProtonThumbnailQueueEntry> {
+            val key = userId to queue
+            unreadQueues -= key
+            return readSnapshot(userId, queueFile(userId, queue), ::parseQueue) { error ->
+                LenswaveDiagnostics.reportFailure(LenswaveOperation.CACHE_SNAPSHOT_READ, error)
+                unreadQueues += key
+                null
+            }.orEmpty()
+        }
+
+        private fun parseQueue(text: String): List<ProtonThumbnailQueueEntry> {
+            val array = JSONArray(text)
+            return buildList {
+                for (position in 0 until array.length()) {
+                    val value = array.getJSONObject(position)
+                    val sourceCaptureTimes =
+                        value.optJSONObject("sourceCaptureTimes")?.let { stored ->
+                            buildMap {
+                                val sources = stored.keys()
+                                while (sources.hasNext()) {
+                                    val source = sources.next()
+                                    put(source, stored.getLong(source))
                                 }
                             }
-                        add(
-                            ProtonThumbnailQueueEntry(
-                                nodeUid = value.getString("nodeUid"),
-                                sourceCaptureTimes = sourceCaptureTimes,
-                                retryCount = value.optInt("retryCount"),
-                                retryAtMillis = value.optLong("retryAtMillis"),
-                            ),
-                        )
-                    }
+                        } ?: run {
+                            val legacySources = value.getJSONArray("sources")
+                            buildMap {
+                                for (sourcePosition in 0 until legacySources.length()) {
+                                    put(legacySources.getString(sourcePosition), Long.MIN_VALUE)
+                                }
+                            }
+                        }
+                    add(
+                        ProtonThumbnailQueueEntry(
+                            nodeUid = value.getString("nodeUid"),
+                            sourceCaptureTimes = sourceCaptureTimes,
+                            retryCount = value.optInt("retryCount"),
+                            retryAtMillis = value.optLong("retryAtMillis"),
+                        ),
+                    )
                 }
-            }.orEmpty()
+            }
+        }
 
         override fun writeQueue(
             userId: String,
             queue: ProtonQueueName,
             entries: List<ProtonThumbnailQueueEntry>,
         ) {
+            val key = userId to queue
+            val written = if (key in unreadQueues) mergeWithStoredQueue(userId, queue, entries) else entries
             val array = JSONArray()
-            entries.forEach { entry ->
+            written.forEach { entry ->
                 val sourceCaptureTimes = JSONObject()
                 entry.sourceCaptureTimes.toSortedMap().forEach { (source, captureTime) ->
                     sourceCaptureTimes.put(source, captureTime)
@@ -300,6 +319,27 @@ internal class ProtonPhotoCache
                 array.toString(),
                 "Could not commit Proton download queue",
             )
+            unreadQueues -= key
+        }
+
+        /**
+         * The in-memory queue started empty because its file could not be read (see
+         * [readQueue]), so writing it as it is would throw away every entry the file still
+         * holds. The file is read again here: its entries that memory does not know are kept
+         * and memory wins for the rest. A file that still cannot be read refuses the write;
+         * the queue reports that and retries the flush with backoff, by which time the
+         * Keystore or the disk has usually recovered.
+         */
+        private fun mergeWithStoredQueue(
+            userId: String,
+            queue: ProtonQueueName,
+            entries: List<ProtonThumbnailQueueEntry>,
+        ): List<ProtonThumbnailQueueEntry> {
+            val stored =
+                readSnapshot(userId, queueFile(userId, queue), ::parseQueue) { error ->
+                    throw IllegalStateException("Could not read the Proton download queue before writing it", error)
+                }.orEmpty()
+            return ProtonQueueMergePolicy.merge(entries, stored)
         }
 
         override fun reconcileAlbums(
@@ -462,6 +502,7 @@ internal class ProtonPhotoCache
             thumbnails.clearMemory(userId)
             previews.forget(userId)
             forgetRenditions(userId)
+            unreadQueues.removeAll { (owner, _) -> owner == userId }
             val indexDeleted = userDirectory(userId).deleteRecursively()
             val originalsDeleted = originals.clear(userId)
             if (!indexDeleted || !originalsDeleted) {
@@ -495,6 +536,7 @@ internal class ProtonPhotoCache
             thumbnails.retainMemoryFor(userId)
             previews.retainCountsFor(userId)
             renditions.keys.removeAll { key -> key != userId }
+            unreadQueues.removeAll { (owner, _) -> owner != userId }
         }
 
         private fun indexFile(userId: String): File = File(userDirectory(userId), "index.json")
@@ -561,6 +603,18 @@ internal class ProtonPhotoCache
             userId: String,
             file: File,
             parse: (String) -> T,
+        ): T? =
+            readSnapshot(userId, file, parse) { error ->
+                LenswaveDiagnostics.reportFailure(LenswaveOperation.CACHE_SNAPSHOT_READ, error)
+                null
+            }
+
+        /** [readSnapshot] with the transient case in the caller's hands: [onTransientFailure] decides what it reads as. */
+        private inline fun <T> readSnapshot(
+            userId: String,
+            file: File,
+            parse: (String) -> T,
+            onTransientFailure: (Exception) -> T?,
         ): T? {
             if (!file.isFile) return null
             return try {
@@ -568,10 +622,10 @@ internal class ProtonPhotoCache
             } catch (error: Exception) {
                 if (ProtonSnapshotCorruptionPolicy.isCorrupt(error)) {
                     file.delete()
+                    null
                 } else {
-                    LenswaveDiagnostics.reportFailure(LenswaveOperation.CACHE_SNAPSHOT_READ, error)
+                    onTransientFailure(error)
                 }
-                null
             }
         }
 
