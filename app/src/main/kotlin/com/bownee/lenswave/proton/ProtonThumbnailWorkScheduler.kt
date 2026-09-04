@@ -60,7 +60,14 @@ internal interface ProtonThumbnailFollowUpScheduler {
  * WorkManager transaction, and a resume replaced whatever was there, cancelling a batch in
  * progress. Now the scheduler watches the unique work and answers from memory: an ask while a
  * run is queued or going is nothing, and asks are otherwise spaced by
- * [ProtonThumbnailEnqueuePolicy.DEBOUNCE_MILLIS]. Only [restart] still replaces.
+ * [ProtonThumbnailEnqueuePolicy.DEBOUNCE_MILLIS].
+ *
+ * One queued request is not the run the app wants: the charging follow-up a run left for the
+ * previews it deferred. It waits for the charger, but previews are also allowed while the app
+ * is on screen, and every ask from the app is made on screen. So an ask that finds only that
+ * request waiting replaces it with a plain one, which runs now and leaves its own charging
+ * follow-up for whatever it defers. A follow-up that is already running is a run in progress
+ * and is kept like any other. Otherwise only [restart] replaces.
  */
 @Singleton
 internal class ProtonThumbnailWorkScheduler
@@ -80,10 +87,12 @@ internal class ProtonThumbnailWorkScheduler
             val workName = ProtonWorkNames.thumbnails(userId)
             val observation = observe(workName)
             val now = SystemClock.elapsedRealtime()
+            val waitingForCharger = observation.waitingForCharger
             if (!ProtonThumbnailEnqueuePolicy.shouldEnqueue(
                     observation.active,
                     observation.lastEnqueuedAtMillis,
                     now,
+                    waitingForCharger,
                 )
             ) {
                 return
@@ -91,7 +100,7 @@ internal class ProtonThumbnailWorkScheduler
             observation.lastEnqueuedAtMillis = now
             workManager.enqueueUniqueWork(
                 workName,
-                ExistingWorkPolicy.KEEP,
+                ProtonThumbnailEnqueuePolicy.existingWorkPolicy(waitingForCharger),
                 ProtonThumbnailWorker.request(userId),
             )
         }
@@ -168,8 +177,13 @@ internal class ProtonThumbnailWorkScheduler
                 Observation().also { observation ->
                     observationScope.launch {
                         workManager.getWorkInfosForUniqueWorkFlow(workName).collect { infos ->
-                            val active = ProtonThumbnailEnqueuePolicy.isActive(infos.map(WorkInfo::state))
+                            val requests =
+                                infos.map { info ->
+                                    ProtonThumbnailQueuedRequest(info.state, info.constraints.requiresCharging())
+                                }
+                            val active = ProtonThumbnailEnqueuePolicy.isActive(requests.map { it.state })
                             if (observation.active && !active) observation.lastEnqueuedAtMillis = null
+                            observation.waitingForCharger = ProtonThumbnailEnqueuePolicy.isWaitingForCharger(requests)
                             observation.active = active
                         }
                     }
@@ -179,9 +193,18 @@ internal class ProtonThumbnailWorkScheduler
         private class Observation {
             @Volatile var active = false
 
+            /** The unfinished requests are all follow-ups queued for the charger; see [ProtonThumbnailEnqueuePolicy]. */
+            @Volatile var waitingForCharger = false
+
             @Volatile var lastEnqueuedAtMillis: Long? = null
         }
     }
+
+/** One request under the unique name as WorkManager reports it. */
+internal data class ProtonThumbnailQueuedRequest(
+    val state: WorkInfo.State,
+    val requiresCharging: Boolean,
+)
 
 /** Whether an ask for a run is worth a WorkManager transaction; see [ProtonThumbnailWorkScheduler]. */
 internal object ProtonThumbnailEnqueuePolicy {
@@ -191,12 +214,29 @@ internal object ProtonThumbnailEnqueuePolicy {
     /** A request that is queued, blocked behind a chained run, or running is the run the app wants. */
     fun isActive(states: Collection<WorkInfo.State>): Boolean = states.any { state -> !state.isFinished }
 
+    /**
+     * Whether every unfinished request is a charging follow-up still waiting to start. Such a
+     * request holds the unique name without doing anything until a charger appears, while an ask
+     * from the app is made with the app on screen, where previews are allowed anyway. A running
+     * follow-up is a run in progress and never counts as waiting.
+     */
+    fun isWaitingForCharger(requests: Collection<ProtonThumbnailQueuedRequest>): Boolean {
+        val unfinished = requests.filterNot { request -> request.state.isFinished }
+        return unfinished.isNotEmpty() &&
+            unfinished.all { request -> request.requiresCharging && request.state != WorkInfo.State.RUNNING }
+    }
+
+    /** A request waiting for the charger is replaced; anything else queued or going is kept. */
+    fun existingWorkPolicy(waitingForCharger: Boolean): ExistingWorkPolicy =
+        if (waitingForCharger) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP
+
     fun shouldEnqueue(
         activeRun: Boolean,
         lastEnqueuedAtMillis: Long?,
         nowMillis: Long,
+        waitingForCharger: Boolean = false,
     ): Boolean {
-        if (activeRun) return false
+        if (activeRun && !waitingForCharger) return false
         if (lastEnqueuedAtMillis == null) return true
         // A clock that went backwards must not silence the ask.
         return nowMillis < lastEnqueuedAtMillis || nowMillis - lastEnqueuedAtMillis >= DEBOUNCE_MILLIS
