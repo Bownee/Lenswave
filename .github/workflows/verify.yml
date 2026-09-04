@@ -4,7 +4,8 @@ name: Verify
 #
 # Every variant is compiled from scratch (debug for unit tests, release for R8), so the checks
 # share nothing but the dependency cache. They run as separate jobs so the wall clock is the
-# slowest one rather than the sum.
+# slowest one rather than the sum. The release build is the slowest of them and nothing a pull
+# request changes needs it, so callers can leave it to pushes on main and release tags.
 on:
   workflow_call:
     inputs:
@@ -12,6 +13,10 @@ on:
         description: Also build the debug APK and attach it to the evidence.
         type: boolean
         default: false
+      build-release:
+        description: Build the R8-optimised release variant and check its size budget.
+        type: boolean
+        default: true
       fetch-depth:
         description: Git history depth for the checkout.
         type: string
@@ -22,7 +27,7 @@ on:
         required: true
     outputs:
       version_name:
-        description: VERSION_NAME from version.properties.
+        description: VERSION_NAME from version.properties (empty when build-release is false).
         value: ${{ jobs.release.outputs.version_name }}
 
 jobs:
@@ -76,7 +81,7 @@ jobs:
           retention-days: 30
 
   lint:
-    name: Android lint
+    name: Android lint and dependency licenses
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -94,9 +99,11 @@ jobs:
         uses: ./.github/actions/setup-android
 
       # There are no variant-specific source sets, so lintRelease would repeat lintDebug; the
-      # release-only fatal checks still run as lintVitalRelease inside assembleRelease.
-      - name: Lint
-        run: ./gradlew lintDebug --stacktrace
+      # release-only fatal checks still run as lintVitalRelease inside assembleRelease. The SBOM
+      # license check only resolves dependencies, so it rides along here instead of waiting for
+      # the release build.
+      - name: Lint and verify dependency licenses
+        run: ./gradlew lintDebug verifySbomLicenses --stacktrace
 
       - name: Upload lint findings to code scanning
         if: always()
@@ -105,17 +112,27 @@ jobs:
           sarif_file: app/build/reports/lint-results-debug.sarif
           category: android-lint
 
+      - name: Prepare evidence
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p reports
+          cp app/build/reports/lint-results-*.html reports/ 2>/dev/null || true
+          cp build/reports/cyclonedx/bom.* reports/ 2>/dev/null || true
+          ls reports
+
       - name: Upload evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ inputs.upload-name }}-lint
-          path: app/build/reports/lint-results-*.html
+          path: reports/**
           if-no-files-found: error
           retention-days: 30
 
   release:
-    name: Release build and SBOM
+    name: Release build
+    if: inputs.build-release
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -138,8 +155,8 @@ jobs:
         shell: bash
         run: scripts/app-version.sh >> "$GITHUB_OUTPUT"
 
-      - name: Build release variant and SBOM
-        run: ./gradlew assembleRelease verifySbomLicenses --stacktrace
+      - name: Build release variant
+        run: ./gradlew assembleRelease --stacktrace
 
       - name: Check release APK size budget
         shell: bash
@@ -147,14 +164,6 @@ jobs:
           mkdir -p reports
           scripts/check-apk-size.sh app/build/outputs/apk/release/app-arm64-v8a-release-unsigned.apk \
             | tee reports/apk-sizes.txt
-
-      - name: Prepare evidence
-        if: always()
-        shell: bash
-        run: |
-          mkdir -p reports
-          cp build/reports/cyclonedx/bom.* reports/ 2>/dev/null || true
-          ls reports
 
       - name: Upload evidence
         if: always()
