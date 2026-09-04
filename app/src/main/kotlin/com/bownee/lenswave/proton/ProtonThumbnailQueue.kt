@@ -122,7 +122,13 @@ internal class ProtonThumbnailQueue(
         replaceSources(userId, mapOf(source to pendingCandidates))
     }
 
-    /** A source replacement is a full reconciliation, so it is written through at once. */
+    /**
+     * A source replacement is a full reconciliation, and one that usually changes nothing: it
+     * runs several times per app open for both queues (activation housekeeping, the timeline
+     * sync moments later, album covers on the library). So the write is left to the debounce
+     * like any other change, and a replacement that leaves every entry as it was is not a
+     * change at all: no generation bump, no write.
+     */
     suspend fun replaceSources(
         userId: String,
         pendingCandidatesBySource: Map<String, Collection<ProtonThumbnailCandidate>>,
@@ -145,6 +151,10 @@ internal class ProtonThumbnailQueue(
                             ProtonSyncKeys.QueueSource.isAlbumPhotos(source) &&
                             source !in retainedAlbumSources
                     )
+            // Every entry touched below is remembered as it was (absent ones as null), so the
+            // replacement can tell afterwards whether it amounted to a change. Only touched
+            // entries are compared; the rest of the queue is never copied or visited twice.
+            val originals = HashMap<String, ProtonThumbnailQueueEntry?>()
             // Most entries keep every source they have; copying each of them on every
             // reconciliation (several per app open, for both queues) is work for nothing.
             val iterator = entries.entries.iterator()
@@ -152,6 +162,7 @@ internal class ProtonThumbnailQueue(
                 val slot = iterator.next()
                 val entry = slot.value
                 if (entry.sources.none(::isRemoved)) continue
+                originals.putIfAbsent(entry.nodeUid, entry)
                 val kept = entry.sourceCaptureTimes.filterKeys { source -> !isRemoved(source) }
                 if (kept.isEmpty()) {
                     iterator.remove()
@@ -162,6 +173,7 @@ internal class ProtonThumbnailQueue(
             pendingCandidatesBySource.forEach { (source, candidates) ->
                 candidates.distinctBy(ProtonThumbnailCandidate::nodeUid).forEach { candidate ->
                     val existing = entries[candidate.nodeUid]
+                    originals.putIfAbsent(candidate.nodeUid, existing)
                     entries[candidate.nodeUid] = existing?.copy(
                         sourceCaptureTimes =
                             existing.sourceCaptureTimes +
@@ -174,9 +186,9 @@ internal class ProtonThumbnailQueue(
                 }
             }
             claimedNodeUids[userId]?.retainAll(entries.keys)
-            markChanged(userId)
+            val changed = originals.any { (nodeUid, original) -> entries[nodeUid] != original }
+            if (changed) markChanged(userId)
         }
-        flush(userId)
     }
 
     suspend fun retryNow(
