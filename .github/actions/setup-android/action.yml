@@ -34,8 +34,31 @@ runs:
         kotlin.daemon.jvmargs=-Xmx3g -XX:+UseParallelGC
         org.gradle.configuration-cache=false
         PROPS
+        chmod +x gradlew scripts/*.sh
+
+    - name: Locate pinned Android SDK packages
+      id: sdk
+      shell: bash
+      run: |
+        # "platforms;android-36" lives at $ANDROID_SDK_ROOT/platforms/android-36, and so on.
+        test -d "$ANDROID_SDK_ROOT"
+        {
+          echo 'paths<<PATHS'
+          sed 's#;#/#g' .github/toolchain/android-sdk-packages | sed "s#^#$ANDROID_SDK_ROOT/#"
+          echo 'PATHS'
+        } >> "$GITHUB_OUTPUT"
+
+    # Downloading the packages from Google usually takes ~5 s but has taken up to nine minutes
+    # in a single job, so the installed directories are cached against the pinned package list.
+    - name: Restore Android SDK packages
+      id: sdk-cache
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.sdk.outputs.paths }}
+        key: android-sdk-v1-${{ runner.os }}-${{ hashFiles('.github/toolchain/android-sdk-packages') }}
 
     - name: Install exact Android SDK packages
+      if: steps.sdk-cache.outputs.cache-hit != 'true'
       shell: bash
       run: |
         set +o pipefail
@@ -43,4 +66,3 @@ runs:
         yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
           $(tr '\n' ' ' < .github/toolchain/android-sdk-packages) >/dev/null
         set -o pipefail
-        chmod +x gradlew scripts/*.sh
