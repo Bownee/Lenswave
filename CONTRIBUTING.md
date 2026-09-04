@@ -57,7 +57,7 @@ licenses outside the approved list in `build.gradle.kts`.
   artifact needs an `AppTheme` binding (`LenswaveTheme.kt`); do not add Compose screens.
 - Put decisions in small pure objects (`*Policy`, `*Formatter`, `*Codec`) and unit-test them; keep
   Activities and Screens as wiring. Coverage for `*Policy` classes must stay above 80 percent.
-- Lint warnings fail the build (`warningsAsErrors`). Prefer fixing the cause over suppressing.
+- Lint warnings and Kotlin compiler warnings fail the build. Prefer fixing the cause over suppressing.
 - Every user-visible string goes through `res/values/strings.xml`.
 - Report failures through `LenswaveDiagnostics` with a `LenswaveOperation`, never `Log.e` directly.
 
