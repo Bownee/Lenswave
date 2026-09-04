@@ -126,9 +126,8 @@ jobs:
           emulator-options: -no-window -gpu software -no-snapshot-save -noaudio -no-boot-anim -camera-back none
           script: |
             ./gradlew connectedDebugAndroidTest -Plenswave.includeX86TestAbi=true --stacktrace
-            if [ "$RUN_MINIFIED_CONTRACT" = "true" ]; then
-              ./gradlew connectedMinifiedAndroidTest -Plenswave.instrumentationBuildType=minified -Plenswave.includeX86TestAbi=true -Pandroid.testInstrumentationRunnerArguments.class=com.bownee.lenswave.proton.ProtonSdkJniContractInstrumentedTest --stacktrace
-            fi
+            # The runner executes each script line in its own shell, so this must stay on one line.
+            [ "$RUN_MINIFIED_CONTRACT" != "true" ] || ./gradlew connectedMinifiedAndroidTest -Plenswave.instrumentationBuildType=minified -Plenswave.includeX86TestAbi=true -Pandroid.testInstrumentationRunnerArguments.class=com.bownee.lenswave.proton.ProtonSdkJniContractInstrumentedTest --stacktrace
         env:
           RUN_MINIFIED_CONTRACT: ${{ github.event_name != 'pull_request' }}
 
