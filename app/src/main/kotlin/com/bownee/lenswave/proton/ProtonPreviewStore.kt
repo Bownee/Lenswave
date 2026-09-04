@@ -41,10 +41,18 @@ internal class ProtonPreviewStore
 
         /**
          * The last few decoded previews, so a swipe back (or the same photo opened again) skips
-         * the decrypt and decode. Evicted bitmaps are not recycled: the viewer may still be drawing
-         * one as its placeholder, and the garbage collector reclaims them soon enough.
+         * the decrypt and decode. Sized in kilobytes against a share of the heap: a screen-sized
+         * ARGB preview is about 11 MB, so counting entries would pin tens of megabytes for good.
+         * Evicted bitmaps are not recycled: the viewer may still be drawing one as its
+         * placeholder, and the garbage collector reclaims them soon enough.
          */
-        private val decoded = LruCache<PreviewKey, Bitmap>(DECODED_CACHE_ENTRIES)
+        private val decoded =
+            object : LruCache<PreviewKey, Bitmap>(decodedCacheSizeKilobytes()) {
+                override fun sizeOf(
+                    key: PreviewKey,
+                    value: Bitmap,
+                ): Int = (value.byteCount / 1_024).coerceAtLeast(1)
+            }
 
         fun exists(
             userId: String,
@@ -219,8 +227,14 @@ internal class ProtonPreviewStore
             const val EXTENSION = "preview"
             const val LOCK_COUNT = 32
 
-            /** The photo on screen plus one neighbour either side. */
-            const val DECODED_CACHE_ENTRIES = 3
+            /**
+             * Room for the photo on screen and a neighbour or two: a sixteenth of the heap, held
+             * between one large preview and a handful so a small heap still gets a swipe back.
+             */
+            fun decodedCacheSizeKilobytes(): Int =
+                (Runtime.getRuntime().maxMemory() / 1_024 / 16)
+                    .coerceIn(12L * 1_024, 40L * 1_024)
+                    .toInt()
         }
     }
 
