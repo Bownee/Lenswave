@@ -13,6 +13,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.StateFlow
@@ -62,6 +63,14 @@ class ProtonPhotoGateway
         /** Process-wide, like the session itself; [runActivationHousekeeping] guards every use. */
         private val housekeepingScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+        /**
+         * The one housekeeping run in flight, under [housekeepingMutex]. Each activation that
+         * actually transitioned replaces it, so retried transitions and account switches never
+         * pile up concurrent runs over the same queues.
+         */
+        private val housekeepingMutex = Mutex()
+        private var housekeepingJob: Job? = null
+
         /** Background thumbnail work; kept off the public class surface, see [ProtonThumbnailWorkGateway]. */
         internal val thumbnailWork: ProtonThumbnailWorkGateway = ThumbnailWork()
 
@@ -76,26 +85,36 @@ class ProtonPhotoGateway
          * waits for that housekeeping to finish before it erases the user's files.
          */
         override suspend fun activate(userId: UserId) {
-            withContext(Dispatchers.IO) {
-                sessionGuard.activate(userId) { previousUserId ->
-                    previousUserId?.let { previous ->
-                        clientProvider.disconnect(previous)
-                        // As in disconnect: the queues drop their pending writes first, or a
-                        // debounced flush could land after the clear and recreate the previous
-                        // user's directory and data key.
-                        thumbnailQueue.forget(previous.id)
-                        previewQueue.forget(previous.id)
-                        originals.forgetUser(previous)
-                        cache.clearUser(previous.id)
+            val transitioned =
+                withContext(Dispatchers.IO) {
+                    sessionGuard.activate(userId) { previousUserId ->
+                        previousUserId?.let { previous ->
+                            clientProvider.disconnect(previous)
+                            // As in disconnect: the queues drop their pending writes first, or a
+                            // debounced flush could land after the clear and recreate the previous
+                            // user's directory and data key.
+                            thumbnailQueue.forget(previous.id)
+                            previewQueue.forget(previous.id)
+                            originals.forgetUser(previous)
+                            cache.clearUser(previous.id)
+                        }
+                        timeline.reset()
+                        albums.reset()
+                        timeline.loadCached(userId)
+                        albums.loadCached(userId)
+                        cache.prepareUser(userId.id)
                     }
-                    timeline.reset()
-                    albums.reset()
-                    timeline.loadCached(userId)
-                    albums.loadCached(userId)
-                    cache.prepareUser(userId.id)
                 }
+            // An activation the guard skipped (the account is already active) changes nothing
+            // the housekeeping would act on; only a transition earns a fresh run.
+            if (transitioned) launchActivationHousekeeping(userId)
+        }
+
+        private suspend fun launchActivationHousekeeping(userId: UserId) {
+            housekeepingMutex.withLock {
+                housekeepingJob?.cancelAndJoin()
+                housekeepingJob = housekeepingScope.launch { runActivationHousekeeping(userId) }
             }
-            housekeepingScope.launch { runActivationHousekeeping(userId) }
         }
 
         private suspend fun runActivationHousekeeping(userId: UserId) {

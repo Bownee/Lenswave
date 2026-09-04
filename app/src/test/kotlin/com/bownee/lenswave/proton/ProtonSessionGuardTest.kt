@@ -123,6 +123,22 @@ class ProtonSessionGuardTest {
         }
 
     @Test
+    fun activationReportsWhetherATransitionRan() =
+        runBlocking {
+            val guard = ProtonSessionGuard()
+            val userA = UserId("a")
+            val userB = UserId("b")
+            var transitions = 0
+
+            assertTrue(guard.activate(userA) { transitions++ })
+            assertFalse(guard.activate(userA) { transitions++ })
+            assertEquals(1, transitions)
+            assertTrue(guard.activate(userB) { transitions++ })
+            assertEquals(2, transitions)
+            assertTrue(guard.isActive(userB))
+        }
+
+    @Test
     fun failedInactiveDisconnectPreservesTheActiveSession() =
         runBlocking {
             val guard = ProtonSessionGuard()
