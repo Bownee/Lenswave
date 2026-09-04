@@ -1,0 +1,546 @@
+package com.bownee.lenswave.gallery
+
+import androidx.lifecycle.SavedStateHandle
+import com.bownee.lenswave.LenswaveClock
+import com.bownee.lenswave.LenswaveDispatchers
+import com.bownee.lenswave.R
+import com.bownee.lenswave.proton.ProtonAccountSessionState
+import com.bownee.lenswave.proton.ProtonAlbum
+import com.bownee.lenswave.proton.ProtonAlbumPhotosState
+import com.bownee.lenswave.proton.ProtonAlbumReference
+import com.bownee.lenswave.proton.ProtonAlbumsState
+import com.bownee.lenswave.proton.ProtonGalleryPhoto
+import com.bownee.lenswave.proton.ProtonGalleryState
+import com.bownee.lenswave.proton.ProtonMediaTag
+import com.bownee.lenswave.proton.ProtonTagState
+import com.bownee.lenswave.proton.ProtonThumbnailScheduler
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.setMain
+import me.proton.core.account.domain.entity.Account
+import me.proton.core.account.domain.entity.AccountDetails
+import me.proton.core.account.domain.entity.AccountState
+import me.proton.core.accountmanager.domain.AccountManager
+import me.proton.core.domain.entity.Product
+import me.proton.core.domain.entity.UserId
+import me.proton.core.network.domain.session.Session
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
+
+/**
+ * Every dispatcher the view model uses (Main through [Dispatchers.setMain], IO and Default
+ * through [LenswaveDispatchers]) is the one test dispatcher, so state arrives exactly when the
+ * test advances the scheduler and nothing runs on a real thread.
+ */
+@OptIn(ExperimentalCoroutinesApi::class)
+class GalleryViewModelTest {
+    private val dispatcher = StandardTestDispatcher()
+    private val events = mutableListOf<String>()
+    private val reader = FakeReader(events)
+    private val scheduler = FakeScheduler(events)
+    private val accountManager = FakeAccountManager(events)
+    private val session = MutableStateFlow(ProtonAccountSessionState())
+    private val navigationStore = FakeNavigationStore()
+    private val savedState = SavedStateHandle()
+    private val text = CountingText()
+
+    @Before
+    fun installMainDispatcher() {
+        Dispatchers.setMain(dispatcher)
+    }
+
+    @After
+    fun removeMainDispatcher() {
+        Dispatchers.resetMain()
+    }
+
+    @Test
+    fun `the initial state is a skeleton of the restored destination and nothing is mapped until someone collects`() =
+        runTest(dispatcher) {
+            savedState["gallery.destination"] = "proton-tag"
+            savedState["gallery.proton-tag"] = ProtonMediaTag.VIDEOS.name
+            reader.state.value = loadedTimeline("p1", tags = mapOf(ProtonMediaTag.VIDEOS to loadedTag("p1")))
+
+            val viewModel = viewModel()
+            val initial = viewModel.uiState.value
+
+            assertEquals(GalleryDestination.Tag(ProtonMediaTag.VIDEOS), initial.destination)
+            assertEquals("${R.string.proton_tag_videos}()", initial.title)
+            assertTrue(initial.visibleAssets.isEmpty())
+            assertNull(initial.emptyState)
+            assertEquals("only the skeleton's title may be resolved on construction", 1, text.calls)
+
+            runCurrent()
+            reader.state.value =
+                loadedTimeline("p1", "p2", tags = mapOf(ProtonMediaTag.VIDEOS to loadedTag("p1", "p2")))
+            runCurrent()
+
+            assertSame("no collector, no mapping", initial, viewModel.uiState.value)
+            assertEquals(1, text.calls)
+
+            backgroundScope.launch { viewModel.uiState.collect {} }
+            runCurrent()
+
+            assertEquals(
+                listOf("p1", "p2"),
+                viewModel.uiState.value.visibleAssets
+                    .map(GalleryAsset::nodeUid),
+            )
+            assertTrue(text.calls > 1)
+        }
+
+    @Test
+    fun `the state stops recomputing once the last collector has been gone for a while`() =
+        runTest(dispatcher) {
+            val viewModel = connectedViewModel(collect = false)
+            val collector = backgroundScope.launch { viewModel.uiState.collect {} }
+            runCurrent()
+
+            collector.cancel()
+            advanceTimeBy(5_001L)
+            runCurrent()
+            val callsBefore = text.calls
+            reader.state.value = loadedTimeline("p1", "p2")
+            runCurrent()
+
+            assertEquals(callsBefore, text.calls)
+            assertEquals(
+                listOf("p1"),
+                viewModel.uiState.value.visibleAssets
+                    .map(GalleryAsset::nodeUid),
+            )
+        }
+
+    @Test
+    fun `selectDestination publishes the destination, stores it and refreshes quietly`() =
+        runTest(dispatcher) {
+            val viewModel = connectedViewModel()
+
+            viewModel.selectDestination(GalleryDestination.Library)
+            runCurrent()
+
+            assertEquals(GalleryDestination.Library, viewModel.uiState.value.destination)
+            assertFalse(viewModel.uiState.value.isRefreshing)
+            assertEquals(listOf("syncAlbums:u:false", "enqueue:u"), events)
+            assertEquals("library", savedState.get<String>("gallery.destination"))
+            assertEquals(GalleryDestination.Library, navigationStore.stored)
+
+            events.clear()
+            viewModel.selectDestination(GalleryDestination.Library)
+            runCurrent()
+
+            assertTrue("re-selecting the current destination is a no-op: $events", events.isEmpty())
+        }
+
+    @Test
+    fun `openAlbum publishes the album once its cached photos are in place`() =
+        runTest(dispatcher) {
+            val viewModel = connectedViewModel()
+            reader.cachedAlbumPhotos = listOf(photo("al-1", captureTime = 2L), photo("al-2", captureTime = 1L))
+            val states = mutableListOf<GalleryUiState>()
+            backgroundScope.launch { viewModel.uiState.collect { states += it } }
+            runCurrent()
+            states.clear()
+
+            viewModel.openAlbum(album("al"))
+            runCurrent()
+
+            val albumStates =
+                states.filter { state ->
+                    state.destination ==
+                        GalleryDestination.AlbumPhotos(album("al").reference())
+                }
+            assertEquals("one publish, with the cached photos already in it", 1, albumStates.size)
+            assertEquals(listOf("al-1", "al-2"), albumStates.single().visibleAssets.map(GalleryAsset::nodeUid))
+            assertEquals(
+                listOf("loadCachedAlbum:al", "enqueue:u", "syncAlbumPhotos:al:false", "enqueue:u"),
+                events,
+            )
+            assertEquals("al", savedState.get<String>("gallery.album-uid"))
+            // A cold start reopens the tab root, never the album.
+            assertEquals(GalleryDestination.Library, navigationStore.stored)
+        }
+
+    @Test
+    fun `a manual refresh stays refreshing until the latest manual refresh has finished`() =
+        runTest(dispatcher) {
+            val viewModel = connectedViewModel()
+            reader.holdTimelineSyncs = true
+
+            viewModel.requestRefresh()
+            runCurrent()
+
+            assertTrue(viewModel.uiState.value.isRefreshing)
+            assertEquals(listOf("syncTimeline:u:true"), events)
+
+            viewModel.requestRefresh()
+            runCurrent()
+            reader.heldTimelineSyncs[0].complete(Unit)
+            runCurrent()
+
+            assertTrue(
+                "the first refresh ending must not clear the second one's spinner",
+                viewModel.uiState.value.isRefreshing,
+            )
+
+            reader.heldTimelineSyncs[1].complete(Unit)
+            runCurrent()
+
+            assertFalse(viewModel.uiState.value.isRefreshing)
+            assertEquals(listOf("syncTimeline:u:true", "syncTimeline:u:true", "enqueue:u", "enqueue:u"), events)
+
+            events.clear()
+            viewModel.refreshAfterMutation()
+            runCurrent()
+
+            assertFalse("a quiet refresh never shows the spinner", viewModel.uiState.value.isRefreshing)
+            assertEquals(listOf("syncTimeline:u:false"), events)
+        }
+
+    @Test
+    fun `disconnectProton removes the account and returns a collection to its tab root`() =
+        runTest(dispatcher) {
+            val viewModel = connectedViewModel()
+            viewModel.openAlbum(album("al"))
+            runCurrent()
+            events.clear()
+
+            viewModel.disconnectProton()
+            runCurrent()
+
+            assertEquals(listOf("removeAccount:u"), events)
+            assertEquals(GalleryDestination.Library, viewModel.uiState.value.destination)
+            assertEquals("library", savedState.get<String>("gallery.destination"))
+        }
+
+    @Test
+    fun `a transitioning session publishes connecting without refreshing`() =
+        runTest(dispatcher) {
+            // Without a cached timeline, connected shows nothing yet while connecting shows the loading panel.
+            val viewModel = connectedViewModel(timeline = ProtonGalleryState())
+            assertNull(viewModel.uiState.value.emptyState)
+            assertTrue(viewModel.uiState.value.isProtonConnected)
+
+            session.value =
+                ProtonAccountSessionState(
+                    account = readyAccount(USER),
+                    activeUserId = null,
+                    initialized = true,
+                    transitioning = true,
+                )
+            runCurrent()
+
+            val panel =
+                viewModel.uiState.value.emptyState
+                    ?.title
+                    .orEmpty()
+            assertTrue(panel, panel.startsWith(R.string.loading_metadata.toString()))
+            assertFalse(viewModel.uiState.value.isProtonConnected)
+            assertTrue("a transition must not start a refresh: $events", events.isEmpty())
+        }
+
+    @Test
+    fun `a new account with cached metadata restarts the thumbnail scheduler and refreshes`() =
+        runTest(dispatcher) {
+            reader.state.value = loadedTimeline("p1")
+            reader.albumsState.value = ProtonAlbumsState(userId = USER.id, hasLoaded = true)
+            val viewModel = viewModel()
+            backgroundScope.launch { viewModel.uiState.collect {} }
+            runCurrent()
+
+            session.value = ProtonAccountSessionState(readyAccount(USER), USER, initialized = true)
+            runCurrent()
+
+            assertEquals(listOf("restart:u", "syncTimeline:u:false", "enqueue:u"), events)
+            assertTrue(viewModel.uiState.value.isProtonConnected)
+        }
+
+    @Test
+    fun `a new account without cached metadata fetches it before the scheduler restarts`() =
+        runTest(dispatcher) {
+            savedState["gallery.destination"] = "proton-tag"
+            savedState["gallery.proton-tag"] = ProtonMediaTag.VIDEOS.name
+            val viewModel = viewModel()
+            backgroundScope.launch { viewModel.uiState.collect {} }
+            runCurrent()
+
+            session.value = ProtonAccountSessionState(readyAccount(USER), USER, initialized = true)
+            runCurrent()
+
+            assertEquals(
+                listOf("syncTimeline:u:false", "syncAlbums:u:false", "syncTag:VIDEOS:false", "restart:u"),
+                events,
+            )
+        }
+
+    @Test
+    fun `runPeriodicSync checks at the policy interval and skips a transitioning session`() =
+        runTest(dispatcher) {
+            val viewModel = connectedViewModel()
+            val periodic = backgroundScope.launch { viewModel.runPeriodicSync() }
+            runCurrent()
+
+            assertEquals("the first check is immediate", listOf("syncTimeline:u:false", "enqueue:u"), events)
+
+            events.clear()
+            advanceTimeBy(GalleryPeriodicSyncPolicy.CHECK_INTERVAL_MILLIS - 1L)
+            runCurrent()
+            assertTrue(events.isEmpty())
+            advanceTimeBy(1L)
+            runCurrent()
+            assertEquals(listOf("syncTimeline:u:false", "enqueue:u"), events)
+
+            session.value =
+                ProtonAccountSessionState(readyAccount(USER), USER, initialized = true, transitioning = true)
+            runCurrent()
+            events.clear()
+            advanceTimeBy(GalleryPeriodicSyncPolicy.CHECK_INTERVAL_MILLIS)
+            runCurrent()
+
+            assertTrue("no check while the session transitions: $events", events.isEmpty())
+            periodic.cancel()
+        }
+
+    private fun viewModel() =
+        GalleryViewModel(
+            galleryText = text,
+            accountManager = accountManager,
+            protonRepository = reader,
+            protonThumbnailScheduler = scheduler,
+            accountSession = session,
+            navigationStore = navigationStore,
+            savedStateHandle = savedState,
+            clock = SchedulerClock(),
+            dispatchers = TestDispatchers(),
+        )
+
+    /**
+     * A view model with a ready account, cached albums and [timeline], collected unless [collect]
+     * is false; the events of its start-up are discarded.
+     */
+    private fun TestScope.connectedViewModel(
+        timeline: ProtonGalleryState = loadedTimeline("p1"),
+        collect: Boolean = true,
+    ): GalleryViewModel {
+        reader.state.value = timeline
+        reader.albumsState.value = ProtonAlbumsState(userId = USER.id, hasLoaded = true)
+        session.value = ProtonAccountSessionState(readyAccount(USER), USER, initialized = true)
+        val viewModel = viewModel()
+        if (collect) backgroundScope.launch { viewModel.uiState.collect {} }
+        runCurrent()
+        events.clear()
+        return viewModel
+    }
+
+    /** Photos listed newest first, as the repositories publish them. */
+    private fun loadedTimeline(
+        vararg nodeUids: String,
+        tags: Map<ProtonMediaTag, ProtonTagState> = emptyMap(),
+    ) = ProtonGalleryState(userId = USER.id, photos = photos(nodeUids), hasLoaded = true, tags = tags)
+
+    private fun loadedTag(vararg nodeUids: String) = ProtonTagState(photos = photos(nodeUids), hasLoaded = true)
+
+    private fun photos(nodeUids: Array<out String>) =
+        nodeUids.mapIndexed { index, nodeUid -> photo(nodeUid, captureTime = (nodeUids.size - index).toLong()) }
+
+    private fun photo(
+        nodeUid: String,
+        captureTime: Long,
+    ) = ProtonGalleryPhoto(nodeUid = nodeUid, captureTimeEpochSeconds = captureTime, hasThumbnail = true)
+
+    private fun album(nodeUid: String) =
+        ProtonAlbum(
+            nodeUid = nodeUid,
+            name = "Album $nodeUid",
+            photoCount = 2L,
+            coverPhotoNodeUid = null,
+            createdAtEpochSeconds = 0L,
+            lastActivityEpochSeconds = 0L,
+            hasCoverThumbnail = false,
+            isShared = false,
+        )
+
+    private fun readyAccount(userId: UserId) =
+        Account(userId, "user", null, AccountState.Ready, null, null, AccountDetails(null, null))
+
+    private inner class SchedulerClock : LenswaveClock {
+        override fun nowMillis(): Long = dispatcher.scheduler.currentTime
+    }
+
+    private inner class TestDispatchers : LenswaveDispatchers {
+        override val io = dispatcher
+        override val default = dispatcher
+    }
+
+    private class CountingText : GalleryText {
+        var calls = 0
+
+        override fun string(
+            id: Int,
+            vararg arguments: Any,
+        ): String {
+            calls++
+            return "$id(${arguments.joinToString()})"
+        }
+
+        override fun quantity(
+            id: Int,
+            quantity: Int,
+            vararg arguments: Any,
+        ): String {
+            calls++
+            return quantity.toString()
+        }
+    }
+
+    private class FakeReader(
+        private val events: MutableList<String>,
+    ) : ProtonGalleryReader {
+        override val state = MutableStateFlow(ProtonGalleryState())
+        override val albumsState = MutableStateFlow(ProtonAlbumsState())
+        override val albumPhotosState = MutableStateFlow(ProtonAlbumPhotosState())
+        var cachedAlbumPhotos: List<ProtonGalleryPhoto> = emptyList()
+        var holdTimelineSyncs = false
+        val heldTimelineSyncs = mutableListOf<CompletableDeferred<Unit>>()
+
+        override suspend fun syncTimelineMetadata(
+            userId: UserId,
+            forceRemote: Boolean,
+        ) {
+            events += "syncTimeline:${userId.id}:$forceRemote"
+            if (holdTimelineSyncs) CompletableDeferred<Unit>().also(heldTimelineSyncs::add).await()
+        }
+
+        override suspend fun syncTagMetadata(
+            userId: UserId,
+            tag: ProtonMediaTag,
+            forceRemote: Boolean,
+        ) {
+            events += "syncTag:${tag.name}:$forceRemote"
+        }
+
+        override suspend fun syncAlbumsMetadata(
+            userId: UserId,
+            forceRemote: Boolean,
+        ) {
+            events += "syncAlbums:${userId.id}:$forceRemote"
+        }
+
+        override suspend fun loadCachedAlbum(
+            userId: UserId,
+            album: ProtonAlbumReference,
+        ) {
+            events += "loadCachedAlbum:${album.nodeUid}"
+            albumPhotosState.value =
+                ProtonAlbumPhotosState(
+                    userId = userId.id,
+                    albumUid = album.nodeUid,
+                    albumName = album.name,
+                    photos = cachedAlbumPhotos,
+                    hasLoaded = true,
+                )
+        }
+
+        override suspend fun syncAlbumPhotoMetadata(
+            userId: UserId,
+            album: ProtonAlbumReference,
+            forceRemote: Boolean,
+        ) {
+            events += "syncAlbumPhotos:${album.nodeUid}:$forceRemote"
+        }
+    }
+
+    private class FakeScheduler(
+        private val events: MutableList<String>,
+    ) : ProtonThumbnailScheduler {
+        override fun enqueue(userId: UserId) {
+            events += "enqueue:${userId.id}"
+        }
+
+        override fun enqueueWhileCharging(userId: UserId) {
+            events += "enqueue-charging:${userId.id}"
+        }
+
+        override suspend fun resume(userId: UserId) {
+            events += "resume:${userId.id}"
+        }
+
+        override suspend fun restart(userId: UserId) {
+            events += "restart:${userId.id}"
+        }
+
+        override suspend fun cancelAndAwait(userId: UserId) {
+            events += "cancel:${userId.id}"
+        }
+    }
+
+    private class FakeNavigationStore : GalleryNavigationStore {
+        var stored: GalleryDestination? = null
+
+        override fun read(): GalleryDestination? = stored
+
+        override fun write(destination: GalleryDestination) {
+            stored = destination
+        }
+    }
+
+    /** Only [removeAccount] is expected; the view model observes the session through its own flow. */
+    private class FakeAccountManager(
+        private val events: MutableList<String>,
+    ) : AccountManager(Product.Drive) {
+        override suspend fun addAccount(
+            account: Account,
+            session: Session,
+        ) = error("unexpected")
+
+        override suspend fun removeAccount(
+            userId: UserId,
+            waitForCompletion: Boolean,
+        ) {
+            events += "removeAccount:${userId.id}"
+        }
+
+        override suspend fun disableAccount(
+            userId: UserId,
+            waitForCompletion: Boolean,
+            keepSession: Boolean,
+        ) = error("unexpected")
+
+        override fun getAccount(userId: UserId): Flow<Account?> = flowOf(null)
+
+        override fun getAccounts(): Flow<List<Account>> = flowOf(emptyList())
+
+        override fun getSessions(): Flow<List<Session>> = flowOf(emptyList())
+
+        override fun onAccountStateChanged(initialState: Boolean): Flow<Account> = flowOf()
+
+        override fun onSessionStateChanged(initialState: Boolean): Flow<Account> = flowOf()
+
+        override fun getPrimaryUserId(): Flow<UserId?> = flowOf(null)
+
+        override suspend fun getPreviousPrimaryUserId(): UserId? = null
+
+        override suspend fun setAsPrimary(userId: UserId) = error("unexpected")
+    }
+
+    private companion object {
+        val USER = UserId("u")
+    }
+}
