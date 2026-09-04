@@ -75,6 +75,14 @@ jobs:
           chmod +x gradlew scripts/*.sh
           ./gradlew assembleRelease verifySbomLicenses --no-configuration-cache --stacktrace
 
+      # Pull-request CI skips the R8-optimised instrumentation build, so a release re-checks that
+      # R8 kept every symbol the minified runtime and Proton's native bridge rely on.
+      - name: Verify minified instrumentation contract
+        shell: bash
+        run: |
+          ./gradlew assembleMinified -Plenswave.instrumentationBuildType=minified --stacktrace
+          scripts/verify-minified-contract.sh app/build/outputs/mapping/minified
+
       - name: Prepare unsigned artifacts
         shell: bash
         run: |
