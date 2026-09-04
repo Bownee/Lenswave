@@ -314,12 +314,25 @@ class PhotoViewerActivity : FragmentActivity() {
                 // Photos load the original quietly behind the preview; the spinner only appears
                 // when there is nothing at all to show. Videos keep their download progress.
                 if (requestedPhoto.mediaKind == MediaKind.VIDEO || !thumbnailPreview.isVisible) scheduleLoadingPanel()
-                if (requestedPhoto.mediaKind != MediaKind.VIDEO) launch { showCachedProtonPreview(requestedPhoto) }
                 try {
+                    val userId = UserId(requestedPhoto.userId)
+                    val nodeUid = requestedPhoto.nodeUid
+                    // A cached original goes straight up; the preview is only worth showing while
+                    // a download is in flight, otherwise it would flash before the full picture.
+                    val cachedOriginal =
+                        if (requestedPhoto.mediaKind == MediaKind.VIDEO) {
+                            null
+                        } else {
+                            withContext(Dispatchers.IO) { originalMedia.prepareCachedOriginal(userId, nodeUid) }
+                        }
+                    if (request.stableId != requestedPhoto.stableId) return@launch
+                    if (cachedOriginal != null) {
+                        showMedia(Uri.fromFile(cachedOriginal))
+                        return@launch
+                    }
+                    if (requestedPhoto.mediaKind != MediaKind.VIDEO) launch { showCachedProtonPreview(requestedPhoto) }
                     val file =
                         withContext(Dispatchers.IO) {
-                            val userId = UserId(requestedPhoto.userId)
-                            val nodeUid = requestedPhoto.nodeUid
                             if (requestedPhoto.mediaKind == MediaKind.VIDEO) {
                                 originalMedia.downloadOriginalProgressively(userId, nodeUid) { stream ->
                                     withContext(Dispatchers.Main.immediate) {
