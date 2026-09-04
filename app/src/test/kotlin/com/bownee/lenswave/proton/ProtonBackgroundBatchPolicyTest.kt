@@ -81,6 +81,19 @@ class ProtonBackgroundBatchPolicyTest {
         nodeUids.map { nodeUid -> ProtonThumbnailQueueEntry(nodeUid, mapOf("timeline" to 1L)) }
 
     @Test
+    fun `pending work that is due now but unclaimable means stale claims`() {
+        assertTrue(ProtonBackgroundBatchPolicy.hasStaleClaims(idle(hasPending = true, retryAfterMillis = 0L)))
+        assertFalse(ProtonBackgroundBatchPolicy.hasStaleClaims(idle(hasPending = true, retryAfterMillis = 30_000L)))
+        assertFalse(ProtonBackgroundBatchPolicy.hasStaleClaims(idle(hasPending = true, retryAfterMillis = null)))
+        assertFalse(ProtonBackgroundBatchPolicy.hasStaleClaims(idle(hasPending = false, retryAfterMillis = 0L)))
+    }
+
+    private fun idle(
+        hasPending: Boolean,
+        retryAfterMillis: Long?,
+    ) = ProtonThumbnailQueueStep.Idle(hasPending = hasPending, retryAfterMillis = retryAfterMillis)
+
+    @Test
     fun `idle runs wait for soon-due retries and end otherwise`() {
         val idle =
             ProtonBackgroundBatchPolicy.idle(

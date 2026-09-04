@@ -265,6 +265,11 @@ internal class ProtonThumbnailQueue(
         }
     }
 
+    /** Gives back every claim of the user; for claims a batch that never settled left behind. */
+    suspend fun releaseAll(userId: String) {
+        mutex.withLock { claimedNodeUids.remove(userId) }
+    }
+
     suspend fun hasPending(userId: String): Boolean =
         mutex.withLock {
             entries(userId).isNotEmpty()

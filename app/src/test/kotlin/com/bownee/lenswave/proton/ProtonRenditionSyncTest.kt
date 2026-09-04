@@ -92,6 +92,25 @@ class ProtonRenditionSyncTest {
         }
 
     @Test
+    fun `claims a batch left behind are cleared instead of idling forever`() =
+        runBlocking {
+            thumbnails.replaceSource(USER.id, ProtonSyncKeys.QueueSource.TIMELINE, candidates("a"))
+            previews.replaceSource(USER.id, ProtonSyncKeys.QueueSource.TIMELINE_PREVIEWS, candidates("p"))
+            // Claimed by a batch that was never settled nor released.
+            thumbnails.claimReady(USER.id, limit = 1)
+            previews.claimReady(USER.id, limit = 1)
+            source.thumbnailResult = ThumbnailBatchResult(setOf("a"), emptyMap())
+
+            val idle = sync.downloadNextBatch(USER, allowPreviews = true) {}
+
+            assertEquals(ProtonThumbnailQueueStep.Idle(hasPending = true, retryAfterMillis = 0L), idle)
+            assertEquals(ProtonThumbnailQueueStep.Processed, sync.downloadNextBatch(USER, allowPreviews = true) {})
+            assertEquals(0, thumbnails.pendingCount(USER.id))
+            assertEquals(ProtonThumbnailQueueStep.Processed, sync.downloadNextBatch(USER, allowPreviews = true) {})
+            assertEquals(1, source.previewCalls)
+        }
+
+    @Test
     fun `thumbnails come before previews and settle by their sources`() =
         runBlocking {
             thumbnails.replaceSource(USER.id, ProtonSyncKeys.QueueSource.TIMELINE, candidates("x"))

@@ -139,6 +139,13 @@ internal class ProtonRenditionSync
                     previewRetryDelayMillis = previewQueue.retryDelayMillis(userId.id),
                     allowPreviews = allowPreviews,
                 )
+            if (ProtonBackgroundBatchPolicy.hasStaleClaims(idle)) {
+                // This is the only claimer, so a ready entry nobody could claim is a claim some
+                // earlier batch never gave back. Clearing them lets the next step process it
+                // instead of the worker polling every second until the run deadline.
+                thumbnailQueue.releaseAll(userId.id)
+                previewQueue.releaseAll(userId.id)
+            }
             flushQueues(userId)
             return idle
         }
@@ -168,7 +175,9 @@ internal class ProtonRenditionSync
                     }
                 }
             } catch (error: CancellationException) {
-                thumbnailQueue.release(userId.id, nodeUids)
+                // The release takes the queue mutex; from a cancelled coroutine that suspension
+                // would throw instead and leave the claims behind for the rest of the process.
+                withContext(NonCancellable) { thumbnailQueue.release(userId.id, nodeUids) }
                 throw error
             } catch (_: Throwable) {
                 thumbnailQueue.settle(userId.id, emptySet(), nodeUids.toSet())
@@ -201,7 +210,7 @@ internal class ProtonRenditionSync
                 // which would otherwise keep the run spinning on a queue it can never drain.
                 progressMutex.withLock { settlePreviews(userId, result, marks) }
             } catch (error: CancellationException) {
-                previewQueue.release(userId.id, nodeUids)
+                withContext(NonCancellable) { previewQueue.release(userId.id, nodeUids) }
                 throw error
             } catch (_: Throwable) {
                 previewQueue.settle(userId.id, emptySet(), nodeUids.toSet())
