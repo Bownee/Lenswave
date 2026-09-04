@@ -27,13 +27,19 @@ internal class ProtonSessionGuard
         private var transitionInProgress = false
         private var transitionFinished = completedSignal()
 
+        /**
+         * Runs [transition] unless [userId] is already the active account. Returns whether it ran,
+         * so a caller can tie follow-up work to a real transition rather than to every call.
+         */
         suspend fun activate(
             userId: UserId,
             transition: suspend (previousUserId: UserId?) -> Unit,
-        ) = transitionMutex.withLock {
-            if (activeUserId.get() == userId.id) return@withLock
-            runTransition(userId) { previous -> transition(previous) }
-        }
+        ): Boolean =
+            transitionMutex.withLock {
+                if (activeUserId.get() == userId.id) return@withLock false
+                runTransition(userId) { previous -> transition(previous) }
+                true
+            }
 
         suspend fun <T> withActiveSession(
             userId: UserId,

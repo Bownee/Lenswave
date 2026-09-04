@@ -27,32 +27,63 @@ internal class ProtonTimelineRepository
 
         val state: StateFlow<ProtonGalleryState> = mutableState.asStateFlow()
 
+        /**
+         * Publishes the cached timeline and tag listings. A library up to
+         * [TAGS_WITH_FIRST_PUBLISH_LIMIT] photos hydrates its tags first and publishes once, so
+         * re-activating never blanks the Videos and Favorites tabs; the tag files are a fraction
+         * of the timeline there. A larger library publishes the grid as soon as the timeline is
+         * parsed and fills the tabs right after, keeping whatever this user had published in the
+         * meantime rather than an empty map.
+         */
         fun loadCached(userId: UserId) {
-            val tagStates =
-                ProtonMediaTag.entries
-                    .mapNotNull { tag ->
-                        if (!cache.hasTagSnapshot(userId.id, tag)) return@mapNotNull null
-                        tag to
-                            ProtonTagState(
-                                photos = cache.readTag(userId.id, tag),
-                                hasLoaded = true,
-                            )
-                    }.toMap()
+            val availability = cache.storedRenditions(userId.id)
+            val timeline = cache.readTimelineSnapshot(userId.id, availability)
+            val photos = timeline.orEmpty()
+            val tagsFirst = photos.size <= TAGS_WITH_FIRST_PUBLISH_LIMIT
             emit(
                 userId = userId,
-                photos = cache.readIndex(userId.id),
-                hasLoaded = cache.hasTimelineSnapshot(userId.id),
+                photos = photos,
+                hasLoaded = timeline != null,
                 syncing = false,
-                tags = tagStates,
+                tags = if (tagsFirst) readTagStates(userId, availability) else previousTags(userId),
             )
+            if (tagsFirst) return
+            val tagStates = readTagStates(userId, availability)
+            mutableState.update { state -> if (state.userId == userId.id) state.copy(tags = tagStates) else state }
         }
+
+        private fun readTagStates(
+            userId: UserId,
+            availability: ProtonStoredRenditions,
+        ): Map<ProtonMediaTag, ProtonTagState> =
+            ProtonMediaTag.entries
+                .mapNotNull { tag ->
+                    cache.readTagSnapshot(userId.id, tag, availability)?.let { photos ->
+                        tag to ProtonTagState(photos = photos, hasLoaded = true)
+                    }
+                }.toMap()
+
+        private fun previousTags(userId: UserId): Map<ProtonMediaTag, ProtonTagState> =
+            mutableState.value
+                .takeIf { state -> state.userId == userId.id }
+                ?.tags
+                .orEmpty()
 
         suspend fun syncMetadata(
             userId: UserId,
             forceRemote: Boolean,
         ) = syncMutex.withLock {
-            val existing = cache.readIndex(userId.id)
-            val hasCachedSnapshot = cache.hasTimelineSnapshot(userId.id)
+            // The published timeline is the cached one plus every mark since, so a loaded state
+            // answers "what is cached" without decrypting and parsing the index again, which the
+            // sync policy then often decides was fresh anyway.
+            val current = mutableState.value
+            val (existing, hasCachedSnapshot) =
+                if (current.userId == userId.id && current.hasLoaded) {
+                    current.photos to true
+                } else {
+                    val cached = cache.readTimelineSnapshot(userId.id)
+                    cached.orEmpty() to (cached != null)
+                }
             snapshotSync.sync(
                 userId = userId.id,
                 source = ProtonSyncSource.TIMELINE,
@@ -63,14 +94,9 @@ internal class ProtonTimelineRepository
                 publishFresh = { emit(userId, existing, hasLoaded = true, syncing = false) },
                 publishSyncing = { emit(userId, existing, hasLoaded = hasCachedSnapshot, syncing = true) },
                 enumerate = {
-                    clientProvider.get(userId).enumerateTimeline().toList().map { item ->
-                        ProtonGalleryPhoto(
-                            nodeUid = item.nodeUid.value,
-                            captureTimeEpochSeconds = item.captureTime.epochSecond,
-                            hasThumbnail = cache.thumbnailExists(userId.id, item.nodeUid.value),
-                            hasPreview = cache.previewExists(userId.id, item.nodeUid.value),
-                        )
-                    }
+                    val items = clientProvider.get(userId).enumerateTimeline().toList()
+                    val availability = cache.storedRenditions(userId.id)
+                    items.map { item -> availability.photo(item.nodeUid.value, item.captureTime.epochSecond) }
                 },
                 commit = { photos ->
                     cache.reconcilePhotos(
@@ -104,8 +130,18 @@ internal class ProtonTimelineRepository
             tag: ProtonMediaTag,
             forceRemote: Boolean,
         ) = tagMutexes.getValue(tag).withLock {
-            val existing = cache.readTag(userId.id, tag)
-            val hasCachedSnapshot = cache.hasTagSnapshot(userId.id, tag)
+            val current =
+                mutableState.value
+                    .takeIf { state -> state.userId == userId.id }
+                    ?.tags
+                    ?.get(tag)
+            val (existing, hasCachedSnapshot) =
+                if (current?.hasLoaded == true) {
+                    current.photos to true
+                } else {
+                    val cached = cache.readTagSnapshot(userId.id, tag)
+                    cached.orEmpty() to (cached != null)
+                }
             snapshotSync.sync(
                 userId = userId.id,
                 source = ProtonSyncSource.TIMELINE,
@@ -150,14 +186,14 @@ internal class ProtonTimelineRepository
             if (volumeId == null && mutableState.value.hasLoaded && mutableState.value.photos.isEmpty()) {
                 return emptyList()
             }
-            return tagListings
-                .list(
+            val listed =
+                tagListings.list(
                     userId,
                     requireNotNull(volumeId) { "Cannot determine the Proton Photos volume" },
                     tag,
-                ).map { photo ->
-                    photo.copy(hasThumbnail = cache.thumbnailExists(userId.id, photo.nodeUid))
-                }
+                )
+            val availability = cache.storedRenditions(userId.id)
+            return listed.map { photo -> photo.copy(hasThumbnail = availability.hasThumbnail(photo.nodeUid)) }
         }
 
         internal fun markThumbnailsAvailable(
@@ -182,28 +218,32 @@ internal class ProtonTimelineRepository
             if (nodeUids.isEmpty()) return
             mutableState.update { state ->
                 if (state.userId != userId.id) return@update state
-                val photos =
-                    state.photos.withThumbnailAvailability(
-                        nodeUids,
-                        available,
-                        nodeUid = ProtonGalleryPhoto::nodeUid,
-                        hasThumbnail = ProtonGalleryPhoto::hasThumbnail,
-                        copy = { photo, hasThumbnail -> photo.copy(hasThumbnail = hasThumbnail) },
-                    ) ?: return@update state
-                state.copy(
-                    photos = photos,
-                    tags =
-                        state.tags.mapValues { (_, tagState) ->
-                            tagState.copy(
-                                photos =
-                                    tagState.photos.map { photo ->
-                                        if (photo.nodeUid in nodeUids) photo.copy(hasThumbnail = available) else photo
-                                    },
-                            )
-                        },
-                )
+                val photos = state.photos.withThumbnailAvailability(nodeUids, available)
+                // Tag listings that did not change keep their instance, so the tabs' memos hold.
+                var tagsChanged = false
+                val tags =
+                    state.tags.mapValues { (_, tagState) ->
+                        tagState.photos.withThumbnailAvailability(nodeUids, available)?.let { updated ->
+                            tagsChanged = true
+                            tagState.copy(photos = updated)
+                        } ?: tagState
+                    }
+                if (photos == null && !tagsChanged) return@update state
+                state.copy(photos = photos ?: state.photos, tags = if (tagsChanged) tags else state.tags)
             }
         }
+
+        private fun List<ProtonGalleryPhoto>.withThumbnailAvailability(
+            nodeUids: Set<String>,
+            available: Boolean,
+        ): List<ProtonGalleryPhoto>? =
+            withThumbnailAvailability(
+                nodeUids,
+                available,
+                nodeUid = ProtonGalleryPhoto::nodeUid,
+                hasThumbnail = ProtonGalleryPhoto::hasThumbnail,
+                copy = { photo, hasThumbnail -> photo.copy(hasThumbnail = hasThumbnail) },
+            )
 
         /** Previews only matter to the timeline queue, so tag listings are left untouched. */
         internal fun markPreviewsAvailable(
@@ -290,21 +330,29 @@ internal class ProtonTimelineRepository
             mutableState.value = ProtonGalleryState()
         }
 
+        /**
+         * Publishes [photos] as the timeline. The published list keeps its previous instance
+         * whenever the content is unchanged: the gallery memoizes its assets and its uid index by
+         * list identity, so a syncing heartbeat that re-published an equal copy made the Activity
+         * compare the whole library on the main thread. Callers hand over lists they built
+         * themselves, so no defensive copy is taken. [tags] null keeps the published tag map.
+         */
         private fun emit(
             userId: UserId,
             photos: List<ProtonGalleryPhoto>,
             hasLoaded: Boolean,
             syncing: Boolean,
-            tags: Map<ProtonMediaTag, ProtonTagState> = mutableState.value.tags,
+            tags: Map<ProtonMediaTag, ProtonTagState>? = null,
         ) {
-            mutableState.value =
+            mutableState.update { previous ->
                 ProtonGalleryState(
                     userId = userId.id,
-                    photos = photos.toList(),
+                    photos = if (previous.photos == photos) previous.photos else photos,
                     hasLoaded = hasLoaded,
                     syncing = syncing,
-                    tags = tags,
+                    tags = tags ?: previous.tags,
                 )
+            }
         }
 
         private fun updateTag(
@@ -320,4 +368,9 @@ internal class ProtonTimelineRepository
                 ?.nodeUid
                 ?.substringBefore('~')
                 ?.takeIf(String::isNotBlank)
+
+        private companion object {
+            /** Below this the tag files parse in a few milliseconds, so the first publish can wait for them. */
+            const val TAGS_WITH_FIRST_PUBLISH_LIMIT = 5_000
+        }
     }

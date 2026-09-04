@@ -43,6 +43,30 @@ class GalleryFastScrollLayoutPolicyTest {
     }
 
     @Test
+    fun `hide delay counts down from the last scroll and never overshoots`() {
+        assertEquals(
+            1_400L,
+            GalleryFastScrollLayoutPolicy.remainingHideDelay(lastScrollAt = 10_000, now = 10_000, hideDelay = 1_400),
+        )
+        assertEquals(
+            400L,
+            GalleryFastScrollLayoutPolicy.remainingHideDelay(lastScrollAt = 10_000, now = 11_000, hideDelay = 1_400),
+        )
+        assertEquals(
+            0L,
+            GalleryFastScrollLayoutPolicy.remainingHideDelay(lastScrollAt = 10_000, now = 11_400, hideDelay = 1_400),
+        )
+        assertEquals(
+            0L,
+            GalleryFastScrollLayoutPolicy.remainingHideDelay(lastScrollAt = 10_000, now = 20_000, hideDelay = 1_400),
+        )
+        assertEquals(
+            1_400L,
+            GalleryFastScrollLayoutPolicy.remainingHideDelay(lastScrollAt = 12_000, now = 10_000, hideDelay = 1_400),
+        )
+    }
+
+    @Test
     fun `footer clears the selection bar only while it is shown`() {
         assertEquals(
             102,

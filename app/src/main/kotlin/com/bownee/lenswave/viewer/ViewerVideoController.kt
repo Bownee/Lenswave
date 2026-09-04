@@ -22,10 +22,10 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 /**
- * Owns the ExoPlayer behind the viewer's [PhotoViewerScreen.playerView]: creating it for a
- * cached or still-downloading original, reporting download progress until the first frame is
- * ready, fading the picture in over the thumbnail, and releasing the player when the viewer moves
- * on. The Activity remains the owner of the current request and the `photoReady` flag; this
+ * Owns the ExoPlayer behind the viewer's [PhotoViewerScreen.playerView]: one player for the life of
+ * the viewer, pointed at each cached or still-downloading original in turn, reporting download
+ * progress until the first frame is ready, fading the picture in over the thumbnail, and stopping
+ * playback when the viewer moves on. The Activity owns the current request and `photoReady`; this
  * controller reads them and asks for changes through [Host].
  */
 @androidx.annotation.OptIn(markerClass = [UnstableApi::class])
@@ -71,6 +71,63 @@ internal class ViewerVideoController(
     private var progressJob: Job? = null
     private var pendingPreviewClear: Runnable? = null
 
+    /** The media the player was last asked to show; null once [stop] has cleared it. */
+    private var activeStableId: String? = null
+
+    /**
+     * Counts every [show]; the current value tags the media item so an event the player queued for
+     * an earlier item is recognised after a `stop(); show(other)` pair, where the stable-id guards
+     * alone would pass.
+     */
+    private var showGeneration = 0L
+
+    private val playerListener =
+        object : Player.Listener {
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                val requestedStableId = activeStableId ?: return
+                if (playbackState != Player.STATE_READY || host.currentStableId != requestedStableId) return
+                // An event delivered late for a previous item: the player has since been given a
+                // new one, whose tag differs and which is buffering again.
+                val activePlayer = player ?: return
+                if (!isCurrentShow(activePlayer) || activePlayer.playbackState != Player.STATE_READY) return
+                if (host.mediaReady) return
+                progressJob?.cancel()
+                progressJob = null
+                host.onVideoReady(requestedStableId)
+                playerView.animate().cancel()
+                playerView.alpha = 0f
+                playerView
+                    .animate()
+                    .alpha(1f)
+                    .setDuration(FULL_QUALITY_CROSSFADE_MILLIS)
+                    .start()
+                if (thumbnailPreview.isVisible) {
+                    thumbnailPreview.animate().cancel()
+                    cancelPendingPreviewClear()
+                    val clear =
+                        Runnable {
+                            pendingPreviewClear = null
+                            if (host.currentStableId == requestedStableId) host.clearThumbnailPreview()
+                        }
+                    pendingPreviewClear = clear
+                    thumbnailPreview.postDelayed(clear, FULL_QUALITY_CROSSFADE_MILLIS)
+                }
+            }
+
+            override fun onPlayerError(error: PlaybackException) {
+                LenswaveDiagnostics.reportFailure(LenswaveOperation.VIDEO_PLAYBACK, error)
+                val requestedStableId = activeStableId ?: return
+                if (host.currentStableId != requestedStableId) return
+                // A stale error: prepare() for a newer item has already cleared it from the player.
+                val activePlayer = player ?: return
+                if (!isCurrentShow(activePlayer) || activePlayer.playerError !== error) return
+                host.handleLoadFailure(error, context.getString(R.string.could_not_play_video))
+            }
+        }
+
+    private fun isCurrentShow(activePlayer: ExoPlayer): Boolean =
+        activePlayer.currentMediaItem?.localConfiguration?.tag == showGeneration
+
     /** Plays an original that is already fully on disk. */
     fun show(uri: Uri) = show(uri, dataSourceFactory = null)
 
@@ -95,10 +152,26 @@ internal class ViewerVideoController(
         player?.pause()
     }
 
-    fun release() {
+    /**
+     * Stops playback and drops the current media so the viewer can move on to a photo or another
+     * video. The player itself survives: building an ExoPlayer for every item, including the
+     * photos between videos, cost far more than resetting one.
+     */
+    fun stop() {
         progressJob?.cancel()
         progressJob = null
+        activeStableId = null
+        player?.let { active ->
+            active.stop()
+            active.clearMediaItems()
+        }
+    }
+
+    /** Releases the player for good; call from the Activity's onDestroy. */
+    fun release() {
+        stop()
         playerView.player = null
+        player?.removeListener(playerListener)
         player?.release()
         player = null
     }
@@ -118,59 +191,35 @@ internal class ViewerVideoController(
         if (host.detailsShown && dataSourceFactory == null) host.ensureDetailsMetadataLoaded()
         photoView.clear()
         photoView.visibility = View.GONE
-        release()
+        stop()
         playerView.visibility = View.VISIBLE
         playerView.alpha = 0f
-        val createdPlayer = ExoPlayer.Builder(context).build()
-        player = createdPlayer
-        playerView.player = createdPlayer
-        createdPlayer.addListener(
-            object : Player.Listener {
-                override fun onPlaybackStateChanged(playbackState: Int) {
-                    if (playbackState != Player.STATE_READY || host.currentStableId != requestedStableId) return
-                    if (host.mediaReady) return
-                    progressJob?.cancel()
-                    progressJob = null
-                    host.onVideoReady(requestedStableId)
-                    playerView.animate().cancel()
-                    playerView.alpha = 0f
-                    playerView
-                        .animate()
-                        .alpha(1f)
-                        .setDuration(FULL_QUALITY_CROSSFADE_MILLIS)
-                        .start()
-                    if (thumbnailPreview.isVisible) {
-                        thumbnailPreview.animate().cancel()
-                        cancelPendingPreviewClear()
-                        val clear =
-                            Runnable {
-                                pendingPreviewClear = null
-                                if (host.currentStableId == requestedStableId) host.clearThumbnailPreview()
-                            }
-                        pendingPreviewClear = clear
-                        thumbnailPreview.postDelayed(clear, FULL_QUALITY_CROSSFADE_MILLIS)
-                    }
-                }
-
-                override fun onPlayerError(error: PlaybackException) {
-                    LenswaveDiagnostics.reportFailure(LenswaveOperation.VIDEO_PLAYBACK, error)
-                    if (host.currentStableId == requestedStableId) {
-                        host.handleLoadFailure(error, context.getString(R.string.could_not_play_video))
-                    }
-                }
-            },
-        )
-        val mediaItem = MediaItem.fromUri(uri)
+        val activePlayer = ensurePlayer()
+        activeStableId = requestedStableId
+        showGeneration++
+        val mediaItem =
+            MediaItem
+                .Builder()
+                .setUri(uri)
+                .setTag(showGeneration)
+                .build()
         if (dataSourceFactory == null) {
-            createdPlayer.setMediaItem(mediaItem)
+            activePlayer.setMediaItem(mediaItem)
         } else {
-            createdPlayer.setMediaSource(
+            activePlayer.setMediaSource(
                 ProgressiveMediaSource.Factory(dataSourceFactory).createMediaSource(mediaItem),
             )
         }
-        createdPlayer.prepare()
-        createdPlayer.playWhenReady = true
+        activePlayer.prepare()
+        activePlayer.playWhenReady = true
     }
+
+    private fun ensurePlayer(): ExoPlayer =
+        player ?: ExoPlayer.Builder(context).build().also { created ->
+            created.addListener(playerListener)
+            player = created
+            playerView.player = created
+        }
 
     private fun updateDownloadProgress(downloadProgress: ProtonOriginalDownloadProgress) {
         progress.visibility = View.VISIBLE

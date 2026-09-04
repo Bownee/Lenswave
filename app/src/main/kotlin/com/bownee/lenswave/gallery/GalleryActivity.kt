@@ -1,9 +1,14 @@
 package com.bownee.lenswave.gallery
 
 import android.app.Activity
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.os.Bundle
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.core.graphics.Insets
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
@@ -24,8 +29,10 @@ import com.bownee.lenswave.gallery.GalleryDeletionCoordinator
 import com.bownee.lenswave.gallery.GalleryDestination
 import com.bownee.lenswave.gallery.GalleryEmptyAction
 import com.bownee.lenswave.gallery.GalleryFastScrollLayoutPolicy
+import com.bownee.lenswave.gallery.GalleryGrouping
 import com.bownee.lenswave.gallery.GalleryNavigationPolicy
 import com.bownee.lenswave.gallery.GalleryNotificationPermissionPrompter
+import com.bownee.lenswave.gallery.GalleryRowSet
 import com.bownee.lenswave.gallery.GalleryScrollPosition
 import com.bownee.lenswave.gallery.GalleryScrollPositionStore
 import com.bownee.lenswave.gallery.GallerySettingsPresenter
@@ -42,8 +49,13 @@ import com.bownee.lenswave.update.AppUpdateChecker
 import com.bownee.lenswave.update.UpdateAvailableDialogFragment
 import com.bownee.lenswave.viewer.PhotoViewerActivity
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import me.proton.core.accountmanager.domain.AccountManager
 import me.proton.core.auth.presentation.AuthOrchestrator
 import me.proton.core.domain.entity.UserId
@@ -86,6 +98,22 @@ class GalleryActivity :
     private var currentUiState = GalleryUiState()
     private var renderedDestination: GalleryDestination? = null
     private var renderedContent: GalleryContent? = null
+
+    // The panel starts hidden, which is what a null empty state renders, so the first render can skip it.
+    private var renderedEmptyState: GalleryEmptyState? = null
+
+    // Day headers depend on the device zone; a zone or clock change bumps this so the rows are regrouped.
+    private val groupingGeneration = MutableStateFlow(0)
+    private var renderedGrouping = 0
+    private val timeChangeReceiver =
+        object : BroadcastReceiver() {
+            override fun onReceive(
+                context: Context,
+                intent: Intent,
+            ) {
+                groupingGeneration.update { generation -> generation + 1 }
+            }
+        }
     private val scrollPositions = GalleryScrollPositionStore()
     private var pendingScrollRestore: GalleryDestination? = null
     private var safeBottom = 0
@@ -142,6 +170,7 @@ class GalleryActivity :
             },
         )
         authCoordinator.register()
+        registerTimeChangeReceiver()
         observeGalleryState()
         if (savedInstanceState == null && LenswaveApplication.isAppUpdateStartupEnabled()) {
             updatePresenter.checkForUpdate()
@@ -156,8 +185,19 @@ class GalleryActivity :
 
     override fun onDestroy() {
         if (this::screen.isInitialized) screen.dispose()
+        unregisterReceiver(timeChangeReceiver)
         authCoordinator.unregister()
         super.onDestroy()
+    }
+
+    /** System broadcasts reach a non-exported receiver; the platform resets the default zone before sending. */
+    private fun registerTimeChangeReceiver() {
+        val filter =
+            IntentFilter().apply {
+                addAction(Intent.ACTION_TIMEZONE_CHANGED)
+                addAction(Intent.ACTION_TIME_CHANGED)
+            }
+        ContextCompat.registerReceiver(this, timeChangeReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -200,7 +240,8 @@ class GalleryActivity :
     private fun observeGalleryState() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                viewModel.uiState.collectLatest(::render)
+                combine(viewModel.uiState, groupingGeneration) { state, generation -> state to generation }
+                    .collectLatest { (state, generation) -> render(state, generation) }
             }
         }
         lifecycleScope.launch {
@@ -210,31 +251,53 @@ class GalleryActivity :
         }
     }
 
-    private fun render(state: GalleryUiState) {
+    /**
+     * Collected with collectLatest: a newer state cancels a render still building its rows. Only
+     * the cheap, idempotent parts run before that suspension; everything the rest of the activity
+     * reads back ([currentUiState], the rendered destination and content, the pending scroll
+     * restore) is written after the rows are on screen, so a cancelled render leaves no record of
+     * a page the grid never showed, and the newer state's render always submits its rows.
+     */
+    private suspend fun render(
+        state: GalleryUiState,
+        grouping: Int,
+    ) {
         val destinationChanged = renderedDestination != state.destination
-        val contentChanged = renderedContent != state.content
-        if (destinationChanged) {
-            renderedDestination?.let { previousDestination ->
-                screen.captureScrollPosition()?.let { position ->
-                    scrollPositions.save(previousDestination, position)
-                }
-            }
-            pendingScrollRestore = state.destination
-        }
-        currentUiState = state
+        val contentChanged =
+            GalleryRenderPolicy.contentChanged(renderedContent, state.content) || renderedGrouping != grouping
         screen.setRefreshing(state.isRefreshing)
         notificationPermissionPrompter.requestIfNeeded(protonConnected = state.isProtonConnected)
         updateThumbnailCacheIdentity(state.currentUserId)
-        renderedDestination = state.destination
-        renderedContent = state.content
         if (contentChanged || destinationChanged) {
-            when (val content = state.content) {
-                is GalleryContent.Photos -> adapter.submitPhotos(content.assets)
-                is GalleryContent.Library -> adapter.submitLibrary(content.sections)
+            val rows = buildRows(state.content)
+            if (destinationChanged) {
+                // The list still shows the previous page here, so its position can be captured.
+                renderedDestination?.let { previousDestination ->
+                    screen.captureScrollPosition()?.let { position ->
+                        scrollPositions.save(previousDestination, position)
+                    }
+                }
+                pendingScrollRestore = state.destination
             }
-            restorePendingScrollPosition(state)
+            adapter.submitRows(rows)
+            renderedDestination = state.destination
+            renderedContent = state.content
+            renderedGrouping = grouping
         }
-        state.emptyState?.let { empty ->
+        currentUiState = state
+        if (contentChanged || destinationChanged) restorePendingScrollPosition(state)
+        renderEmptyState(state.emptyState)
+        updateNavigationControls()
+        if (destinationChanged) {
+            adapter.clearSelection()
+        }
+    }
+
+    /** The panel is small but re-applying it (three texts and a listener) on every publish is not free. */
+    private fun renderEmptyState(emptyState: GalleryEmptyState?) {
+        if (renderedEmptyState == emptyState) return
+        renderedEmptyState = emptyState
+        emptyState?.let { empty ->
             screen.showEmptyState(
                 title = empty.title,
                 message = empty.message,
@@ -246,11 +309,28 @@ class GalleryActivity :
                     },
             )
         } ?: screen.showContent()
-        updateNavigationControls()
-        if (destinationChanged) {
-            adapter.clearSelection()
-        }
     }
+
+    /** Long photo pages are grouped on a worker thread; short ones inline so the first frame is complete. */
+    private suspend fun buildRows(content: GalleryContent): GalleryRowSet =
+        when (content) {
+            is GalleryContent.Library -> {
+                GalleryRowSet.of(GalleryGrouping.createLibraryRows(content.sections))
+            }
+
+            is GalleryContent.Photos -> {
+                val unknownDateLabel = getString(R.string.unknown_date)
+                if (content.assets.size <= INLINE_ROW_BUILD_LIMIT) {
+                    GalleryRowSet.of(GalleryGrouping.createRows(content.assets, unknownDateLabel = unknownDateLabel))
+                } else {
+                    withContext(Dispatchers.Default) {
+                        GalleryRowSet.of(
+                            GalleryGrouping.createRows(content.assets, unknownDateLabel = unknownDateLabel),
+                        )
+                    }
+                }
+            }
+        }
 
     private fun updateThumbnailCacheIdentity(userId: UserId?) {
         val identity = GalleryThumbnailCacheIdentity(userId)
@@ -335,7 +415,7 @@ class GalleryActivity :
 
     private fun handleBack() {
         when {
-            adapter.selectedPhotos().isNotEmpty() -> adapter.clearSelection()
+            adapter.hasSelection() -> adapter.clearSelection()
             GalleryNavigationPolicy.parent(currentUiState.destination) != null -> navigateUp()
             else -> finish()
         }
@@ -347,7 +427,7 @@ class GalleryActivity :
 
     private fun updateNavigationControls() {
         val destination = currentUiState.destination
-        val selecting = adapter.selectedPhotos().isNotEmpty()
+        val selecting = adapter.hasSelection()
         screen.renderNavigation(destination, currentUiState.title)
         // Every photo grid gets the draggable handle; the album list uses the platform scrollbar.
         list.setFastScrollHandleEnabled(currentUiState.content is GalleryContent.Photos)
@@ -392,7 +472,7 @@ class GalleryActivity :
             safeBottom = safeArea.bottom
             screen.applySafeArea(safeArea)
             updateFastScrollTrack()
-            updateGalleryFooterHeight(adapter.selectedPhotos().isNotEmpty())
+            updateGalleryFooterHeight(adapter.hasSelection())
             selectionBar.applyBottomOverlayInsets(safeArea)
             insets
         }
@@ -403,5 +483,9 @@ class GalleryActivity :
     private fun updateFastScrollTrack() {
         val gap = resources.getDimensionPixelSize(R.dimen.gallery_fast_scroll_edge_margin)
         list.setFastScrollEdgeInsets(top = screen.headerHeight + gap, bottom = safeBottom + gap)
+    }
+
+    private companion object {
+        const val INLINE_ROW_BUILD_LIMIT = 300
     }
 }

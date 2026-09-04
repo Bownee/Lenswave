@@ -75,6 +75,21 @@ internal object GalleryNavigationCodec {
     private const val LEGACY_DESTINATION_DEVICE = "device"
 }
 
+/**
+ * Starts loading the gallery's preference files off the main thread at process start. The
+ * platform caches one SharedPreferences per file for the process and parses it on its own
+ * background thread once requested, so the first main-thread read (the view model's saved
+ * destination in its constructor, the notification prompt flag) either finds the file parsed
+ * or blocks only for the remainder of a load that began here rather than for all of it. There
+ * is no guarantee the load has finished by the time the activity starts.
+ */
+internal object GalleryPreferenceWarmUp {
+    fun warm(context: Context) {
+        context.getSharedPreferences(SharedPreferencesGalleryNavigationStore.PREFERENCES_NAME, Context.MODE_PRIVATE).all
+        context.getSharedPreferences(GalleryNotificationPermissionPrompter.PREFERENCES_NAME, Context.MODE_PRIVATE).all
+    }
+}
+
 internal interface GalleryNavigationStore {
     fun read(): GalleryDestination?
 
@@ -109,11 +124,11 @@ internal class SharedPreferencesGalleryNavigationStore
             }
         }
 
-        private companion object {
+        internal companion object {
             const val PREFERENCES_NAME = "gallery-navigation"
-            const val KEY_DESTINATION = "destination"
-            const val KEY_ALBUM_UID = "album-uid"
-            const val KEY_ALBUM_NAME = "album-name"
-            const val KEY_TAG = "proton-tag"
+            private const val KEY_DESTINATION = "destination"
+            private const val KEY_ALBUM_UID = "album-uid"
+            private const val KEY_ALBUM_NAME = "album-name"
+            private const val KEY_TAG = "proton-tag"
         }
     }

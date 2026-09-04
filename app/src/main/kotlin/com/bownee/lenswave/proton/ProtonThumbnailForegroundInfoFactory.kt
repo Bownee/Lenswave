@@ -83,24 +83,43 @@ internal object ProtonThumbnailNotificationPolicy {
         }
 }
 
+/**
+ * Builds the worker's progress notification. One instance lives for one worker run and is asked
+ * every 1.5 s, so the channel is created once and both PendingIntents are memoized: neither
+ * depends on the progress, and registering PendingIntents is a binder call each time.
+ */
 internal class ProtonThumbnailForegroundInfoFactory(
     private val context: Context,
 ) {
+    private var channelCreated = false
+    private val openApp by lazy {
+        PendingIntent.getActivity(
+            context,
+            OPEN_APP_REQUEST_CODE,
+            Intent(context, GalleryActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+    }
+    private var cancelWork: Pair<UUID, PendingIntent>? = null
+
     fun create(
         workerId: UUID,
         progress: ProtonThumbnailNotificationProgress,
     ): ForegroundInfo {
-        createNotificationChannel()
-        val openApp =
-            PendingIntent.getActivity(
-                context,
-                OPEN_APP_REQUEST_CODE,
-                Intent(context, GalleryActivity::class.java).apply {
-                    flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                },
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-            )
-        val cancelWork = WorkManager.getInstance(context).createCancelPendingIntent(workerId)
+        if (!channelCreated) {
+            createNotificationChannel()
+            channelCreated = true
+        }
+        val cancelWork =
+            cancelWork
+                ?.takeIf { (memoizedWorkerId, _) -> memoizedWorkerId == workerId }
+                ?.second
+                ?: WorkManager
+                    .getInstance(context)
+                    .createCancelPendingIntent(workerId)
+                    .also { intent -> cancelWork = workerId to intent }
         val notification =
             NotificationCompat
                 .Builder(context, CHANNEL_ID)

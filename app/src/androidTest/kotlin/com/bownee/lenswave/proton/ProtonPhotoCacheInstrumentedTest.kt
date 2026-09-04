@@ -33,15 +33,16 @@ class ProtonPhotoCacheInstrumentedTest {
             )
         try {
             cache.writeIndex(userId, listOf(ProtonGalleryPhoto("node", 123L, false)))
-            assertEquals(listOf("node"), cache.readIndex(userId).map(ProtonGalleryPhoto::nodeUid))
+            assertEquals(listOf("node"), cache.readTimelineSnapshot(userId)?.map(ProtonGalleryPhoto::nodeUid))
             val raw = index.readText(Charsets.ISO_8859_1)
             assertFalse(raw.contains("node"))
 
             val bytes = index.readBytes()
             bytes[bytes.lastIndex] = (bytes.last().toInt() xor 1).toByte()
             index.writeBytes(bytes)
-            assertTrue(cache.readIndex(userId).isEmpty())
-            assertFalse(cache.hasTimelineSnapshot(userId))
+            // A corrupt index reads as absent and is discarded, so the next read is a plain miss.
+            assertNull(cache.readTimelineSnapshot(userId))
+            assertFalse(index.exists())
 
             // A download in flight survives reconciliation while its photo is still listed and
             // is dropped with everything else once the photo has left the timeline.
@@ -87,6 +88,20 @@ class ProtonPhotoCacheInstrumentedTest {
             assertTrue(cache.thumbnailExists(userId, "current"))
             assertEquals(2, cache.thumbnailCount(userId))
             assertTrue(cache.loadThumbnail(userId, "old") != null)
+
+            // Hydration answers availability from one directory listing, not a probe per photo.
+            cache.writeIndex(
+                userId,
+                listOf(
+                    ProtonGalleryPhoto("old", 3L, false),
+                    ProtonGalleryPhoto("current", 2L, false),
+                    ProtonGalleryPhoto("missing", 1L, true),
+                ),
+            )
+            assertEquals(
+                listOf("old" to true, "current" to true, "missing" to false),
+                cache.readTimelineSnapshot(userId)?.map { photo -> photo.nodeUid to photo.hasThumbnail },
+            )
         } finally {
             cache.clearUser(userId)
             context.testRoot.deleteRecursively()
@@ -208,8 +223,8 @@ class ProtonPhotoCacheInstrumentedTest {
             cache.writeIndex(userId, listOf(retained, removed))
             cache.writeTag(userId, ProtonMediaTag.VIDEOS, listOf(retained, removed))
 
-            assertTrue(cache.hasTagSnapshot(userId, ProtonMediaTag.VIDEOS))
-            assertEquals(listOf(retained, removed), cache.readTag(userId, ProtonMediaTag.VIDEOS))
+            assertNull(cache.readTagSnapshot(userId, ProtonMediaTag.FAVORITES))
+            assertEquals(listOf(retained, removed), cache.readTagSnapshot(userId, ProtonMediaTag.VIDEOS))
 
             cache.reconcilePhotos(
                 userId,
@@ -217,7 +232,7 @@ class ProtonPhotoCacheInstrumentedTest {
                 remoteNodeUids = listOf(retained.nodeUid),
             )
 
-            assertEquals(listOf(retained), cache.readTag(userId, ProtonMediaTag.VIDEOS))
+            assertEquals(listOf(retained), cache.readTagSnapshot(userId, ProtonMediaTag.VIDEOS))
         } finally {
             cache.clearUser(userId)
             context.testRoot.deleteRecursively()

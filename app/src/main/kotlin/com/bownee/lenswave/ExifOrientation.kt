@@ -114,7 +114,15 @@ internal object ExifOrientation {
             }
         }
 
-    private fun matrix(orientation: Int): Matrix? =
+    /** True when the orientation turns the picture on its side, swapping width and height. */
+    fun swapsAxes(orientation: Int): Boolean = degrees(orientation) % 180 == 90
+
+    /**
+     * The transform that turns stored pixels into the displayed picture, about the origin, or
+     * null when the picture is shown as stored. Concatenated onto a canvas centred on the
+     * destination it draws a raw bitmap oriented without materialising a rotated copy.
+     */
+    fun matrix(orientation: Int): Matrix? =
         Matrix().apply {
             when (orientation) {
                 ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> {

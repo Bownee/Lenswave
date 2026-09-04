@@ -1,13 +1,18 @@
 package com.bownee.lenswave.proton
 
 import com.bownee.lenswave.LenswaveOperation
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import me.proton.core.domain.entity.UserId
 import me.proton.drive.sdk.entity.AlbumNode
 import me.proton.drive.sdk.entity.NodeUid
@@ -31,11 +36,12 @@ internal class ProtonAlbumRepository
         val albumPhotosState: StateFlow<ProtonAlbumPhotosState> = mutableAlbumPhotosState.asStateFlow()
 
         fun loadCached(userId: UserId) {
+            val albums = cache.readAlbumsSnapshot(userId.id)
             emitAlbums(
                 userId,
-                cache.readAlbums(userId.id),
+                albums.orEmpty(),
                 syncing = false,
-                hasLoaded = cache.hasAlbumsSnapshot(userId.id),
+                hasLoaded = albums != null,
             )
         }
 
@@ -43,14 +49,14 @@ internal class ProtonAlbumRepository
             userId: UserId,
             album: ProtonAlbumReference,
         ) {
-            val photos = cache.readAlbumPhotos(userId.id, album.nodeUid)
+            val photos = cache.readAlbumPhotosSnapshot(userId.id, album.nodeUid)
             mutableAlbumPhotosState.value =
                 ProtonAlbumPhotosState(
                     userId = userId.id,
                     albumUid = album.nodeUid,
                     albumName = album.name,
-                    photos = photos,
-                    hasLoaded = cache.hasAlbumPhotosSnapshot(userId.id, album.nodeUid),
+                    photos = photos.orEmpty(),
+                    hasLoaded = photos != null,
                 )
         }
 
@@ -58,8 +64,16 @@ internal class ProtonAlbumRepository
             userId: UserId,
             forceRemote: Boolean,
         ) = albumsSyncMutex.withLock {
-            val existing = cache.readAlbums(userId.id)
-            val hasCachedSnapshot = cache.hasAlbumsSnapshot(userId.id)
+            // A loaded state is the cached listing plus every mark since; re-reading the index
+            // only to learn that costs a decrypt and a parse the sync policy often discards.
+            val current = mutableAlbumsState.value
+            val (existing, hasCachedSnapshot) =
+                if (current.userId == userId.id && current.hasLoaded) {
+                    current.albums to true
+                } else {
+                    val cached = cache.readAlbumsSnapshot(userId.id)
+                    cached.orEmpty() to (cached != null)
+                }
             snapshotSync.sync(
                 userId = userId.id,
                 source = ProtonSyncSource.ALBUMS,
@@ -72,10 +86,17 @@ internal class ProtonAlbumRepository
                 enumerate = {
                     val photosClient = clientProvider.get(userId)
                     val sharedNodeUids = photosClient.enumerateSharedWithMeNodeUids().toList()
-                    (photosClient.enumerateAlbumNodeUids().toList() + sharedNodeUids)
-                        .distinctBy(NodeUid::value)
-                        .map { nodeUid -> loadAlbum(photosClient, userId, nodeUid) }
-                        .sortedByDescending(ProtonAlbum::lastActivityEpochSeconds)
+                    val albumNodeUids =
+                        (photosClient.enumerateAlbumNodeUids().toList() + sharedNodeUids).distinctBy(NodeUid::value)
+                    // Each album is one round trip; a few in flight at a time keeps the listing
+                    // from growing linearly with the album count without flooding the SDK.
+                    val inFlight = Semaphore(ALBUM_LOAD_PARALLELISM)
+                    coroutineScope {
+                        albumNodeUids
+                            .map { nodeUid ->
+                                async { inFlight.withPermit { loadAlbum(photosClient, userId, nodeUid) } }
+                            }.awaitAll()
+                    }.sortedByDescending(ProtonAlbum::lastActivityEpochSeconds)
                 },
                 commit = { albums ->
                     cache.reconcileAlbums(userId.id, albums.map(ProtonAlbum::nodeUid))
@@ -98,8 +119,14 @@ internal class ProtonAlbumRepository
             album: ProtonAlbumReference,
             forceRemote: Boolean,
         ) = albumPhotosSyncMutex.withLock {
-            val existing = cache.readAlbumPhotos(userId.id, album.nodeUid)
-            val hasCachedSnapshot = cache.hasAlbumPhotosSnapshot(userId.id, album.nodeUid)
+            val current = mutableAlbumPhotosState.value
+            val (existing, hasCachedSnapshot) =
+                if (current.userId == userId.id && current.albumUid == album.nodeUid && current.hasLoaded) {
+                    current.photos to true
+                } else {
+                    val cached = cache.readAlbumPhotosSnapshot(userId.id, album.nodeUid)
+                    cached.orEmpty() to (cached != null)
+                }
             snapshotSync.sync(
                 userId = userId.id,
                 source = ProtonSyncSource.ALBUM_PHOTOS,
@@ -112,17 +139,11 @@ internal class ProtonAlbumRepository
                     emitAlbumPhotos(userId, album, existing, hasLoaded = hasCachedSnapshot, syncing = true)
                 },
                 enumerate = {
-                    clientProvider
-                        .get(userId)
-                        .enumerateAlbum(NodeUid(album.nodeUid))
-                        .toList()
-                        .map { item ->
-                            ProtonGalleryPhoto(
-                                nodeUid = item.nodeUid.value,
-                                captureTimeEpochSeconds = item.captureTime.epochSecond,
-                                hasThumbnail = cache.thumbnailExists(userId.id, item.nodeUid.value),
-                            )
-                        }.sortedByDescending(ProtonGalleryPhoto::captureTimeEpochSeconds)
+                    val items = clientProvider.get(userId).enumerateAlbum(NodeUid(album.nodeUid)).toList()
+                    val availability = cache.storedRenditions(userId.id)
+                    items
+                        .map { item -> availability.photo(item.nodeUid.value, item.captureTime.epochSecond) }
+                        .sortedByDescending(ProtonGalleryPhoto::captureTimeEpochSeconds)
                 },
                 commit = { photos -> cache.writeAlbumPhotos(userId.id, album.nodeUid, photos) },
                 publishResult = { photos ->
@@ -233,7 +254,7 @@ internal class ProtonAlbumRepository
                     }
                     // ProtonPhotoCache removes the nodes from every album index and reconciles all counts.
                     // Publish that complete snapshot so unopened albums cannot retain stale counts in memory.
-                    val updatedAlbums = cache.readAlbums(userId.id)
+                    val updatedAlbums = cache.readAlbumsSnapshot(userId.id).orEmpty()
                     mutableAlbumsState.value =
                         mutableAlbumsState.value.copy(
                             albums = updatedAlbums,
@@ -272,19 +293,25 @@ internal class ProtonAlbumRepository
             )
         }
 
+        /**
+         * The published list keeps its previous instance whenever the content is unchanged; the
+         * gallery memoizes by list identity, so a syncing heartbeat must not hand it an equal copy.
+         * Callers hand over lists they built themselves, so no defensive copy is taken.
+         */
         private fun emitAlbums(
             userId: UserId,
             albums: List<ProtonAlbum>,
             syncing: Boolean,
             hasLoaded: Boolean = true,
         ) {
-            mutableAlbumsState.value =
+            mutableAlbumsState.update { previous ->
                 ProtonAlbumsState(
                     userId = userId.id,
-                    albums = albums.toList(),
+                    albums = if (previous.albums == albums) previous.albums else albums,
                     hasLoaded = hasLoaded,
                     syncing = syncing,
                 )
+            }
         }
 
         private fun emitAlbumPhotos(
@@ -294,16 +321,21 @@ internal class ProtonAlbumRepository
             hasLoaded: Boolean,
             syncing: Boolean,
         ) {
-            val currentAlbumUid = mutableAlbumPhotosState.value.albumUid
-            if (currentAlbumUid != null && currentAlbumUid != album.nodeUid) return
-            mutableAlbumPhotosState.value =
+            mutableAlbumPhotosState.update { previous ->
+                val currentAlbumUid = previous.albumUid
+                if (currentAlbumUid != null && currentAlbumUid != album.nodeUid) return@update previous
                 ProtonAlbumPhotosState(
                     userId = userId.id,
                     albumUid = album.nodeUid,
                     albumName = album.name,
-                    photos = photos.toList(),
+                    photos = if (previous.photos == photos) previous.photos else photos,
                     hasLoaded = hasLoaded,
                     syncing = syncing,
                 )
+            }
+        }
+
+        private companion object {
+            const val ALBUM_LOAD_PARALLELISM = 4
         }
     }

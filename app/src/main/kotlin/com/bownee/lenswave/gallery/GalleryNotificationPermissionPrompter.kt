@@ -19,6 +19,9 @@ internal class GalleryNotificationPermissionPrompter(
     private val activity: ComponentActivity,
 ) {
     private var requestInFlight = false
+
+    /** Set once the question has been answered for this activity; later renders skip the checks. */
+    private var settled = false
     private val preferences by lazy {
         activity.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
     }
@@ -33,13 +36,25 @@ internal class GalleryNotificationPermissionPrompter(
             }
         }
 
+    /**
+     * Decides at most once per activity, the first time it is called with a connected account:
+     * the permission state and the stored flag do not change underneath a running activity
+     * except through the launcher below, so the preference file and permission check need not
+     * be consulted on every render.
+     */
     fun requestIfNeeded(protonConnected: Boolean) {
+        if (settled) return
         // Runtime notification permission only exists from Android 13; the explicit check also
         // keeps lint's InlinedApi analysis satisfied about the constant below.
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            settled = true
+            return
+        }
+        if (!protonConnected) return
+        settled = true
         if (!ThumbnailNotificationPermissionPolicy.shouldRequest(
                 apiLevel = Build.VERSION.SDK_INT,
-                protonConnected = protonConnected,
+                protonConnected = true,
                 permissionGranted =
                     ContextCompat.checkSelfPermission(
                         activity,
@@ -58,9 +73,9 @@ internal class GalleryNotificationPermissionPrompter(
         launcher.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 
-    private companion object {
+    internal companion object {
         const val PREFERENCES_NAME = "permissions"
-        const val KEY_THUMBNAIL_NOTIFICATION_PERMISSION_REQUESTED =
+        private const val KEY_THUMBNAIL_NOTIFICATION_PERMISSION_REQUESTED =
             "thumbnail-notification-permission-requested-v2"
     }
 }

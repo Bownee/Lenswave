@@ -38,30 +38,48 @@ data class PhotoLocation(
 class PhotoMetadataReader
     @Inject
     constructor() {
+        /**
+         * Reads the rows for the original at [uri]. With [hints] from the viewer's own decode the
+         * file is opened once, for the EXIF tags; without them a bounds decode supplies the
+         * dimensions and the format and the EXIF orientation is derived here.
+         */
         fun read(
             context: Context,
             uri: Uri,
             fallbackName: String,
             fallbackTimestamp: Long,
+            hints: PhotoMetadataHints? = null,
         ): List<PhotoMetadataItem> {
             val resolver = context.contentResolver
             val size = if (uri.scheme == "file") File(requireNotNull(uri.path)).length() else 0L
-            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            runCatching {
-                resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
-            }
             val exif =
                 runCatching {
                     resolver.openFileDescriptor(uri, "r")?.use { descriptor ->
-                        ExifSnapshot.from(ExifInterface(descriptor.fileDescriptor))
+                        ExifSnapshot.from(ExifInterface(descriptor.fileDescriptor), readOrientation = hints == null)
                     }
                 }.getOrNull()
-            val mimeType = resolver.getType(uri).orEmpty().ifBlank { bounds.outMimeType.orEmpty() }
-            val rawWidth = bounds.outWidth.takeIf { it > 0 } ?: exif?.width.orZero()
-            val rawHeight = bounds.outHeight.takeIf { it > 0 } ?: exif?.height.orZero()
-            val rotated = exif?.rotationDegrees in setOf(90, 270)
-            val width = if (rotated) rawHeight else rawWidth
-            val height = if (rotated) rawWidth else rawHeight
+            val rawWidth: Int
+            val rawHeight: Int
+            val rotationDegrees: Int
+            val detectedMimeType: String?
+            if (hints != null) {
+                rawWidth = hints.rawWidth
+                rawHeight = hints.rawHeight
+                rotationDegrees = hints.rotationDegrees
+                detectedMimeType = hints.mimeType
+            } else {
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                runCatching {
+                    resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+                }
+                rawWidth = bounds.outWidth.takeIf { it > 0 } ?: exif?.width.orZero()
+                rawHeight = bounds.outHeight.takeIf { it > 0 } ?: exif?.height.orZero()
+                detectedMimeType = bounds.outMimeType
+                rotationDegrees =
+                    ImageOrientationPolicy.effectiveRotationDegrees(detectedMimeType, exif?.rotationDegrees.orZero())
+            }
+            val mimeType = resolver.getType(uri).orEmpty().ifBlank { detectedMimeType.orEmpty() }
+            val (width, height) = PhotoMetadataDimensionPolicy.oriented(rawWidth, rawHeight, rotationDegrees)
 
             return buildList {
                 fun row(
@@ -73,10 +91,7 @@ class PhotoMetadataReader
                     add(PhotoMetadataItem(context.getString(labelRes), value, action))
                 }
                 row(R.string.metadata_file_name, fallbackName)
-                row(
-                    R.string.metadata_captured,
-                    fallbackTimestamp.takeIf { it > 0 }?.let { DateFormat.getDateTimeInstance().format(Date(it)) },
-                )
+                row(R.string.metadata_captured, fallbackTimestamp.takeIf { it > 0 }?.let(::formatCapturedAt))
                 if (width > 0 && height > 0) {
                     row(
                         R.string.metadata_dimensions,
@@ -124,6 +139,22 @@ class PhotoMetadataReader
             }
         }
 
+        /** The last date format built, valid for the locale it was built for. */
+        @Volatile
+        private var capturedAtFormat: Pair<Locale, DateFormat>? = null
+
+        /**
+         * Formats with a DateFormat cached per locale; java.text formats are not thread-safe, so
+         * concurrent reads on the IO dispatcher take turns on it.
+         */
+        private fun formatCapturedAt(epochMillis: Long): String {
+            val locale = Locale.getDefault(Locale.Category.FORMAT)
+            val format =
+                capturedAtFormat?.takeIf { it.first == locale }?.second
+                    ?: DateFormat.getDateTimeInstance().also { capturedAtFormat = locale to it }
+            return synchronized(format) { format.format(Date(epochMillis)) }
+        }
+
         private fun Int?.orZero(): Int = this ?: 0
 
         private data class ExifSnapshot(
@@ -143,12 +174,19 @@ class PhotoMetadataReader
             val gpsDirection: String?,
         ) {
             companion object {
-                fun from(exif: ExifInterface): ExifSnapshot {
+                fun from(
+                    exif: ExifInterface,
+                    readOrientation: Boolean,
+                ): ExifSnapshot {
                     val orientationValue =
-                        exif.getAttributeInt(
-                            ExifInterface.TAG_ORIENTATION,
-                            ExifInterface.ORIENTATION_NORMAL,
-                        )
+                        if (readOrientation) {
+                            exif.getAttributeInt(
+                                ExifInterface.TAG_ORIENTATION,
+                                ExifInterface.ORIENTATION_NORMAL,
+                            )
+                        } else {
+                            ExifInterface.ORIENTATION_NORMAL
+                        }
                     val coordinates = exif.latLong
                     val altitude = exif.getAltitude(Double.NaN).takeUnless(Double::isNaN)
                     val location =

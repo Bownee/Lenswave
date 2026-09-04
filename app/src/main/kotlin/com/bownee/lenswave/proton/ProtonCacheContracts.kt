@@ -7,25 +7,33 @@ import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
 import java.io.File
 
-interface ProtonTimelineCache {
-    fun readIndex(userId: String): List<ProtonGalleryPhoto>
+/**
+ * Snapshot readers return null when no valid listing is stored, so one read answers both "what
+ * is cached" and "is anything cached"; a corrupt file is discarded and reads as absent, while a
+ * file that merely could not be read right now (a transient crypto or I/O failure) is kept and
+ * reads as absent for this call only.
+ * Every hydrated photo carries its rendition availability from [storedRenditions], which is
+ * memoized per user until a rendition changes; callers that already hold one pass it explicitly.
+ */
+internal interface ProtonTimelineCache {
+    /** Memoized per user; a fresh listing only after a rendition was written, removed or swept. */
+    fun storedRenditions(userId: String): ProtonStoredRenditions
 
-    fun hasTimelineSnapshot(userId: String): Boolean
+    fun readTimelineSnapshot(
+        userId: String,
+        availability: ProtonStoredRenditions = storedRenditions(userId),
+    ): List<ProtonGalleryPhoto>?
 
     fun writeIndex(
         userId: String,
         photos: List<ProtonGalleryPhoto>,
     )
 
-    fun readTag(
+    fun readTagSnapshot(
         userId: String,
         tag: ProtonMediaTag,
-    ): List<ProtonGalleryPhoto>
-
-    fun hasTagSnapshot(
-        userId: String,
-        tag: ProtonMediaTag,
-    ): Boolean
+        availability: ProtonStoredRenditions = storedRenditions(userId),
+    ): List<ProtonGalleryPhoto>?
 
     fun writeTag(
         userId: String,
@@ -34,11 +42,6 @@ interface ProtonTimelineCache {
     )
 
     fun thumbnailExists(
-        userId: String,
-        nodeUid: String,
-    ): Boolean
-
-    fun previewExists(
         userId: String,
         nodeUid: String,
     ): Boolean
@@ -56,25 +59,24 @@ interface ProtonTimelineCache {
     )
 }
 
-interface ProtonAlbumCache {
-    fun readAlbums(userId: String): List<ProtonAlbum>
+internal interface ProtonAlbumCache {
+    fun storedRenditions(userId: String): ProtonStoredRenditions
 
-    fun hasAlbumsSnapshot(userId: String): Boolean
+    fun readAlbumsSnapshot(
+        userId: String,
+        availability: ProtonStoredRenditions = storedRenditions(userId),
+    ): List<ProtonAlbum>?
 
     fun writeAlbums(
         userId: String,
         albums: List<ProtonAlbum>,
     )
 
-    fun readAlbumPhotos(
+    fun readAlbumPhotosSnapshot(
         userId: String,
         albumUid: String,
-    ): List<ProtonGalleryPhoto>
-
-    fun hasAlbumPhotosSnapshot(
-        userId: String,
-        albumUid: String,
-    ): Boolean
+        availability: ProtonStoredRenditions = storedRenditions(userId),
+    ): List<ProtonGalleryPhoto>?
 
     fun writeAlbumPhotos(
         userId: String,
@@ -94,9 +96,17 @@ interface ProtonAlbumCache {
 }
 
 interface ProtonMediaCache {
+    /** A cheap file stat; use it to skip work, never as proof that the bytes decode. */
+    fun thumbnailExists(
+        userId: String,
+        nodeUid: String,
+    ): Boolean
+
+    /** [isActive] false aborts the load with a CancellationException before the costly decode. */
     fun loadThumbnail(
         userId: String,
         nodeUid: String,
+        isActive: () -> Boolean = { true },
     ): Bitmap?
 
     /** In-memory thumbnail only; never reads disk, so it is safe on the main thread. */
@@ -150,9 +160,14 @@ interface ProtonMediaCache {
 
     fun previewCount(userId: String): Int
 
+    /**
+     * The cached original decrypted to a plaintext file; null when not cached. [shouldContinue]
+     * is asked between decrypt chunks and a false answer aborts with a cancellation exception.
+     */
     fun readOriginal(
         userId: String,
         nodeUid: String,
+        shouldContinue: () -> Boolean = { true },
     ): File?
 
     fun createOriginalTarget(
@@ -174,8 +189,16 @@ interface ProtonMediaCache {
 }
 
 interface ProtonSessionCache {
+    /** Never throws: files that resist deletion are reported and swept on the next account transition. */
     fun clearUser(userId: String)
 
+    /**
+     * The cheap part of activation: plaintext copies left behind by a previous process are wiped
+     * before anything can materialize a new one next to them.
+     */
+    fun prepareUser(userId: String)
+
+    /** Expiry and size-cap housekeeping; safe to run while the session is in use. */
     fun trimUser(userId: String)
 }
 

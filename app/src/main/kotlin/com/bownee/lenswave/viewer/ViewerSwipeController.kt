@@ -22,6 +22,7 @@ internal class ViewerSwipeController(
     private val mediaTransform: ViewerMediaTransform,
     private val scope: CoroutineScope,
     private val loadThumbnail: suspend (PhotoRequest) -> Bitmap?,
+    private val peekThumbnail: (PhotoRequest) -> Bitmap?,
     private val host: Host,
 ) {
     internal interface Host {
@@ -59,6 +60,13 @@ internal class ViewerSwipeController(
     private var peekDragDistance = 0f
     private var peekJob: Job? = null
 
+    /** True while a settle animation owns [peekPreview]'s translation; a drag cancels it once. */
+    private var peekSettling = false
+
+    /** Position of each request in [Host.navigationRequests], rebuilt only when the list is replaced. */
+    private var indexedRequests: List<PhotoRequest>? = null
+    private var indexByStableId: Map<String, Int> = emptyMap()
+
     fun handleHorizontalPhotoDrag(
         distance: Float,
         finished: Boolean,
@@ -92,6 +100,7 @@ internal class ViewerSwipeController(
         mediaTransform.animateMediaTranslationX(0f, SWIPE_SETTLE_MILLIS)
         if (peekPreview.isVisible) {
             val settledPeek = peekStableId
+            peekSettling = true
             peekPreview
                 .animate()
                 .translationX(peekOffset * peekDistance())
@@ -104,7 +113,11 @@ internal class ViewerSwipeController(
         }
     }
 
-    /** Positions the neighbour's thumbnail one screen away in the drag direction, loading it first. */
+    /**
+     * Positions the neighbour's thumbnail one screen away in the drag direction. A thumbnail
+     * already decoded in memory is bound in this same frame; otherwise it is read from disk and
+     * slides in once it arrives.
+     */
     private fun showPeek(
         adjacent: PhotoRequest,
         offset: Int,
@@ -113,28 +126,46 @@ internal class ViewerSwipeController(
         peekDragDistance = dragDistance
         if (peekStableId != adjacent.stableId || peekOffset != offset) {
             peekJob?.cancel()
+            peekJob = null
             peekStableId = adjacent.stableId
             peekOffset = offset
-            peekPreview.setImageDrawable(null)
-            peekPreview.visibility = View.GONE
-            peekJob =
-                scope.launch {
-                    val bitmap = loadThumbnail(adjacent)
-                    if (bitmap == null || peekStableId != adjacent.stableId) return@launch
-                    peekPreview.setImageBitmap(bitmap)
-                    peekPreview.alpha = 1f
-                    peekPreview.visibility = View.VISIBLE
-                    positionPeek(peekDragDistance)
-                }
+            cancelPeekSettle()
+            val cached = peekThumbnail(adjacent)
+            if (cached != null) {
+                installPeek(cached)
+            } else {
+                peekPreview.setImageDrawable(null)
+                peekPreview.visibility = View.GONE
+                peekJob =
+                    scope.launch {
+                        val bitmap = loadThumbnail(adjacent)
+                        if (bitmap == null || peekStableId != adjacent.stableId) return@launch
+                        installPeek(bitmap)
+                    }
+            }
         }
         positionPeek(dragDistance)
+    }
+
+    private fun installPeek(bitmap: Bitmap) {
+        cancelPeekSettle()
+        peekPreview.setImageBitmap(bitmap)
+        peekPreview.alpha = 1f
+        peekPreview.visibility = View.VISIBLE
+        positionPeek(peekDragDistance)
+    }
+
+    private fun cancelPeekSettle() {
+        if (!peekSettling) return
+        peekSettling = false
+        peekPreview.animate().cancel()
     }
 
     /** How far the neighbour rests from the current photo: one screen plus a small gap. */
     private fun peekDistance(): Float = root.width + dp(PEEK_GAP_DP).toFloat()
 
     private fun positionPeek(dragDistance: Float) {
-        peekPreview.animate().cancel()
+        cancelPeekSettle()
         peekPreview.translationX = -dragDistance + peekOffset * peekDistance()
     }
 
@@ -143,6 +174,7 @@ internal class ViewerSwipeController(
         peekJob = null
         peekStableId = null
         peekOffset = 0
+        peekSettling = false
         peekPreview.animate().cancel()
         peekPreview.setImageDrawable(null)
         peekPreview.visibility = View.GONE
@@ -222,8 +254,15 @@ internal class ViewerSwipeController(
         offset: Int,
     ): PhotoRequest? {
         val requests = host.navigationRequests
-        val index = requests.indexOfFirst { it.stableId == stableId }
-        return if (index < 0) null else requests.getOrNull(index + offset)
+        if (requests !== indexedRequests) {
+            indexedRequests = requests
+            indexByStableId =
+                HashMap<String, Int>(requests.size * 2).also { index ->
+                    requests.forEachIndexed { position, request -> index.putIfAbsent(request.stableId, position) }
+                }
+        }
+        val index = indexByStableId[stableId] ?: return null
+        return requests.getOrNull(index + offset)
     }
 
     /** Cancels the pending peek load and clears the peek; call from the Activity's onDestroy. */

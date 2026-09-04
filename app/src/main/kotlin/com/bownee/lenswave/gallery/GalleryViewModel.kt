@@ -18,9 +18,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import me.proton.core.account.domain.entity.Account
@@ -43,34 +49,71 @@ class GalleryViewModel
         private val clock: LenswaveClock,
     ) : ViewModel() {
         private val uiStateFactory = GalleryUiStateFactory(AndroidGalleryText(context.resources))
-        private val mutableUiState = MutableStateFlow(GalleryUiState())
 
+        // The stored destination is needed for the initial state, so it is read here on the main
+        // thread; GalleryPreferenceWarmUp starts the file load at process start, and this read
+        // waits only for whatever part of it is still outstanding.
         private var destination =
             restoreNavigation(savedStateHandle)
                 ?: navigationStore.read()
                 ?: GalleryDestination.Timeline
-        private var account: Account? = null
         private var currentUserId: UserId? = null
-        private var accountSessionInitialized = false
         private var sessionTransitioning = false
-        private var protonGalleryState = ProtonGalleryState()
-        private var protonAlbumsState = ProtonAlbumsState()
-        private var protonAlbumPhotosState = ProtonAlbumPhotosState()
         private var manualRefreshGeneration = 0
         private var lastPeriodicCheckMillis: Long? = null
 
-        val uiState: StateFlow<GalleryUiState> = mutableUiState.asStateFlow()
+        /**
+         * Everything the UI state depends on that is owned by this view model. It joins the
+         * repository flows below; a change to any of them recomputes the state once, off the
+         * main thread, and bursts of changes collapse into the latest one.
+         */
+        private val localInputs =
+            MutableStateFlow(
+                LocalInputs(
+                    destination = destination,
+                    currentUserId = null,
+                    accountStatus = accountStatus(ProtonAccountSessionState()),
+                    isRefreshing = false,
+                ),
+            )
+
+        /**
+         * The initial value is a skeleton because it is built on whichever thread first touches
+         * this property (the main thread in the activity's onCreate); mapping and sorting a warm
+         * repository's timeline there would delay the first frame. The full state follows from
+         * the Default dispatcher. Sharing stops shortly after the last collector leaves, so the
+         * join does not recompute states while the gallery is off screen.
+         */
+        val uiState: StateFlow<GalleryUiState> =
+            combine(
+                protonRepository.state,
+                protonRepository.albumsState,
+                protonRepository.albumPhotosState,
+                localInputs,
+                ::uiInputs,
+            ).conflate()
+                .map(uiStateFactory::create)
+                .flowOn(Dispatchers.Default)
+                .stateIn(
+                    scope = viewModelScope,
+                    started = SharingStarted.WhileSubscribed(stopTimeoutMillis = UI_STATE_STOP_TIMEOUT_MILLIS),
+                    initialValue =
+                        uiStateFactory.skeleton(
+                            uiInputs(
+                                protonRepository.state.value,
+                                protonRepository.albumsState.value,
+                                protonRepository.albumPhotosState.value,
+                                localInputs.value,
+                            ),
+                        ),
+                )
 
         init {
             observeAccountSession()
-            observeProtonSources()
         }
 
         fun selectDestination(newDestination: GalleryDestination) {
-            if (destination == newDestination) {
-                publishUiState()
-                return
-            }
+            if (destination == newDestination) return
             destination = newDestination
             saveDestination()
             publishUiState()
@@ -81,17 +124,26 @@ class GalleryViewModel
             GalleryNavigationPolicy.parent(destination)?.let(::selectDestination)
         }
 
+        /**
+         * The cached album is loaded before the destination is published, so the screen goes
+         * straight from the album list to the album's photos in one render instead of showing an
+         * empty page first and rendering again when the cache arrives.
+         */
         fun openAlbum(album: ProtonAlbum) {
             val albumReference = album.reference()
             destination = GalleryDestination.AlbumPhotos(albumReference)
             saveDestination()
-            publishUiState()
             viewModelScope.launch {
-                currentUserId?.let { userId ->
-                    withContext(Dispatchers.IO) { protonRepository.loadCachedAlbum(userId, albumReference) }
-                    protonThumbnailScheduler.enqueue(userId)
+                val userId = currentUserId
+                try {
+                    if (userId != null) {
+                        withContext(Dispatchers.IO) { protonRepository.loadCachedAlbum(userId, albumReference) }
+                    }
+                } finally {
+                    // Whatever the cache said, the navigation must land; a later change wins.
+                    publishUiState()
                 }
-                publishUiState()
+                if (userId != null) protonThumbnailScheduler.enqueue(userId)
                 requestRefresh(manual = false)
             }
         }
@@ -99,13 +151,13 @@ class GalleryViewModel
         fun requestRefresh(manual: Boolean = true) {
             val selectedDestination = destination
             val generation = if (manual) ++manualRefreshGeneration else manualRefreshGeneration
-            if (manual) publishUiState(isRefreshing = true)
+            if (manual) setRefreshing(true)
             viewModelScope.launch {
                 try {
                     refresh(selectedDestination, forceRemote = manual)
                 } finally {
                     if (manual) {
-                        if (generation == manualRefreshGeneration) publishUiState(isRefreshing = false)
+                        if (generation == manualRefreshGeneration) setRefreshing(false)
                     }
                 }
             }
@@ -152,33 +204,11 @@ class GalleryViewModel
             }
         }
 
-        private fun observeProtonSources() {
-            viewModelScope.launch {
-                protonRepository.state.collectLatest { state ->
-                    protonGalleryState = state
-                    publishUiState()
-                }
-            }
-            viewModelScope.launch {
-                protonRepository.albumsState.collectLatest { state ->
-                    protonAlbumsState = state
-                    publishUiState()
-                }
-            }
-            viewModelScope.launch {
-                protonRepository.albumPhotosState.collectLatest { state ->
-                    protonAlbumPhotosState = state
-                    publishUiState()
-                }
-            }
-        }
-
         private suspend fun handleAccountSession(state: ProtonAccountSessionState) {
-            account = state.account
-            accountSessionInitialized = state.initialized
+            val accountStatus = accountStatus(state)
             sessionTransitioning = state.transitioning
             if (!state.initialized) {
-                publishUiState()
+                publishUiState(accountStatus)
                 return
             }
             val readyAccount = state.account?.takeIf(Account::isReady)
@@ -187,7 +217,7 @@ class GalleryViewModel
             val userChanged = previousUserId != nextUserId
             if (userChanged) currentUserId = nextUserId
             if (state.transitioning) {
-                publishUiState()
+                publishUiState(accountStatus)
                 return
             }
             if (readyAccount == null) {
@@ -197,7 +227,7 @@ class GalleryViewModel
                     saveDestination()
                 }
             }
-            publishUiState()
+            publishUiState(accountStatus)
             if (userChanged && nextUserId != null) {
                 if (requestMissingProtonMetadata(nextUserId)) return
                 protonThumbnailScheduler.restart(nextUserId)
@@ -291,26 +321,27 @@ class GalleryViewModel
             protonThumbnailScheduler.enqueue(userId)
         }
 
-        private fun publishUiState(isRefreshing: Boolean = mutableUiState.value.isRefreshing) {
-            mutableUiState.value =
-                uiStateFactory.create(
-                    GalleryUiInputs(
-                        destination = destination,
-                        protonGallery = protonGalleryState,
-                        protonAlbums = protonAlbumsState,
-                        protonAlbumPhotos = protonAlbumPhotosState,
-                        currentUserId = currentUserId,
-                        protonAccountStatus =
-                            ProtonAccountStatus.resolve(
-                                initialized = accountSessionInitialized,
-                                transitioning = sessionTransitioning,
-                                hasAccount = account != null,
-                                accountIsReady = account?.isReady() == true,
-                            ),
-                        isRefreshing = isRefreshing,
-                    ),
+        /** Pushes the current destination and user (and, when given, account status) into the state flow. */
+        private fun publishUiState(accountStatus: ProtonAccountStatus? = null) {
+            localInputs.update { inputs ->
+                inputs.copy(
+                    destination = destination,
+                    currentUserId = currentUserId,
+                    accountStatus = accountStatus ?: inputs.accountStatus,
                 )
+            }
         }
+
+        private fun setRefreshing(refreshing: Boolean) {
+            localInputs.update { inputs -> inputs.copy(isRefreshing = refreshing) }
+        }
+
+        private data class LocalInputs(
+            val destination: GalleryDestination,
+            val currentUserId: UserId?,
+            val accountStatus: ProtonAccountStatus,
+            val isRefreshing: Boolean,
+        )
 
         private fun saveDestination() {
             val stored = GalleryNavigationCodec.encode(destination)
@@ -327,6 +358,30 @@ class GalleryViewModel
             const val STATE_ALBUM_UID = "gallery.album-uid"
             const val STATE_ALBUM_NAME = "gallery.album-name"
             const val STATE_TAG = "gallery.proton-tag"
+            const val UI_STATE_STOP_TIMEOUT_MILLIS = 5_000L
+
+            private fun accountStatus(state: ProtonAccountSessionState): ProtonAccountStatus =
+                ProtonAccountStatus.resolve(
+                    initialized = state.initialized,
+                    transitioning = state.transitioning,
+                    hasAccount = state.account != null,
+                    accountIsReady = state.account?.isReady() == true,
+                )
+
+            private fun uiInputs(
+                gallery: ProtonGalleryState,
+                albums: ProtonAlbumsState,
+                albumPhotos: ProtonAlbumPhotosState,
+                local: LocalInputs,
+            ) = GalleryUiInputs(
+                destination = local.destination,
+                protonGallery = gallery,
+                protonAlbums = albums,
+                protonAlbumPhotos = albumPhotos,
+                currentUserId = local.currentUserId,
+                protonAccountStatus = local.accountStatus,
+                isRefreshing = local.isRefreshing,
+            )
 
             fun restoreNavigation(state: SavedStateHandle): GalleryDestination? =
                 GalleryNavigationCodec.decode(

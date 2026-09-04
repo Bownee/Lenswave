@@ -1,14 +1,21 @@
 package com.bownee.lenswave.proton
 
 import android.graphics.Bitmap
+import com.bownee.lenswave.LenswaveDiagnostics
+import com.bownee.lenswave.LenswaveOperation
 import com.bownee.lenswave.gallery.ProtonGalleryReader
 import com.bownee.lenswave.gallery.ProtonOriginalMediaSource
 import com.bownee.lenswave.gallery.ProtonPhotoMutations
 import com.bownee.lenswave.gallery.ProtonSessionLifecycle
 import com.bownee.lenswave.gallery.ProtonThumbnailImageSource
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
@@ -53,27 +60,77 @@ class ProtonPhotoGateway
         override val albumsState: StateFlow<ProtonAlbumsState> = albums.albumsState
         override val albumPhotosState: StateFlow<ProtonAlbumPhotosState> = albums.albumPhotosState
 
+        /** Process-wide, like the session itself; [runActivationHousekeeping] guards every use. */
+        private val housekeepingScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+        /**
+         * The one housekeeping run in flight, under [housekeepingMutex]. Each activation that
+         * actually transitioned replaces it, so retried transitions and account switches never
+         * pile up concurrent runs over the same queues.
+         */
+        private val housekeepingMutex = Mutex()
+        private var housekeepingJob: Job? = null
+
         /** Background thumbnail work; kept off the public class surface, see [ProtonThumbnailWorkGateway]. */
         internal val thumbnailWork: ProtonThumbnailWorkGateway = ThumbnailWork()
 
+        /**
+         * The transition holds only what the grid needs: the cached listings, loaded first so the
+         * grid gets them as early as possible. Wiping the previous process's plaintext copies
+         * ([ProtonSessionCache.prepareUser], thousands of unlinks on a large cache) follows inside
+         * the same transition: nothing may materialize a new plaintext copy until the wipe is
+         * done, and no session operation can start before the transition ends. Everything else
+         * runs afterwards as an ordinary session operation, so thumbnail reads and the account
+         * state stop waiting on cache trimming and queue reconciliation, and a disconnect still
+         * waits for that housekeeping to finish before it erases the user's files.
+         */
         override suspend fun activate(userId: UserId) {
-            withContext(Dispatchers.IO) {
-                sessionGuard.activate(userId) { previousUserId ->
-                    previousUserId?.let { previous ->
-                        clientProvider.disconnect(previous)
-                        cache.clearUser(previous.id)
-                        originals.forgetUser(previous)
+            val transitioned =
+                withContext(Dispatchers.IO) {
+                    sessionGuard.activate(userId) { previousUserId ->
+                        previousUserId?.let { previous ->
+                            clientProvider.disconnect(previous)
+                            // As in disconnect: the queues drop their pending writes first, or a
+                            // debounced flush could land after the clear and recreate the previous
+                            // user's directory and data key.
+                            thumbnailQueue.forget(previous.id)
+                            previewQueue.forget(previous.id)
+                            originals.forgetUser(previous)
+                            cache.clearUser(previous.id)
+                        }
+                        timeline.reset()
+                        albums.reset()
+                        timeline.loadCached(userId)
+                        albums.loadCached(userId)
+                        cache.prepareUser(userId.id)
                     }
-                    timeline.reset()
-                    albums.reset()
-                    // Cached metadata goes on screen first; housekeeping can wait.
-                    timeline.loadCached(userId)
-                    albums.loadCached(userId)
+                }
+            // An activation the guard skipped (the account is already active) changes nothing
+            // the housekeeping would act on; only a transition earns a fresh run.
+            if (transitioned) launchActivationHousekeeping(userId)
+        }
+
+        private suspend fun launchActivationHousekeeping(userId: UserId) {
+            housekeepingMutex.withLock {
+                housekeepingJob?.cancelAndJoin()
+                housekeepingJob = housekeepingScope.launch { runActivationHousekeeping(userId) }
+            }
+        }
+
+        private suspend fun runActivationHousekeeping(userId: UserId) {
+            try {
+                sessionGuard.withActiveSession(userId) {
                     cache.trimUser(userId.id)
                     reconcileTimelineThumbnailQueue(userId)
                     reconcileTimelinePreviewQueue(userId)
                     reconcileAlbumCoverThumbnailQueue(userId)
                 }
+            } catch (_: ProtonSessionChangedException) {
+                // The account changed underneath; the next activation does its own housekeeping.
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                LenswaveDiagnostics.reportFailure(LenswaveOperation.SESSION_HOUSEKEEPING, error)
             }
         }
 
@@ -151,7 +208,12 @@ class ProtonPhotoGateway
             nodeUid: String,
         ): File? =
             withContext(Dispatchers.IO) {
-                sessionGuard.withActiveSession(userId) { originals.prepareCachedOriginal(userId, nodeUid) }
+                val job = currentCoroutineContext()[Job]
+                sessionGuard.withActiveSession(userId) {
+                    // A prefetch the viewer abandoned stops between decrypt chunks with a
+                    // cancellation, so the photo on screen gets the disk and the CPU back.
+                    originals.prepareCachedOriginal(userId, nodeUid) { job?.isActive != false }
+                }
             }
 
         override suspend fun downloadOriginalProgressively(
@@ -187,8 +249,11 @@ class ProtonPhotoGateway
             nodeUid: String,
         ): Bitmap? =
             withContext(Dispatchers.IO) {
+                val job = currentCoroutineContext()[Job]
                 sessionGuard.withActiveSession(userId) {
-                    renditions.loadThumbnail(userId, nodeUid) ?: run {
+                    // A load the grid cancelled mid-flight throws instead of returning null, so
+                    // it is never mistaken for a corrupt thumbnail below.
+                    renditions.loadThumbnail(userId, nodeUid) { job?.isActive != false } ?: run {
                         invalidateThumbnailInActiveSession(userId, nodeUid)
                         null
                     }
@@ -266,10 +331,12 @@ class ProtonPhotoGateway
             withContext(Dispatchers.IO) {
                 sessionGuard.disconnect(userId) { wasActive ->
                     clientProvider.disconnect(userId)
-                    cache.clearUser(userId.id)
+                    // The queues drop their pending writes and the originals stop their
+                    // transfers first so none can land after the user's directory is gone.
                     thumbnailQueue.forget(userId.id)
                     previewQueue.forget(userId.id)
                     originals.forgetUser(userId)
+                    cache.clearUser(userId.id)
                     if (wasActive) {
                         timeline.reset()
                         albums.reset()
@@ -296,21 +363,41 @@ class ProtonPhotoGateway
                 }
         }
 
+        /**
+         * A stored thumbnail that no longer decodes is dropped, hidden from every listing, and
+         * queued again at the front. The grid asks about one cell at a time while it scrolls, so
+         * the listing lookups are memoized per state snapshot (and survive the new snapshot the
+         * marking below publishes, see [ProtonNodeUidIndex]) and the queue write is left to the
+         * queue's own debounce rather than persisted per item.
+         */
         private suspend fun invalidateThumbnailInActiveSession(
             userId: UserId,
             nodeUid: String,
         ) {
-            val sources = thumbnailSources(nodeUid)
+            val timelinePhoto = timelinePhotoIndex.find(timeline.state.value.photos, nodeUid)
+            val albumPhotosState = albums.albumPhotosState.value
+            val albumPhoto = albumPhotoIndex.find(albumPhotosState.photos, nodeUid)
+            val isAlbumCover = albumCoverIndex.contains(albums.albumsState.value.albums, nodeUid)
+            val sources =
+                buildSet {
+                    if (timelinePhoto != null) add(ProtonSyncKeys.QueueSource.TIMELINE)
+                    if (isAlbumCover) add(ProtonSyncKeys.QueueSource.ALBUM_COVERS)
+                    if (albumPhoto != null) {
+                        albumPhotosState.albumUid?.let { albumUid ->
+                            add(ProtonSyncKeys.QueueSource.albumPhotos(albumUid))
+                        }
+                    }
+                }
+            val captureTime =
+                listOfNotNull(timelinePhoto, albumPhoto)
+                    .maxOfOrNull(ProtonGalleryPhoto::captureTimeEpochSeconds)
+                    ?: UNKNOWN_CAPTURE_TIME
             renditions.removeThumbnail(userId, nodeUid)
             val nodeUids = setOf(nodeUid)
             timeline.markThumbnailsUnavailable(userId, nodeUids)
             albums.markCoverThumbnailsUnavailable(userId, nodeUids)
             albums.markAlbumPhotoThumbnailsUnavailable(userId, nodeUids)
-            thumbnailQueue.retryNow(
-                userId.id,
-                ProtonThumbnailCandidate(nodeUid, thumbnailCaptureTime(nodeUid)),
-                sources,
-            )
+            thumbnailQueue.retryNow(userId.id, ProtonThumbnailCandidate(nodeUid, captureTime), sources)
         }
 
         private suspend fun reconcileTimelineThumbnailQueue(userId: UserId) {
@@ -384,34 +471,9 @@ class ProtonPhotoGateway
                 }
         }
 
-        private fun thumbnailCaptureTime(nodeUid: String): Long =
-            listOfNotNull(
-                timeline.state.value.photos
-                    .firstOrNull { photo -> photo.nodeUid == nodeUid }
-                    ?.captureTimeEpochSeconds,
-                albums.albumPhotosState.value.photos
-                    .firstOrNull { photo -> photo.nodeUid == nodeUid }
-                    ?.captureTimeEpochSeconds,
-            ).maxOrNull() ?: UNKNOWN_CAPTURE_TIME
-
-        private fun thumbnailSources(nodeUid: String): Set<String> =
-            buildSet {
-                if (timeline.state.value.photos
-                        .any { photo -> photo.nodeUid == nodeUid }
-                ) {
-                    add(ProtonSyncKeys.QueueSource.TIMELINE)
-                }
-                if (albums.albumsState.value.albums
-                        .any { album -> album.coverPhotoNodeUid == nodeUid }
-                ) {
-                    add(ProtonSyncKeys.QueueSource.ALBUM_COVERS)
-                }
-                albums.albumPhotosState.value.let { state ->
-                    if (state.photos.any { photo -> photo.nodeUid == nodeUid }) {
-                        state.albumUid?.let { albumUid -> add(ProtonSyncKeys.QueueSource.albumPhotos(albumUid)) }
-                    }
-                }
-            }
+        private val timelinePhotoIndex = ProtonNodeUidIndex(ProtonGalleryPhoto::nodeUid)
+        private val albumPhotoIndex = ProtonNodeUidIndex(ProtonGalleryPhoto::nodeUid)
+        private val albumCoverIndex = ProtonNodeUidIndex(ProtonAlbum::coverPhotoNodeUid)
 
         private companion object {
             const val UNKNOWN_CAPTURE_TIME = Long.MIN_VALUE

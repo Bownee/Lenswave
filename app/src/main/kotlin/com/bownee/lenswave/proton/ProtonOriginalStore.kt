@@ -6,6 +6,8 @@ import com.bownee.lenswave.storage.AtomicFileStore
 import com.bownee.lenswave.storage.SecureFileStore
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
+import java.util.concurrent.CancellationException
+import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -36,14 +38,29 @@ internal class ProtonOriginalStore
          */
         @Volatile private var decryptedWiped = false
 
-        /** The plaintext copy the viewer reads, decrypting it on demand; null when nothing is cached. */
+        /**
+         * Bytes in each user's originals directory, established from one listing and kept up to
+         * date by stores and removals, so a stored download only lists and stats the whole
+         * directory when the total has actually passed the cap. Every trim re-establishes the
+         * exact figure from its own listing.
+         */
+        private val trackedBytes = ConcurrentHashMap<String, Long>()
+
+        /**
+         * The plaintext copy the viewer reads, decrypting it on demand; null when nothing is cached.
+         *
+         * [shouldContinue] is consulted between decrypt chunks. When it turns false the decrypt
+         * stops with a [CancellationException]; the encrypted original is kept, because the caller
+         * lost interest, not the file its integrity. Callers outside a coroutine leave the default.
+         */
         fun read(
             userId: String,
             nodeUid: String,
+            shouldContinue: () -> Boolean = { true },
         ): File? {
             val file = file(userId, nodeUid)
             if (!file.isFile || file.length() <= 0L) {
-                file.delete()
+                deleteTracked(userId, file)
                 return null
             }
             val materialized = decryptedFile(userId, nodeUid)
@@ -52,15 +69,18 @@ internal class ProtonOriginalStore
                 file.setLastModified(clock.nowMillis())
                 return materialized
             }
-            return runCatching {
+            return try {
                 materialized.delete()
-                secureFiles.decryptFile(scope(userId), file, materialized)
+                secureFiles.decryptFile(scope(userId), file, materialized, shouldContinue)
                 file.setLastModified(clock.nowMillis())
                 materialized.setLastModified(clock.nowMillis())
                 materialized
-            }.getOrElse {
+            } catch (interrupted: CancellationException) {
                 materialized.delete()
-                file.delete()
+                throw interrupted
+            } catch (_: Exception) {
+                materialized.delete()
+                deleteTracked(userId, file)
                 null
             }
         }
@@ -102,7 +122,13 @@ internal class ProtonOriginalStore
             target: File,
         ) {
             target.setLastModified(clock.nowMillis())
-            trimToLimit(userId, keepName = target.name)
+            val stored = target.length()
+            // A first listing already includes the file that was just committed.
+            val total =
+                checkNotNull(
+                    trackedBytes.compute(userId) { _, current -> current?.plus(stored) ?: directoryBytes(userId) },
+                )
+            if (total > ProtonStorageLayout.ORIGINALS_CACHE_LIMIT_BYTES) trimToLimit(userId, keepName = target.name)
         }
 
         fun maintain(userId: String) {
@@ -115,16 +141,18 @@ internal class ProtonOriginalStore
             userId: String,
             nodeUid: String,
         ) {
-            file(userId, nodeUid).delete()
+            deleteTracked(userId, file(userId, nodeUid))
             decryptedFile(userId, nodeUid).delete()
         }
 
-        /** Drops stale partial downloads and completed files that no longer belong to a known node. */
+        /**
+         * Drops stale partial downloads and completed files that no longer belong to a known node;
+         * [retainedNames] are file names without extension, as [AtomicFileStore.safeName] produces them.
+         */
         fun removeUnreferenced(
             userId: String,
-            retainedNodeUids: Collection<String>,
+            retainedNames: Set<String>,
         ) {
-            val retainedNames = retainedNodeUids.mapTo(mutableSetOf(), AtomicFileStore::safeName)
             listOf(directory(userId), decryptedDirectory(userId)).forEach { directory ->
                 directory.listFiles()?.forEach { file ->
                     if (isStalePartial(file) ||
@@ -134,16 +162,19 @@ internal class ProtonOriginalStore
                     }
                 }
             }
+            trackedBytes.remove(userId)
         }
 
         /** Removes every original of one user; false when something could not be deleted. */
         fun clear(userId: String): Boolean {
+            trackedBytes.remove(userId)
             val originalsDeleted = directory(userId).deleteRecursively()
             val decryptedDeleted = decryptedDirectory(userId).deleteRecursively()
             return originalsDeleted && decryptedDeleted
         }
 
         fun retainOnly(userId: String?) {
+            trackedBytes.keys.removeAll { key -> key != userId }
             val retainedName = userId?.let(AtomicFileStore::safeName)
             originals.listFiles()?.filter { it.name != retainedName }?.forEach { directory ->
                 check(directory.deleteRecursively()) { "Could not remove orphaned Proton originals" }
@@ -153,8 +184,9 @@ internal class ProtonOriginalStore
             }
         }
 
+        /** Runs once per process; every later call returns at once. */
         @Synchronized
-        private fun wipeStaleDecryptedCopies() {
+        fun wipeStaleDecryptedCopies() {
             if (decryptedWiped) return
             decrypted.deleteRecursively()
             decrypted.mkdirs()
@@ -172,6 +204,8 @@ internal class ProtonOriginalStore
                     ?.filter(File::isFile)
                     ?.map { file -> ProtonOriginalTrimPolicy.Entry(file.name, file.length(), file.lastModified()) }
                     .orEmpty()
+            var remainingBytes = entries.sumOf(ProtonOriginalTrimPolicy.Entry::sizeBytes)
+            val sizes = entries.associate { entry -> entry.name to entry.sizeBytes }
             ProtonOriginalTrimPolicy
                 .select(
                     entries,
@@ -179,7 +213,27 @@ internal class ProtonOriginalStore
                     nowMillis = clock.nowMillis(),
                     stalePartTtlMillis = ProtonStorageLayout.STALE_PART_TTL_MILLIS,
                     keepName = keepName,
-                ).forEach { name -> File(directory, name).delete() }
+                ).forEach { name ->
+                    if (File(directory, name).delete()) remainingBytes -= sizes.getValue(name)
+                }
+            trackedBytes[userId] = remainingBytes
+        }
+
+        private fun directoryBytes(userId: String): Long =
+            directory(userId)
+                .listFiles()
+                ?.sumOf { file -> if (file.isFile) file.length() else 0L }
+                ?: 0L
+
+        /** Deletes one original and keeps the tracked total in step; a miss costs nothing. */
+        private fun deleteTracked(
+            userId: String,
+            file: File,
+        ) {
+            val size = file.length()
+            if (file.delete() && size > 0L) {
+                trackedBytes.computeIfPresent(userId) { _, total -> (total - size).coerceAtLeast(0L) }
+            }
         }
 
         private fun expireFiles(

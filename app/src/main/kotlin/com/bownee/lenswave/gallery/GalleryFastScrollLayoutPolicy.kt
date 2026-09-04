@@ -53,6 +53,17 @@ internal object GalleryFastScrollLayoutPolicy {
         return GalleryFastScrollTarget(position, offsetFraction)
     }
 
+    /**
+     * How much longer the handle stays before fading, given when the list last moved: zero once
+     * [hideDelay] has passed since [lastScrollAt]. Lets a single pending hide callback re-check
+     * instead of being cancelled and re-posted on every scroll event.
+     */
+    fun remainingHideDelay(
+        lastScrollAt: Long,
+        now: Long,
+        hideDelay: Long,
+    ): Long = (lastScrollAt + hideDelay - now).coerceIn(0L, hideDelay)
+
     /** Space below the last row so it clears the navigation bar and the selection bar when shown. */
     fun footerHeight(
         selectionBarVisible: Boolean,

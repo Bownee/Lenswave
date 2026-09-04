@@ -30,6 +30,15 @@ class ProtonThumbnailWorkPolicyTest {
     }
 
     @Test
+    fun `the previews-allowed answer is reused for a few seconds`() {
+        val cache = ProtonThumbnailWorkPolicy.PREVIEWS_ALLOWED_CACHE_MILLIS
+        assertFalse(ProtonThumbnailWorkPolicy.isPreviewsAllowedFresh(checkedAtMillis = null, nowMillis = 10_000L))
+        assertTrue(ProtonThumbnailWorkPolicy.isPreviewsAllowedFresh(checkedAtMillis = 10_000L, nowMillis = 10_000L))
+        assertTrue(ProtonThumbnailWorkPolicy.isPreviewsAllowedFresh(10_000L, nowMillis = 10_000L + cache - 1))
+        assertFalse(ProtonThumbnailWorkPolicy.isPreviewsAllowedFresh(10_000L, nowMillis = 10_000L + cache))
+    }
+
+    @Test
     fun `previews wait for the charger unless the app is on screen`() {
         assertTrue(ProtonThumbnailWorkPolicy.previewsAllowed(charging = true, appVisible = false))
         assertTrue(ProtonThumbnailWorkPolicy.previewsAllowed(charging = false, appVisible = true))

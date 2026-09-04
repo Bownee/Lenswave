@@ -2,6 +2,7 @@ package com.bownee.lenswave.viewer
 
 import android.content.Context
 import android.graphics.Color
+import android.graphics.drawable.Drawable
 import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
@@ -256,45 +257,40 @@ internal class PhotoViewerScreen(
         }
     }
 
-    /** Appends one metadata row to the details sheet; rows with a location open the map on tap. */
-    fun addDetailsRow(
-        item: PhotoMetadataItem,
+    /** One background state shared by every details row; each row draws its own mutable copy. */
+    private val detailsRowBackground: Drawable by lazy {
+        UiStyle.rippled(UiStyle.rounded(context, Color.TRANSPARENT, 14))
+    }
+
+    /**
+     * Shows [items] as the rows of the details sheet, rebinding the rows left from the previous
+     * photo and creating more only when a photo has more rows than any before it; surplus rows are
+     * hidden. Rows with a location open the map on tap.
+     */
+    fun bindDetailsRows(
+        items: List<PhotoMetadataItem>,
         onOpenMap: (PhotoMetadataAction.OpenMap) -> Unit,
     ) {
+        items.forEachIndexed { index, item ->
+            val row = detailsContent.getChildAt(index) as? DetailsRow ?: newDetailsRow()
+            row.bind(item, onOpenMap)
+        }
+        for (index in items.size until detailsContent.childCount) {
+            detailsContent.getChildAt(index).visibility = View.GONE
+        }
+    }
+
+    /** Hides every row so the sheet is empty for the next photo while keeping the views to rebind. */
+    fun hideDetailsRows() {
+        for (index in 0 until detailsContent.childCount) detailsContent.getChildAt(index).visibility = View.GONE
+    }
+
+    private fun newDetailsRow(): DetailsRow {
+        val row = DetailsRow(context)
+        row.background = detailsRowBackground.constantState?.newDrawable(context.resources)?.mutate()
+            ?: UiStyle.rippled(UiStyle.rounded(context, Color.TRANSPARENT, 14))
         detailsContent.addView(
-            LinearLayout(context).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(context.dp(12), context.dp(10), context.dp(12), context.dp(10))
-                background = UiStyle.rippled(UiStyle.rounded(context, Color.TRANSPARENT, 14))
-                addView(
-                    TextView(context).apply {
-                        text = item.label
-                        textSize = 12f
-                        typeface = UiStyle.medium
-                        setTextColor(UiStyle.muted)
-                    },
-                )
-                addView(
-                    TextView(context).apply {
-                        text = item.value
-                        textSize = 15.5f
-                        setTextColor(UiStyle.text)
-                        setPadding(0, context.dp(3), 0, 0)
-                    },
-                )
-                if (item.action is PhotoMetadataAction.OpenMap) {
-                    addView(
-                        TextView(context).apply {
-                            setText(R.string.open_in_maps)
-                            textSize = 13f
-                            setTextColor(UiStyle.accent)
-                            setPadding(0, context.dp(7), 0, context.dp(2))
-                            setOnClickListener { onOpenMap(item.action) }
-                        },
-                    )
-                    setOnClickListener { onOpenMap(item.action) }
-                }
-            },
+            row,
             LinearLayout
                 .LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
@@ -303,6 +299,62 @@ internal class PhotoViewerScreen(
                     bottomMargin = context.dp(2)
                 },
         )
+        return row
+    }
+
+    private class DetailsRow(
+        context: Context,
+    ) : LinearLayout(context) {
+        private val label =
+            TextView(context).apply {
+                textSize = 12f
+                typeface = UiStyle.medium
+                setTextColor(UiStyle.muted)
+            }
+        private val value =
+            TextView(context).apply {
+                textSize = 15.5f
+                setTextColor(UiStyle.text)
+                setPadding(0, context.dp(3), 0, 0)
+            }
+        private val mapLink =
+            TextView(context).apply {
+                setText(R.string.open_in_maps)
+                textSize = 13f
+                setTextColor(UiStyle.accent)
+                setPadding(0, context.dp(7), 0, context.dp(2))
+                visibility = View.GONE
+            }
+
+        init {
+            orientation = VERTICAL
+            setPadding(context.dp(12), context.dp(10), context.dp(12), context.dp(10))
+            addView(label)
+            addView(value)
+            addView(mapLink)
+        }
+
+        fun bind(
+            item: PhotoMetadataItem,
+            onOpenMap: (PhotoMetadataAction.OpenMap) -> Unit,
+        ) {
+            label.text = item.label
+            value.text = item.value
+            val action = item.action as? PhotoMetadataAction.OpenMap
+            if (action != null) {
+                val open = OnClickListener { onOpenMap(action) }
+                mapLink.setOnClickListener(open)
+                setOnClickListener(open)
+                mapLink.visibility = View.VISIBLE
+            } else {
+                mapLink.setOnClickListener(null)
+                setOnClickListener(null)
+                mapLink.visibility = View.GONE
+            }
+            mapLink.isClickable = action != null
+            isClickable = action != null
+            visibility = View.VISIBLE
+        }
     }
 
     private fun buildDetailsSheet(): DetailsSheet {

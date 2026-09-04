@@ -54,6 +54,12 @@ internal object ProtonBackgroundBatchPolicy {
         )
 
     /**
+     * Pending work whose earliest retry is due now and that still could not be claimed can only
+     * be held by claims nobody settled or released; the background sync is the sole claimer.
+     */
+    fun hasStaleClaims(idle: ProtonThumbnailQueueStep.Idle): Boolean = idle.hasPending && idle.retryAfterMillis == 0L
+
+    /**
      * How long an idle run should sleep before claiming again instead of ending and leaving the
      * restart to WorkManager, whose retries cannot start in the background. Null means end the run.
      */

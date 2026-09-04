@@ -13,6 +13,7 @@ import java.io.InputStream
 import java.nio.ByteBuffer
 import java.security.KeyStore
 import java.security.SecureRandom
+import java.util.concurrent.ConcurrentHashMap
 import javax.crypto.Cipher
 import javax.crypto.CipherInputStream
 import javax.crypto.CipherOutputStream
@@ -102,10 +103,16 @@ class SecureFileStore(
         }
     }
 
+    /**
+     * Decrypts [encrypted] into [target] through a temporary file. [shouldContinue] is asked before
+     * every chunk; once it returns false the copy stops with a [CopyInterruptedException], nothing
+     * is committed and the partial plaintext is removed.
+     */
     fun decryptFile(
         scope: String,
         encrypted: File,
         target: File,
+        shouldContinue: () -> Boolean = { true },
     ) {
         target.parentFile?.mkdirs()
         val temporary = File.createTempFile("${target.name}.", ".part", target.parentFile)
@@ -113,7 +120,9 @@ class SecureFileStore(
             FileInputStream(encrypted).use { rawInput ->
                 val cipher = readHeader(scope, rawInput)
                 CipherInputStream(BufferedInputStream(rawInput), cipher).use { decryptedInput ->
-                    BufferedOutputStream(FileOutputStream(temporary)).use(decryptedInput::copyTo)
+                    BufferedOutputStream(FileOutputStream(temporary)).use { output ->
+                        InterruptibleCopy.copy(decryptedInput, output, shouldContinue)
+                    }
                 }
             }
             AtomicFileStore.commit(temporary, target, "Could not materialize encrypted photo")
@@ -123,8 +132,8 @@ class SecureFileStore(
     }
 
     fun deleteKey(scope: String) {
-        synchronized(keyStoreLock) {
-            val alias = alias(scope)
+        val alias = alias(scope)
+        synchronized(lockFor(alias)) {
             keyStore.deleteEntry(alias)
             keyReferences.remove(alias)
             dataKeys.remove(alias)
@@ -180,10 +189,11 @@ class SecureFileStore(
         val ivSize = buffer.get().toInt() and 0xff
         require(ivSize in 12..16 && buffer.remaining() > ivSize) { "Encrypted file IV is invalid" }
         val iv = ByteArray(ivSize).also(buffer::get)
-        val encrypted = ByteArray(buffer.remaining()).also(buffer::get)
         val cipher = Cipher.getInstance(TRANSFORMATION)
         cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_BITS, iv))
-        return cipher.doFinal(encrypted)
+        // The ciphertext is decrypted straight out of the payload; copying a preview-sized
+        // array first only to hand it to doFinal doubled the allocation per read.
+        return cipher.doFinal(payload, buffer.position(), buffer.remaining())
     }
 
     private fun keyForVersion(
@@ -205,10 +215,14 @@ class SecureFileStore(
         runCatching { AtomicFileStore.write(file, encrypt(scope, plaintext), "Could not upgrade encrypted file") }
     }
 
-    /** The per-scope data key, unwrapped once per process; created and wrapped on first use. */
-    private fun dataKey(scope: String): SecretKey =
-        synchronized(keyStoreLock) {
-            val alias = alias(scope)
+    /**
+     * The per-scope data key, unwrapped once per process; created and wrapped on first use.
+     * The lock is per alias, so the Keystore round trip for one scope never stalls another.
+     */
+    private fun dataKey(scope: String): SecretKey {
+        val alias = alias(scope)
+        dataKeys[alias]?.let { return it }
+        return synchronized(lockFor(alias)) {
             dataKeys[alias] ?: run {
                 val file = wrappedKeyFile(alias)
                 val raw =
@@ -223,6 +237,7 @@ class SecureFileStore(
                 SecretKeySpec(raw, KeyProperties.KEY_ALGORITHM_AES).also { key -> dataKeys[alias] = key }
             }
         }
+    }
 
     private fun wrap(
         scope: String,
@@ -257,9 +272,10 @@ class SecureFileStore(
 
     private fun wrappedKeyFile(alias: String): File = File(keyDirectory, "$alias.key")
 
-    private fun keystoreKey(scope: String): SecretKey =
-        synchronized(keyStoreLock) {
-            val alias = alias(scope)
+    private fun keystoreKey(scope: String): SecretKey {
+        val alias = alias(scope)
+        keyReferences[alias]?.let { return it }
+        return synchronized(lockFor(alias)) {
             keyReferences[alias] ?: (
                 (keyStore.getKey(alias, null) as? SecretKey) ?: KeyGenerator
                     .getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
@@ -278,8 +294,12 @@ class SecureFileStore(
                     }.generateKey()
             ).also { keyReferences[alias] = it }
         }
+    }
 
     private fun alias(scope: String): String = ALIAS_PREFIX + AtomicFileStore.safeName(scope)
+
+    /** One monitor per alias; a lock is never removed, and there are only a handful of scopes. */
+    private fun lockFor(alias: String): Any = aliasLocks.computeIfAbsent(alias) { Any() }
 
     private companion object {
         const val ANDROID_KEYSTORE = "AndroidKeyStore"
@@ -291,11 +311,11 @@ class SecureFileStore(
         val MAGIC = byteArrayOf(0x4c, 0x57, 0x45, 0x46)
         const val LEGACY_VERSION: Byte = 1
         const val VERSION: Byte = 2
-        val keyStoreLock = Any()
         val keyStore: KeyStore by lazy {
             KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
         }
-        val keyReferences = mutableMapOf<String, SecretKey>()
-        val dataKeys = mutableMapOf<String, SecretKey>()
+        val aliasLocks = ConcurrentHashMap<String, Any>()
+        val keyReferences = ConcurrentHashMap<String, SecretKey>()
+        val dataKeys = ConcurrentHashMap<String, SecretKey>()
     }
 }

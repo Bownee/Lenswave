@@ -3,10 +3,15 @@ package com.bownee.lenswave.proton
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.util.LruCache
+import androidx.exifinterface.media.ExifInterface
+import com.bownee.lenswave.ExifOrientation
 import com.bownee.lenswave.LenswaveClock
+import com.bownee.lenswave.metadata.ImageOrientationPolicy
 import com.bownee.lenswave.storage.AtomicFileStore
 import com.bownee.lenswave.storage.SecureFileStore
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.io.ByteArrayInputStream
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
@@ -17,8 +22,8 @@ import kotlin.math.max
  * Encrypted on-disk store for Proton's screen-sized "preview" rendition (about 1920 px).
  *
  * Previews are a few hundred kilobytes each and are only ever shown one at a time in the viewer,
- * so unlike [ProtonThumbnailStore] there is no decoded-bitmap cache: each read decrypts the file
- * and decodes it down-sampled to the caller's display size.
+ * so the decoded-bitmap cache is tiny: the current photo and its neighbours. Any other read decrypts
+ * the file and decodes it down-sampled to the caller's display size.
  */
 @Singleton
 internal class ProtonPreviewStore
@@ -34,15 +39,37 @@ internal class ProtonPreviewStore
         /** Stored-preview counts per user; listing a large directory on every progress tick is too slow. */
         private val counts = ConcurrentHashMap<String, Int>()
 
+        /**
+         * The last few decoded previews, so a swipe back (or the same photo opened again) skips
+         * the decrypt and decode. Sized in kilobytes against a share of the heap: a screen-sized
+         * ARGB preview is about 11 MB, so counting entries would pin tens of megabytes for good.
+         * Evicted bitmaps are not recycled: the viewer may still be drawing one as its
+         * placeholder, and the garbage collector reclaims them soon enough.
+         */
+        private val decoded =
+            object : LruCache<PreviewKey, Bitmap>(decodedCacheSizeKilobytes()) {
+                override fun sizeOf(
+                    key: PreviewKey,
+                    value: Bitmap,
+                ): Int = (value.byteCount / 1_024).coerceAtLeast(1)
+            }
+
         fun exists(
             userId: String,
             nodeUid: String,
-        ): Boolean =
-            file(userId, nodeUid).let { file ->
-                (file.isFile && file.length() > 0L).also { exists ->
-                    if (!exists) file.delete()
-                }
-            }
+        ): Boolean = isStoredPreview(file(userId, nodeUid))
+
+        /**
+         * File names (without extension) of every stored preview, from a single directory listing.
+         * A zero-length file is excluded exactly as [exists] and [count] exclude it, so the timeline
+         * never marks a preview as stored that the viewer cannot load and the queue would never
+         * fetch again.
+         */
+        fun storedNames(userId: String): Set<String> =
+            directory(userId)
+                .listFiles()
+                ?.mapNotNullTo(HashSet()) { file -> file.nameWithoutExtension.takeIf { isStoredPreview(file) } }
+                .orEmpty()
 
         /**
          * Stores the bytes exactly as Proton delivered them after checking that they carry a
@@ -55,6 +82,7 @@ internal class ProtonPreviewStore
         ) {
             require(ProtonPreviewCodec.isDecodable(bytes)) { "Proton returned an invalid preview image" }
             synchronized(lock(userId, nodeUid)) {
+                dropDecoded { key -> key.userId == userId && key.nodeUid == nodeUid }
                 val target = file(userId, nodeUid)
                 val existed = target.isFile && target.length() > 0L
                 target.parentFile?.mkdirs()
@@ -64,15 +92,25 @@ internal class ProtonPreviewStore
             }
         }
 
+        /** The decoded preview when it is still in memory from a recent [load]; never touches disk. */
+        fun peek(
+            userId: String,
+            nodeUid: String,
+            targetLongEdge: Int,
+        ): Bitmap? = decoded.get(PreviewKey(userId, nodeUid, targetLongEdge))?.takeUnless(Bitmap::isRecycled)
+
         /** Decrypts and decodes the preview so its longer edge is at least [targetLongEdge] pixels. */
         fun load(
             userId: String,
             nodeUid: String,
             targetLongEdge: Int,
-        ): Bitmap? =
-            synchronized(lock(userId, nodeUid)) {
+        ): Bitmap? {
+            peek(userId, nodeUid, targetLongEdge)?.let { return it }
+            return synchronized(lock(userId, nodeUid)) {
+                peek(userId, nodeUid, targetLongEdge)?.let { return it }
                 val file = file(userId, nodeUid)
-                if (!file.isFile || file.length() <= 0L) {
+                if (!isStoredPreview(file)) {
+                    // A zero-length file was never counted (see [count]), so there is nothing to adjust.
                     file.delete()
                     return null
                 }
@@ -91,14 +129,17 @@ internal class ProtonPreviewStore
                     return null
                 }
                 file.setLastModified(clock.nowMillis())
+                decoded.put(PreviewKey(userId, nodeUid, targetLongEdge), bitmap)
                 bitmap
             }
+        }
 
         fun remove(
             userId: String,
             nodeUid: String,
         ) {
             synchronized(lock(userId, nodeUid)) {
+                dropDecoded { key -> key.userId == userId && key.nodeUid == nodeUid }
                 val target = file(userId, nodeUid)
                 val existed = target.isFile && target.length() > 0L
                 target.delete()
@@ -106,39 +147,73 @@ internal class ProtonPreviewStore
             }
         }
 
+        /** Lists inside the map's lock so a concurrent write or removal adjusts the count rather than being dropped. */
         fun count(userId: String): Int =
-            counts.getOrPut(userId) {
-                directory(userId)
-                    .listFiles()
-                    ?.count { file -> file.isFile && file.extension == EXTENSION && file.length() > 0L }
-                    ?: 0
+            counts.computeIfAbsent(userId) {
+                directory(userId).listFiles()?.count(::isStoredPreview) ?: 0
             }
 
+        /** Drops abandoned partial writes and zero-length files, which can never be loaded or re-fetched otherwise. */
         fun maintain(userId: String) {
-            directory(userId).listFiles()?.filter(::isStalePartial)?.forEach(File::delete)
-            counts.remove(userId)
+            sweep(userId) { file -> isStalePartial(file) || isEmptyRendition(file) }
         }
 
+        /** [retainedNames] are file names without extension, as [AtomicFileStore.safeName] produces them. */
         fun removeUnreferenced(
             userId: String,
-            retainedNodeUids: Collection<String>,
+            retainedNames: Set<String>,
         ) {
-            val retainedNames = retainedNodeUids.mapTo(mutableSetOf(), AtomicFileStore::safeName)
-            directory(userId).listFiles()?.forEach { file ->
-                if (isStalePartial(file) || (file.extension != "part" && file.nameWithoutExtension !in retainedNames)) {
-                    file.delete()
+            sweep(userId) { file ->
+                isStalePartial(file) ||
+                    isEmptyRendition(file) ||
+                    (file.extension != "part" && file.nameWithoutExtension !in retainedNames)
+            }
+        }
+
+        /**
+         * One directory listing serves the deletion and the refreshed count, so the next
+         * [count] does not list the directory again. Only the previews actually deleted leave
+         * the decoded cache: dropping the whole user would evict the preview the viewer is
+         * showing every time housekeeping runs.
+         */
+        private fun sweep(
+            userId: String,
+            prunable: (File) -> Boolean,
+        ) {
+            val files = directory(userId).listFiles().orEmpty()
+            var remaining = 0
+            val deletedNames = HashSet<String>()
+            files.forEach { file ->
+                val stored = isStoredPreview(file)
+                if (prunable(file) && file.delete()) {
+                    if (stored) deletedNames += file.nameWithoutExtension
+                } else if (stored) {
+                    remaining++
                 }
             }
-            counts.remove(userId)
+            counts[userId] = remaining
+            if (deletedNames.isNotEmpty()) {
+                dropDecoded { key -> key.userId == userId && AtomicFileStore.safeName(key.nodeUid) in deletedNames }
+            }
         }
 
         /** Drops memoized state for a user whose directory was deleted. */
         fun forget(userId: String) {
             counts.remove(userId)
+            dropDecoded { key -> key.userId == userId }
         }
 
         fun retainCountsFor(userId: String?) {
             counts.keys.removeAll { key -> key != userId }
+            dropDecoded { key -> key.userId != userId }
+        }
+
+        private fun dropDecoded(matches: (PreviewKey) -> Boolean) {
+            decoded
+                .snapshot()
+                .keys
+                .filter(matches)
+                .forEach(decoded::remove)
         }
 
         private fun adjustCount(
@@ -170,9 +245,32 @@ internal class ProtonPreviewStore
                         clock.nowMillis() - file.lastModified() > ProtonStorageLayout.STALE_PART_TTL_MILLIS
                 )
 
+        /** A completed file with no bytes; partial writes are left to [isStalePartial]. */
+        private fun isEmptyRendition(file: File): Boolean =
+            file.extension != "part" && file.isFile && file.length() == 0L
+
+        /** The single definition of "stored" shared by [exists], [count], [storedNames] and the sweeps. */
+        private fun isStoredPreview(file: File): Boolean =
+            file.extension == EXTENSION && file.isFile && file.length() > 0L
+
+        private data class PreviewKey(
+            val userId: String,
+            val nodeUid: String,
+            val targetLongEdge: Int,
+        )
+
         private companion object {
             const val EXTENSION = "preview"
             const val LOCK_COUNT = 32
+
+            /**
+             * Room for the photo on screen and a neighbour or two: a sixteenth of the heap, held
+             * between one large preview and a handful so a small heap still gets a swipe back.
+             */
+            fun decodedCacheSizeKilobytes(): Int =
+                (Runtime.getRuntime().maxMemory() / 1_024 / 16)
+                    .coerceIn(12L * 1_024, 40L * 1_024)
+                    .toInt()
         }
     }
 
@@ -201,6 +299,11 @@ internal object ProtonPreviewCodec {
         return bounds.outWidth > 0 && bounds.outHeight > 0
     }
 
+    /**
+     * Decodes the preview the way it is meant to be seen: the EXIF orientation is applied, so the
+     * bitmap has the same axes as the oriented original it stands in for and the viewer can hand
+     * its zoom geometry over without a jump.
+     */
     fun decode(
         bytes: ByteArray,
         targetLongEdge: Int,
@@ -214,6 +317,16 @@ internal object ProtonPreviewCodec {
                 inPreferredConfig = Bitmap.Config.ARGB_8888
                 inSampleSize = ProtonPreviewDecodePolicy.sampleSize(bounds.outWidth, bounds.outHeight, targetLongEdge)
             }
-        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+        val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options) ?: return null
+        val orientation =
+            runCatching {
+                ExifInterface(ByteArrayInputStream(bytes))
+                    .getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+            }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
+        return ExifOrientation.apply(
+            decoded,
+            ImageOrientationPolicy.effectiveOrientation(bounds.outMimeType, orientation),
+            true,
+        )
     }
 }

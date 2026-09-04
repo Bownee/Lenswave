@@ -56,13 +56,12 @@ internal class GalleryStickyDateController(
     }
 
     private fun render() {
-        val childBottoms = (0 until list.childCount).map { index -> list.getChildAt(index).bottom }
         val position =
             firstRowBelow(
                 firstVisiblePosition = list.firstVisiblePosition,
-                childBottoms = childBottoms,
+                childCount = list.childCount,
                 headerBottom = list.paddingTop,
-            )
+            ) { index -> list.getChildAt(index).bottom }
         val label = position?.let { labelFor(it, list.headerViewsCount, adapter::dateLabelForPosition) }
         if (label == null) {
             stickyDate.visibility = View.GONE
@@ -81,9 +80,19 @@ internal class GalleryStickyDateController(
             firstVisiblePosition: Int,
             childBottoms: List<Int>,
             headerBottom: Int,
+        ): Int? = firstRowBelow(firstVisiblePosition, childBottoms.size, headerBottom, childBottoms::get)
+
+        /** As above, reading each child's bottom through [childBottom] so a frame allocates no list. */
+        inline fun firstRowBelow(
+            firstVisiblePosition: Int,
+            childCount: Int,
+            headerBottom: Int,
+            childBottom: (Int) -> Int,
         ): Int? {
-            val index = childBottoms.indexOfFirst { bottom -> bottom > headerBottom }
-            return if (index < 0) null else firstVisiblePosition + index
+            for (index in 0 until childCount) {
+                if (childBottom(index) > headerBottom) return firstVisiblePosition + index
+            }
+            return null
         }
 
         /**
