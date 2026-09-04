@@ -20,7 +20,6 @@ import androidx.core.graphics.Insets
 import androidx.core.graphics.drawable.toDrawable
 import androidx.core.view.ViewCompat
 import androidx.core.view.isNotEmpty
-import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.bownee.lenswave.R
 import com.bownee.lenswave.UiStyle
 import com.bownee.lenswave.dp
@@ -66,7 +65,7 @@ internal class GalleryScreen(
     private val emptyTitle: TextView
     private val emptyMessage: TextView
     private val emptyAction: Button
-    private val refreshLayout: SwipeRefreshLayout
+    private val refreshLayout: GalleryRefreshLayout
     private val stickyDate: TextView
     private val stickyDateController: GalleryStickyDateController
     private val selectionCount: TextView
@@ -128,10 +127,11 @@ internal class GalleryScreen(
                 adapter = this@GalleryScreen.adapter
             }
         refreshLayout =
-            SwipeRefreshLayout(activity).apply {
+            GalleryRefreshLayout(activity).apply {
                 setColorSchemeColors(UiStyle.accent)
                 setProgressBackgroundColorSchemeColor(UiStyle.surface)
                 setOnRefreshListener { actions.onRefresh() }
+                pullGate = ::startsPull
                 addView(list, UiStyle.matchParentFrame())
             }
         root.addView(refreshLayout, UiStyle.matchParentFrame())
@@ -301,6 +301,23 @@ internal class GalleryScreen(
     /** Mirrors the view model's manual refresh state; a finished refresh hides the spinner. */
     fun setRefreshing(refreshing: Boolean) {
         if (refreshLayout.isRefreshing != refreshing) refreshLayout.isRefreshing = refreshing
+    }
+
+    /** Only the thumbnail area pulls to refresh; the pinned header, filter chips and a gap below them do not. */
+    private fun startsPull(touchY: Float): Boolean {
+        val filterRowBounds =
+            if (filterRow.isShown) {
+                val top = galleryHeader.top + filterRow.top
+                top until top + filterRow.height
+            } else {
+                null
+            }
+        return GalleryPullToRefreshPolicy.startsPull(
+            touchY,
+            stickyHeader.height,
+            filterRowBounds,
+            gapBelowFilterRow = activity.dp(PULL_GAP_BELOW_CHIPS_DP),
+        )
     }
 
     private fun layoutBelowHeader() {
@@ -701,6 +718,9 @@ internal class GalleryScreen(
         private const val TITLE_ROW_HEIGHT_DP = 40
         private const val CHIP_HEIGHT_DP = 38
         private const val REFRESH_SPINNER_END_DP = 56
+
+        /** Pulls that begin this close under the filter chips do not refresh. */
+        private const val PULL_GAP_BELOW_CHIPS_DP = 18
         private const val SCROLL_TO_TOP_JUMP_ROWS = 12
     }
 }
