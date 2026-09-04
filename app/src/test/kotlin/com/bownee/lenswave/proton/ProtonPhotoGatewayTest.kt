@@ -538,6 +538,12 @@ class ProtonPhotoGatewayTest {
         ) {
         }
 
+        override fun removeAlbumPhotos(
+            userId: String,
+            nodeUids: Collection<String>,
+        ) {
+        }
+
         override fun loadThumbnail(
             userId: String,
             nodeUid: String,

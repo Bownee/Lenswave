@@ -53,6 +53,7 @@ internal interface ProtonTimelineCache {
         remoteNodeUids: Collection<String>,
     )
 
+    /** Drops [nodeUids] from the timeline and tag indexes and deletes their renditions; album indexes are [ProtonAlbumCache]'s. */
     fun removePhotos(
         userId: String,
         nodeUids: Collection<String>,
@@ -87,6 +88,12 @@ internal interface ProtonAlbumCache {
     fun reconcileAlbums(
         userId: String,
         remoteAlbumUids: Collection<String>,
+    )
+
+    /** Drops [nodeUids] from every album-photo index and refreshes the counts in the albums index. */
+    fun removeAlbumPhotos(
+        userId: String,
+        nodeUids: Collection<String>,
     )
 
     fun thumbnailExists(

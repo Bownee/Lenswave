@@ -27,8 +27,18 @@ internal class ProtonAlbumRepository
         private val cache: ProtonAlbumCache,
         private val snapshotSync: ProtonSnapshotSync,
     ) {
+        /** One albums sync and one album-photo sync at a time; held across their enumerations. */
         private val albumsSyncMutex = Mutex()
         private val albumPhotosSyncMutex = Mutex()
+
+        /**
+         * Serializes every write to the album files and to the states that mirror them: a sync
+         * commit (with its stamp and publish) and a removal. It is the innermost lock, taken
+         * after a sync mutex and never held across an enumeration, so a trash never waits on a
+         * network round trip; a sync that enumerated before the trash narrows its listing at
+         * commit time instead (see [ProtonPhotoReconciliation.withoutRemovedSince]).
+         */
+        private val mutationMutex = Mutex()
         private val mutableAlbumsState = MutableStateFlow(ProtonAlbumsState())
         private val mutableAlbumPhotosState = MutableStateFlow(ProtonAlbumPhotosState())
 
@@ -109,6 +119,7 @@ internal class ProtonAlbumRepository
                 publishResult = { albums -> emitAlbums(userId, albums, syncing = false) },
                 publishCancelled = { updateAlbums(userId) { state -> state.copy(syncing = false) } },
                 publishFailed = { updateAlbums(userId) { state -> state.copy(syncing = false, refreshFailed = true) } },
+                commitGate = { commit -> mutationMutex.withLock { commit() } },
             )
         }
 
@@ -144,8 +155,17 @@ internal class ProtonAlbumRepository
                         .sortedByDescending(ProtonGalleryPhoto::captureTimeEpochSeconds)
                 },
                 commit = { photos ->
-                    cache.writeAlbumPhotos(userId.id, album.nodeUid, photos)
-                    photos
+                    // A photo trashed while the album was enumerating has left the published
+                    // listing; the enumerated one must not bring it back.
+                    val retained =
+                        ProtonPhotoReconciliation.withoutRemovedSince(
+                            enumerated = photos,
+                            existing = existing,
+                            published = publishedAlbumPhotos(userId, album),
+                            nodeUid = ProtonGalleryPhoto::nodeUid,
+                        )
+                    cache.writeAlbumPhotos(userId.id, album.nodeUid, retained)
+                    retained
                 },
                 publishResult = { photos ->
                     emitAlbumPhotos(userId, album, photos, hasLoaded = true, syncing = false)
@@ -160,8 +180,18 @@ internal class ProtonAlbumRepository
                         state.copy(syncing = false, refreshFailed = true)
                     }
                 },
+                commitGate = { commit -> mutationMutex.withLock { commit() } },
             )
         }
+
+        /** The album-photo listing on screen, when it is still [album]'s; null when another album (or account) took over. */
+        private fun publishedAlbumPhotos(
+            userId: UserId,
+            album: ProtonAlbumReference,
+        ): List<ProtonGalleryPhoto>? =
+            mutableAlbumPhotosState.value
+                .takeIf { state -> state.userId == userId.id && state.albumUid == album.nodeUid }
+                ?.photos
 
         internal fun markCoverThumbnailsAvailable(
             userId: UserId,
@@ -231,31 +261,29 @@ internal class ProtonAlbumRepository
             }
         }
 
+        /**
+         * Applies a trash Proton has accepted to every album index and to the album on screen.
+         * Only the mutation mutex is taken: a sync enumerating right now keeps running and
+         * narrows its listing when it commits, so the trash never waits on the network.
+         */
         internal suspend fun removePhotos(
             userId: UserId,
             nodeUids: Set<String>,
         ) {
-            albumsSyncMutex.withLock {
-                albumPhotosSyncMutex.withLock albumPhotosLock@{
-                    if (nodeUids.isEmpty()) return@albumPhotosLock
-                    val current = mutableAlbumPhotosState.value
-                    if (current.userId == userId.id && current.albumUid != null) {
-                        // Both sync mutexes are held, so only thumbnail marks can land between
-                        // the file write and the publish; the publish filters the state it
-                        // replaces so those marks survive.
-                        val remaining = current.photos.filterNot { it.nodeUid in nodeUids }
-                        cache.writeAlbumPhotos(userId.id, current.albumUid, remaining)
-                        updateAlbumPhotos(userId, current.albumUid) { state ->
-                            state.copy(photos = state.photos.filterNot { it.nodeUid in nodeUids })
-                        }
-                    }
-                    // ProtonPhotoCache removes the nodes from every album index and reconciles all counts.
-                    // Publish that complete snapshot so unopened albums cannot retain stale counts in memory.
-                    // A snapshot that cannot be read right now keeps the published list: a blank
-                    // Albums tab over a transient read failure would be worse than a stale count.
-                    cache.readAlbumsSnapshot(userId.id)?.let { updatedAlbums ->
-                        updateAlbums(userId) { state -> state.copy(albums = updatedAlbums) }
-                    }
+            if (nodeUids.isEmpty()) return
+            mutationMutex.withLock {
+                cache.removeAlbumPhotos(userId.id, nodeUids)
+                mutableAlbumPhotosState.update { state ->
+                    if (state.userId != userId.id) return@update state
+                    val remaining = state.photos.filterNot { it.nodeUid in nodeUids }
+                    if (remaining.size == state.photos.size) state else state.copy(photos = remaining)
+                }
+                // The cache reconciled every album count; publish that snapshot so unopened albums
+                // cannot keep stale counts in memory. One that cannot be read right now keeps the
+                // published list: a blank Albums tab over a transient read failure would be worse
+                // than a stale count.
+                cache.readAlbumsSnapshot(userId.id)?.let { updatedAlbums ->
+                    updateAlbums(userId) { state -> state.copy(albums = updatedAlbums) }
                 }
             }
         }

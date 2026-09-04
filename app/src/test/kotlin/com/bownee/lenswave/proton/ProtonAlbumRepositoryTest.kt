@@ -1,26 +1,40 @@
 package com.bownee.lenswave.proton
 
 import com.bownee.lenswave.LenswaveClock
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import me.proton.core.domain.entity.UserId
 import me.proton.drive.sdk.ProgressUpdate
 import me.proton.drive.sdk.ProtonPhotosClient
+import me.proton.drive.sdk.entity.AlbumItem
+import me.proton.drive.sdk.entity.NodeUid
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.lang.reflect.Proxy
 import java.nio.channels.WritableByteChannel
+import java.time.Instant
 
-/** Drives the repository over a fake album cache; the SDK client answers only the album listings, and with nothing. */
+/**
+ * Drives the repository over a fake album cache; the SDK client lists no albums and answers an
+ * album enumeration only once the test releases it.
+ */
+@OptIn(ExperimentalCoroutinesApi::class)
 class ProtonAlbumRepositoryTest {
     private val cache = FakeAlbumCache()
+    private val clients = FakeClientProvider()
     private val failures = mutableListOf<Pair<String, Throwable>>()
     private val snapshotSync =
         ProtonSnapshotSync(ProtonSnapshotCoordinator(NeverSynced, FakeClock())) { operation, error ->
             failures += operation to error
         }
-    private val repository = ProtonAlbumRepository(FakeClientProvider(), cache, snapshotSync)
+    private val repository = ProtonAlbumRepository(clients, cache, snapshotSync)
 
     @Test
     fun `a removal keeps the published albums when the snapshot cannot be read right now`() =
@@ -63,6 +77,41 @@ class ProtonAlbumRepositoryTest {
                     .map(ProtonGalleryPhoto::nodeUid),
             )
             assertEquals(listOf("y"), cache.albumPhotos.getValue(USER.id to "al1").map(ProtonGalleryPhoto::nodeUid))
+        }
+
+    @Test
+    fun `a photo trashed while the album was enumerating is not written or published again`() =
+        runTest {
+            val album = ProtonAlbumReference("al1", "Album")
+            cache.albums[USER.id] = listOf(album("al1", photoCount = 2L))
+            cache.albumPhotos[USER.id to "al1"] = listOf(photo("x", 2L), photo("y", 1L))
+            repository.loadCached(USER)
+            repository.loadCachedAlbum(USER, album)
+            clients.albumPhotos = listOf("x" to 2L, "y" to 1L, "z" to 3L)
+
+            val sync = launch { repository.syncAlbumPhotoMetadata(USER, album, forceRemote = false) }
+            runCurrent()
+            assertTrue("the enumeration must be in flight", clients.enumerating.isCompleted)
+
+            repository.removePhotos(USER, setOf("x"))
+
+            assertEquals(
+                listOf("y"),
+                repository.albumPhotosState.value.photos
+                    .map(ProtonGalleryPhoto::nodeUid),
+            )
+            clients.release.complete(Unit)
+            sync.join()
+
+            val published = repository.albumPhotosState.value
+            assertEquals(listOf("z", "y"), published.photos.map(ProtonGalleryPhoto::nodeUid))
+            assertTrue(published.hasLoaded)
+            assertFalse(published.syncing)
+            assertEquals(
+                listOf("z", "y"),
+                cache.albumPhotos.getValue(USER.id to "al1").map(ProtonGalleryPhoto::nodeUid),
+            )
+            assertTrue(failures.isEmpty())
         }
 
     @Test
@@ -118,18 +167,46 @@ class ProtonAlbumRepositoryTest {
         override fun nowMillis(): Long = 1_000_000_000L
     }
 
-    /** A proxy stands in for the wide SDK interface; it lists no albums and refuses everything else. */
+    /**
+     * A proxy stands in for the wide SDK interface: it lists no albums, signals [enumerating] when
+     * an album is enumerated and answers with [albumPhotos] once [release] completes.
+     */
     private class FakeClientProvider : ProtonPhotosClientProvider {
+        var albumPhotos: List<Pair<String, Long>> = emptyList()
+        val enumerating = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+
         override suspend fun get(userId: UserId): ProtonPhotosClient =
             Proxy.newProxyInstance(
                 ProtonPhotosClient::class.java.classLoader,
                 arrayOf(ProtonPhotosClient::class.java),
             ) { _, method, _ ->
                 when (method.name) {
-                    "enumerateAlbumNodeUids", "enumerateSharedWithMeNodeUids" -> emptyFlow<Any>()
-                    "toString" -> "FakeProtonPhotosClient"
-                    "hashCode" -> 0
-                    else -> error("The SDK must not be asked for ${method.name}")
+                    "enumerateAlbumNodeUids", "enumerateSharedWithMeNodeUids" -> {
+                        emptyFlow<Any>()
+                    }
+
+                    "enumerateAlbum" -> {
+                        flow {
+                            enumerating.complete(Unit)
+                            release.await()
+                            albumPhotos.forEach { (nodeUid, captureTime) ->
+                                emit(AlbumItem(NodeUid(nodeUid), Instant.ofEpochSecond(captureTime)))
+                            }
+                        }
+                    }
+
+                    "toString" -> {
+                        "FakeProtonPhotosClient"
+                    }
+
+                    "hashCode" -> {
+                        0
+                    }
+
+                    else -> {
+                        error("The SDK must not be asked for ${method.name}")
+                    }
                 }
             } as ProtonPhotosClient
 
@@ -178,6 +255,16 @@ class ProtonAlbumRepositoryTest {
         ) {
             events += "writeAlbumPhotos:$albumUid:${photos.size}"
             albumPhotos[userId to albumUid] = photos
+        }
+
+        override fun removeAlbumPhotos(
+            userId: String,
+            nodeUids: Collection<String>,
+        ) {
+            events += "removeAlbumPhotos:${nodeUids.sorted().joinToString(",")}"
+            albumPhotos.replaceAll { (owner, _), photos ->
+                if (owner == userId) photos.filterNot { it.nodeUid in nodeUids } else photos
+            }
             onRemove()
         }
 

@@ -460,6 +460,25 @@ internal class ProtonPhotoCache
                     if (remaining.size != photos.size) writeTag(userId, tag, remaining)
                 }
             }
+            removed.forEach { nodeUid ->
+                thumbnails.remove(userId, nodeUid)
+                previews.remove(userId, nodeUid)
+                originals.remove(userId, nodeUid)
+            }
+            forgetRenditions(userId)
+        }
+
+        /**
+         * The album repository calls this under its own mutation lock, so an album-photo sync
+         * committing at the same time cannot overwrite the rewritten index with a listing that
+         * still names the photos.
+         */
+        override fun removeAlbumPhotos(
+            userId: String,
+            nodeUids: Collection<String>,
+        ) {
+            val removed = nodeUids.toSet()
+            val availability = storedRenditions(userId)
             // Only albums that actually lost a photo are rewritten; the rest keep their counts.
             val albumCounts = mutableMapOf<String, Long>()
             albumPhotosDirectory(userId)
@@ -483,12 +502,6 @@ internal class ProtonPhotoCache
                     )
                 }
             }
-            removed.forEach { nodeUid ->
-                thumbnails.remove(userId, nodeUid)
-                previews.remove(userId, nodeUid)
-                originals.remove(userId, nodeUid)
-            }
-            forgetRenditions(userId)
         }
 
         /**
