@@ -479,6 +479,7 @@ class FullResolutionPhotoView
                     visible = PhotoDetailDecodePolicy.Region(visible.left, visible.top, visible.right, visible.bottom),
                     imageWidth = imageWidth,
                     imageHeight = imageHeight,
+                    budgetPixels = PhotoDetailDecodePolicy.budget(width, height),
                 )
             if (plan == null) {
                 recycleDetail()
