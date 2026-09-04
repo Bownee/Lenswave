@@ -267,6 +267,12 @@ class SecureFileStore(
     /**
      * The per-scope data key, unwrapped once per process; created and wrapped on first use.
      * The lock is per alias, so the Keystore round trip for one scope never stalls another.
+     *
+     * A key that cannot be produced right now (the Keystore refuses to answer, the wrapper
+     * cannot be read or a fresh one cannot be stored) surfaces as [DataKeyUnavailableException]:
+     * a fault of the whole scope that would otherwise fail every read of every file in it with
+     * whatever the Keystore threw, and a reader judging files one by one could mistake that for
+     * corruption and delete the lot.
      */
     private fun dataKey(scope: String): SecretKey {
         val alias = alias(scope)
@@ -274,11 +280,24 @@ class SecureFileStore(
         return synchronized(lockFor(alias)) {
             dataKeys[alias] ?: run {
                 val file = wrappedKeyFile(alias)
-                val raw = (if (file.isFile) unwrapOrDiscard(scope, file) else null) ?: generateDataKey(scope, file)
+                val raw =
+                    try {
+                        (if (file.isFile) unwrapOrDiscard(scope, file) else null) ?: generateDataKey(scope, file)
+                    } catch (error: Exception) {
+                        throw DataKeyUnavailableException(error)
+                    }
                 SecretKeySpec(raw, KeyProperties.KEY_ALGORITHM_AES).also { key -> dataKeys[alias] = key }
             }
         }
     }
+
+    /**
+     * The scope's data key could not be unwrapped or created. Nothing about the file being read
+     * caused it, so readers keep the file and try again later instead of discarding it as corrupt.
+     */
+    class DataKeyUnavailableException internal constructor(
+        cause: Throwable,
+    ) : IllegalStateException("The data key of this scope is unavailable", cause)
 
     /**
      * The stored data key, or null once it is discarded because it can no longer be unwrapped.

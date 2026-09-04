@@ -35,6 +35,7 @@ internal class ProtonPreviewStore
     ) {
         private val root = File(context.filesDir, ProtonStorageLayout.METADATA_DIRECTORY).apply { mkdirs() }
         private val locks = Array(LOCK_COUNT) { Any() }
+        private val transientReadFailures = ProtonRenditionReadFailures()
 
         /** Stored-preview counts per user; listing a large directory on every progress tick is too slow. */
         private val counts = ConcurrentHashMap<String, Int>()
@@ -117,11 +118,18 @@ internal class ProtonPreviewStore
                 val bytes =
                     try {
                         secureFiles.read(scope(userId), file)
-                    } catch (_: Exception) {
-                        file.delete()
-                        adjustCount(userId, -1)
+                    } catch (error: Exception) {
+                        // A provably bad file goes; a Keystore or I/O hiccup keeps it, and the
+                        // viewer simply shows no preview until the next open.
+                        if (ProtonSnapshotCorruptionPolicy.isCorrupt(error)) {
+                            file.delete()
+                            adjustCount(userId, -1)
+                        } else {
+                            transientReadFailures.report(error)
+                        }
                         return null
                     }
+                transientReadFailures.recovered()
                 val bitmap = ProtonPreviewCodec.decode(bytes, targetLongEdge)
                 if (bitmap == null) {
                     file.delete()
