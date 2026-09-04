@@ -43,13 +43,14 @@ class ProtonPhotoCacheInstrumentedTest {
             assertTrue(cache.readIndex(userId).isEmpty())
             assertFalse(cache.hasTimelineSnapshot(userId))
 
-            val activePart = cache.createOriginalTarget(userId, "active").first
-            activePart.writeText("in progress")
+            // A download in flight survives reconciliation while its photo is still listed and
+            // is dropped with everything else once the photo has left the timeline.
+            val activeTarget = cache.createOriginalTarget(userId, "active").first
+            activeTarget.writeText("in progress")
+            cache.reconcilePhotos(userId, emptyList(), listOf("active"))
+            assertTrue(activeTarget.exists())
             cache.reconcilePhotos(userId, emptyList(), emptyList())
-            assertTrue(activePart.exists())
-            clock.value += 25L * 60L * 60L * 1_000L
-            cache.reconcilePhotos(userId, emptyList(), emptyList())
-            assertFalse(activePart.exists())
+            assertFalse(activeTarget.exists())
 
             val (plaintext, encrypted) = cache.createOriginalTarget(userId, "bounded")
             plaintext.writeText("decrypted private content")
