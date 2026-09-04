@@ -10,6 +10,7 @@ import dagger.hilt.components.SingletonComponent
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import me.proton.core.domain.entity.UserId
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -26,13 +27,24 @@ interface ProtonThumbnailScheduler {
     suspend fun cancelAndAwait(userId: UserId)
 }
 
+/**
+ * Every run of one user shares one unique work name, so WorkManager never has two of them
+ * runnable at once. Requests from the app use KEEP: a run that is queued or going is the run
+ * they want. Requests the worker makes about itself (the charging follow-up) use
+ * APPEND_OR_REPLACE, the one policy that neither drops the request because the current run is
+ * still going (KEEP would) nor cancels that run (REPLACE would): the follow-up is chained after
+ * it, and a chain whose head was cancelled is replaced instead of extended.
+ */
 @Singleton
 class ProtonThumbnailWorkScheduler
     @Inject
     constructor(
         private val workManager: WorkManager,
     ) : ProtonThumbnailScheduler {
+        private val legacyWorkCancelled = AtomicBoolean(false)
+
         override fun enqueue(userId: UserId) {
+            cancelLegacyWork(userId)
             workManager.enqueueUniqueWork(
                 ProtonWorkNames.thumbnails(userId),
                 ExistingWorkPolicy.KEEP,
@@ -41,9 +53,10 @@ class ProtonThumbnailWorkScheduler
         }
 
         override fun enqueueWhileCharging(userId: UserId) {
+            cancelLegacyWork(userId)
             workManager.enqueueUniqueWork(
-                ProtonWorkNames.thumbnailsWhileCharging(userId),
-                ExistingWorkPolicy.KEEP,
+                ProtonWorkNames.thumbnails(userId),
+                ExistingWorkPolicy.APPEND_OR_REPLACE,
                 ProtonThumbnailWorker.request(userId, requiresCharging = true),
             )
         }
@@ -66,8 +79,19 @@ class ProtonThumbnailWorkScheduler
 
         override suspend fun cancelAndAwait(userId: UserId) {
             withContext(Dispatchers.IO) {
-                workManager.cancelUniqueWork(ProtonWorkNames.thumbnailsWhileCharging(userId)).result.get()
+                workManager.cancelUniqueWork(ProtonWorkNames.legacyThumbnailsWhileCharging(userId)).result.get()
                 workManager.cancelUniqueWork(ProtonWorkNames.thumbnails(userId)).result.get()
+            }
+        }
+
+        /**
+         * Earlier versions queued the charging run under its own name. Whatever an upgrade left
+         * there would run beside the single name, so it is cancelled once per process; the
+         * cancel is a no-op when nothing is queued.
+         */
+        private fun cancelLegacyWork(userId: UserId) {
+            if (legacyWorkCancelled.compareAndSet(false, true)) {
+                workManager.cancelUniqueWork(ProtonWorkNames.legacyThumbnailsWhileCharging(userId))
             }
         }
 

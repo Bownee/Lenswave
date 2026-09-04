@@ -56,6 +56,9 @@ internal object ProtonBackgroundBatchPolicy {
     /**
      * Pending work whose earliest retry is due now and that still could not be claimed can only
      * be held by claims nobody settled or released; the background sync is the sole claimer.
+     * That holds because [ProtonThumbnailRunGuard] admits one worker run per process: only the
+     * active run reaches this decision, so releasing every claim never takes a batch away from
+     * another run.
      */
     fun hasStaleClaims(idle: ProtonThumbnailQueueStep.Idle): Boolean = idle.hasPending && idle.retryAfterMillis == 0L
 

@@ -43,6 +43,11 @@ class ProtonThumbnailWorker(
                 RepositoryEntryPoint::class.java,
             )
         val repository = entryPoint.thumbnailWork()
+        val runGuard = entryPoint.runGuard()
+        // Unique work de-duplicates per name and per WorkManager instance; this is the
+        // process-wide guarantee that two batch loops never share the queues, and so that the
+        // release of stale claims below the gateway only ever comes from the single active run.
+        if (!runGuard.tryBegin()) return finish(ProtonThumbnailWorkOutcome.ALREADY_RUNNING)
         var networkMonitor: ProtonThumbnailNetworkMonitor? = null
         return try {
             val requestedUserId = UserId(userId)
@@ -130,6 +135,7 @@ class ProtonThumbnailWorker(
             }
         } finally {
             networkMonitor?.close()
+            runGuard.end()
         }
     }
 
@@ -213,6 +219,8 @@ class ProtonThumbnailWorker(
         fun accountSessionManager(): ProtonAccountSessionManager
 
         fun thumbnailScheduler(): ProtonThumbnailScheduler
+
+        fun runGuard(): ProtonThumbnailRunGuard
     }
 
     companion object {
@@ -256,6 +264,9 @@ internal enum class ProtonThumbnailWorkOutcome(
     PREVIEWS_DEFERRED("previews-deferred"),
     TIMED_OUT("timeout"),
     SESSION_UNAVAILABLE("session-unavailable"),
+
+    /** Another run of this process holds the queues; it schedules whatever follow-up is due. */
+    ALREADY_RUNNING("already-running"),
 }
 
 internal object ProtonThumbnailWorkPolicy {
