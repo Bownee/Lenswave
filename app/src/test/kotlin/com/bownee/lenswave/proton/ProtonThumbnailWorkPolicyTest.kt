@@ -7,9 +7,10 @@ import org.junit.Test
 
 class ProtonThumbnailWorkPolicyTest {
     @Test
-    fun `foreground run is long lived but below the Android data sync limit`() {
+    fun `foreground run is long lived but leaves most of the daily data sync budget`() {
         assertTrue(ProtonThumbnailWorkPolicy.MAX_RUN_MILLIS > 10L * 60L * 1_000L)
-        assertTrue(ProtonThumbnailWorkPolicy.MAX_RUN_MILLIS < 6L * 60L * 60L * 1_000L)
+        // Six hours per day across every run; one run must not spend it all.
+        assertTrue(ProtonThumbnailWorkPolicy.MAX_RUN_MILLIS <= 2L * 60L * 60L * 1_000L)
     }
 
     @Test

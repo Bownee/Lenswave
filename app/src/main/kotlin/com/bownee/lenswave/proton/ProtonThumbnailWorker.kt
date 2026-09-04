@@ -326,7 +326,14 @@ internal enum class ProtonThumbnailWorkOutcome(
 internal object ProtonThumbnailWorkPolicy {
     /** A run that crashes is retried a couple of times by WorkManager, then left to the next enqueue. */
     const val MAX_ERROR_ATTEMPTS = 3
-    const val MAX_RUN_MILLIS = 5L * 60L * 60L * 1_000L + 30L * 60L * 1_000L
+
+    /**
+     * Android 15 gives a dataSync foreground service six hours in every 24 across all its runs;
+     * a run that used five and a half of them left nothing for the day. Two hours downloads a
+     * large library's thumbnails and, when work remains, ends with a follow-up under the same
+     * unique name ([ProtonThumbnailFollowUpPolicy]) rather than with the budget spent.
+     */
+    const val MAX_RUN_MILLIS = 2L * 60L * 60L * 1_000L
     const val PROGRESS_PUBLISH_INTERVAL_MILLIS = 1_500L
 
     /**
