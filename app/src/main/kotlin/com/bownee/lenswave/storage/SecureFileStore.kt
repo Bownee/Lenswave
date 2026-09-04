@@ -16,7 +16,6 @@ import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
 import javax.crypto.Cipher
 import javax.crypto.CipherInputStream
-import javax.crypto.CipherOutputStream
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
@@ -31,8 +30,12 @@ import javax.inject.Singleton
  * per second on some devices, so sending every cached index and thumbnail through them made the
  * gallery take seconds to open.
  *
- * Files written by earlier versions were encrypted with the Keystore key directly (format
- * version 1); they are still readable and are rewritten in the current format when read.
+ * Small payloads ([read], [write]) are one GCM record (format version 2). Whole files
+ * ([encryptFile], [decryptFile]) go through [SegmentedEnvelope] (format version 3) so an original
+ * of any size streams through a bounded buffer and a decrypt can stop between segments. Files
+ * written by earlier versions were encrypted with the Keystore key directly (version 1) or as one
+ * whole-file record (version 2); both stay readable, and small version 1 payloads are rewritten
+ * in the current format when read.
  */
 @Singleton
 class SecureFileStore(
@@ -85,17 +88,11 @@ class SecureFileStore(
         target.parentFile?.mkdirs()
         val temporary = File.createTempFile("${target.name}.", ".part", target.parentFile)
         try {
-            val cipher =
-                Cipher.getInstance(TRANSFORMATION).apply {
-                    init(Cipher.ENCRYPT_MODE, dataKey(scope))
-                }
-            FileOutputStream(temporary).use { rawOutput ->
-                rawOutput.write(MAGIC)
-                rawOutput.write(byteArrayOf(VERSION, cipher.iv.size.toByte()))
-                rawOutput.write(cipher.iv)
-                CipherOutputStream(BufferedOutputStream(rawOutput), cipher).use { encryptedOutput ->
-                    BufferedInputStream(FileInputStream(plaintext)).use { input -> input.copyTo(encryptedOutput) }
-                }
+            val key = dataKey(scope)
+            FileOutputStream(temporary).use { output ->
+                output.write(MAGIC)
+                output.write(SEGMENTED_VERSION.toInt())
+                FileInputStream(plaintext).use { input -> SegmentedEnvelope.encrypt(key, input, output) }
             }
             AtomicFileStore.commit(temporary, target, failureMessage)
         } finally {
@@ -105,8 +102,9 @@ class SecureFileStore(
 
     /**
      * Decrypts [encrypted] into [target] through a temporary file. [shouldContinue] is asked before
-     * every chunk; once it returns false the copy stops with a [CopyInterruptedException], nothing
-     * is committed and the partial plaintext is removed.
+     * every segment; once it returns false the decrypt stops with a [CopyInterruptedException],
+     * nothing is committed and the partial plaintext is removed. A file in a whole-file legacy
+     * format is asked once, before it starts: its provider decrypts it in one piece.
      */
     fun decryptFile(
         scope: String,
@@ -118,10 +116,16 @@ class SecureFileStore(
         val temporary = File.createTempFile("${target.name}.", ".part", target.parentFile)
         try {
             FileInputStream(encrypted).use { rawInput ->
-                val cipher = readHeader(scope, rawInput)
-                CipherInputStream(BufferedInputStream(rawInput), cipher).use { decryptedInput ->
-                    BufferedOutputStream(FileOutputStream(temporary)).use { output ->
-                        InterruptibleCopy.copy(decryptedInput, output, shouldContinue)
+                val version = readMagic(rawInput)
+                FileOutputStream(temporary).use { output ->
+                    if (version == SEGMENTED_VERSION) {
+                        SegmentedEnvelope.decrypt(dataKey(scope), rawInput, output, shouldContinue)
+                    } else {
+                        if (!shouldContinue()) throw CopyInterruptedException()
+                        val cipher = readLegacyHeader(scope, version, rawInput)
+                        CipherInputStream(BufferedInputStream(rawInput), cipher).use { decryptedInput ->
+                            BufferedOutputStream(output).use { buffered -> decryptedInput.copyTo(buffered) }
+                        }
                     }
                 }
             }
@@ -141,15 +145,22 @@ class SecureFileStore(
         }
     }
 
-    private fun readHeader(
-        scope: String,
-        rawInput: InputStream,
-    ): Cipher {
+    /** Checks the magic and returns the format version byte that follows it. */
+    private fun readMagic(rawInput: InputStream): Byte {
         val magic = ByteArray(MAGIC.size)
         require(rawInput.read(magic) == magic.size && magic.contentEquals(MAGIC)) {
             "Encrypted file header is invalid"
         }
-        val version = rawInput.read().toByte()
+        val version = rawInput.read()
+        require(version >= 0) { "Encrypted file is truncated" }
+        return version.toByte()
+    }
+
+    private fun readLegacyHeader(
+        scope: String,
+        version: Byte,
+        rawInput: InputStream,
+    ): Cipher {
         val key = keyForVersion(scope, version)
         val ivSize = rawInput.read()
         require(ivSize in 12..16) { "Encrypted file IV is invalid" }
@@ -311,6 +322,7 @@ class SecureFileStore(
         val MAGIC = byteArrayOf(0x4c, 0x57, 0x45, 0x46)
         const val LEGACY_VERSION: Byte = 1
         const val VERSION: Byte = 2
+        const val SEGMENTED_VERSION: Byte = 3
         val keyStore: KeyStore by lazy {
             KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
         }

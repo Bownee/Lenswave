@@ -49,7 +49,7 @@ internal class ProtonOriginalStore
         /**
          * The plaintext copy the viewer reads, decrypting it on demand; null when nothing is cached.
          *
-         * [shouldContinue] is consulted between decrypt chunks. When it turns false the decrypt
+         * [shouldContinue] is consulted between decrypt segments. When it turns false the decrypt
          * stops with a [CancellationException]; the encrypted original is kept, because the caller
          * lost interest, not the file its integrity. Callers outside a coroutine leave the default.
          */
