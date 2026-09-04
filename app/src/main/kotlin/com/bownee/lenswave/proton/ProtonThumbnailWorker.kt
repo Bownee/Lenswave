@@ -136,19 +136,34 @@ class ProtonThumbnailWorker(
     private var foregroundUnavailable = false
     private var lastForegroundPublishMillis: Long? = null
 
+    private val batteryManager by lazy { applicationContext.getSystemService(BatteryManager::class.java) }
+    private var previewsAllowedCheckedAtMillis: Long? = null
+    private var previewsAllowedCached = false
+
     /**
      * Previews are a gigabyte for a large library, so they wait for the charger unless the app is
      * on screen; thumbnails are small enough to download whenever unmetered network is available.
+     * The answer is a binder round trip and an allocation, asked once per loop iteration, so it
+     * is cached for a few seconds: a charger or a screen change a moment late costs nothing.
      */
-    private fun previewsAllowed(): Boolean =
-        ProtonThumbnailWorkPolicy.previewsAllowed(
-            charging = applicationContext.getSystemService(BatteryManager::class.java)?.isCharging == true,
-            appVisible =
-                ActivityManager
-                    .RunningAppProcessInfo()
-                    .also(ActivityManager::getMyMemoryState)
-                    .importance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND,
-        )
+    private fun previewsAllowed(): Boolean {
+        val now = SystemClock.elapsedRealtime()
+        if (ProtonThumbnailWorkPolicy.isPreviewsAllowedFresh(previewsAllowedCheckedAtMillis, now)) {
+            return previewsAllowedCached
+        }
+        val allowed =
+            ProtonThumbnailWorkPolicy.previewsAllowed(
+                charging = batteryManager?.isCharging == true,
+                appVisible =
+                    ActivityManager
+                        .RunningAppProcessInfo()
+                        .also(ActivityManager::getMyMemoryState)
+                        .importance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND,
+            )
+        previewsAllowedCached = allowed
+        previewsAllowedCheckedAtMillis = now
+        return allowed
+    }
 
     /**
      * Promotes the run to a foreground service so it can outlive the ten-minute background limit.
@@ -263,6 +278,14 @@ internal object ProtonThumbnailWorkPolicy {
         charging: Boolean,
         appVisible: Boolean,
     ): Boolean = charging || appVisible
+
+    /** How long a [previewsAllowed] answer is reused before the charger and the screen are asked again. */
+    const val PREVIEWS_ALLOWED_CACHE_MILLIS = 5_000L
+
+    fun isPreviewsAllowedFresh(
+        checkedAtMillis: Long?,
+        nowMillis: Long,
+    ): Boolean = checkedAtMillis != null && nowMillis - checkedAtMillis < PREVIEWS_ALLOWED_CACHE_MILLIS
 
     fun hasPendingWork(
         progress: ProtonThumbnailWorkProgress,
