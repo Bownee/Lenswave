@@ -140,13 +140,21 @@ class SecureFileStore(
         }
     }
 
+    /** The name under which [scope]'s wrapped key is stored; a hash, so safe to keep beside the data. */
+    fun keyAlias(scope: String): String = alias(scope)
+
     /**
      * Forgets the scope's keys; everything they encrypted is unreadable from here on. Runs under
      * the alias lock so a write that already holds the old key cannot commit after this, see
      * [commitWith].
      */
     fun deleteKey(scope: String) {
-        val alias = alias(scope)
+        deleteKeyAlias(alias(scope))
+    }
+
+    /** [deleteKey] for a stored [keyAlias], for callers that no longer know the scope. */
+    fun deleteKeyAlias(alias: String) {
+        require(ALIAS_PATTERN.matches(alias)) { "Key alias is invalid" }
         synchronized(lockFor(alias)) {
             keyStore.deleteEntry(alias)
             keyReferences.remove(alias)
@@ -374,6 +382,7 @@ class SecureFileStore(
     private companion object {
         const val ANDROID_KEYSTORE = "AndroidKeyStore"
         const val ALIAS_PREFIX = "lenswave.secure-file."
+        val ALIAS_PATTERN = Regex(Regex.escape(ALIAS_PREFIX) + "[0-9a-f]{64}")
         const val KEY_DIRECTORY = "secure-keys"
         const val TRANSFORMATION = "AES/GCM/NoPadding"
         const val TAG_BITS = 128

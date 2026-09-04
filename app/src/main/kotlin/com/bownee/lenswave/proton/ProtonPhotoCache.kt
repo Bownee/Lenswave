@@ -452,10 +452,23 @@ internal class ProtonPhotoCache
             secureFiles.deleteKey(scope(userId))
         }
 
+        /**
+         * Directory names are hashed user ids and key files are hashed scopes, so an orphaned
+         * directory cannot name its key; the alias marker each directory carries does. A directory
+         * from before the marker existed leaves its key behind: a wrapped key nothing reads.
+         */
         override fun retainOnlyUser(userId: String?) {
             val retainedName = userId?.let(::safeName)
             root.listFiles()?.filter { it.name != retainedName }?.forEach { directory ->
+                val keyAlias = File(directory, KEY_ALIAS_FILE).takeIf(File::isFile)?.readText()
                 check(directory.deleteRecursively()) { "Could not remove orphaned Proton cache" }
+                keyAlias?.let { alias ->
+                    try {
+                        secureFiles.deleteKeyAlias(alias)
+                    } catch (error: IllegalArgumentException) {
+                        LenswaveDiagnostics.reportFailure(LenswaveOperation.CACHE_CLEAR, error)
+                    }
+                }
             }
             originals.retainOnly(userId)
             thumbnails.retainMemoryFor(userId)
@@ -573,7 +586,15 @@ internal class ProtonPhotoCache
             contents: String,
             failureMessage: String,
         ) {
+            recordKeyAlias(userId)
             secureFiles.writeText(scope(userId), target, contents, failureMessage)
+        }
+
+        /** Leaves the data-key alias beside the user's metadata so [retainOnlyUser] can delete the key. */
+        private fun recordKeyAlias(userId: String) {
+            val marker = File(userDirectory(userId), KEY_ALIAS_FILE)
+            if (marker.isFile) return
+            AtomicFileStore.write(marker, secureFiles.keyAlias(scope(userId)), "Could not record the cache key alias")
         }
 
         private fun readText(
@@ -596,4 +617,8 @@ internal class ProtonPhotoCache
         ): Boolean = file.lastModified() <= 0L || clock.nowMillis() - file.lastModified() > ttlMillis
 
         private fun safeName(value: String): String = AtomicFileStore.safeName(value)
+
+        private companion object {
+            const val KEY_ALIAS_FILE = "key-alias"
+        }
     }
