@@ -263,7 +263,11 @@ class GalleryViewModel internal constructor(
     fun requestRefresh(manual: Boolean = true) {
         val selectedDestination = destination
         val generation = if (manual) ++manualRefreshGeneration else manualRefreshGeneration
-        if (manual) setRefreshing(true)
+        if (manual) {
+            setRefreshing(true)
+            // The user asked for it: a pause set from the download notification is lifted.
+            currentUserId?.let(protonThumbnailScheduler::clearPaused)
+        }
         viewModelScope.launch {
             try {
                 refresh(selectedDestination, forceRemote = manual)
