@@ -58,7 +58,6 @@ internal class ViewerDetailsSheetController(
     private val mediaTitle get() = screen.mediaTitle
     private val actions get() = screen.actions
     private val detailsSheet get() = screen.detailsSheet
-    private val detailsContent get() = screen.detailsContent
     private val detailsProgress get() = screen.detailsProgress
     private val resources get() = context.resources
 
@@ -224,7 +223,7 @@ internal class ViewerDetailsSheetController(
     /** Clears the rows and the attachment for the next photo; `shown` is deliberately kept. */
     fun resetForNavigation() {
         metadataLoaded = false
-        detailsContent.removeAllViews()
+        screen.hideDetailsRows()
         detailsProgress.visibility = View.VISIBLE
         detailsSheetAttachmentOffset = 0
         detailsSheet.translationY = 0f
@@ -258,21 +257,17 @@ internal class ViewerDetailsSheetController(
                 }
             if (host.request.stableId != metadataRequest.stableId) return@launch
             detailsProgress.visibility = View.GONE
-            result
-                .onSuccess { items -> items.forEach(::addDetailsRow) }
-                .onFailure {
-                    addDetailsRow(
+            val items =
+                result.getOrElse {
+                    listOf(
                         PhotoMetadataItem(
                             context.getString(R.string.error),
                             context.getString(R.string.could_not_read_metadata),
                         ),
                     )
                 }
+            screen.bindDetailsRows(items, ::openMap)
         }
-    }
-
-    private fun addDetailsRow(item: PhotoMetadataItem) {
-        screen.addDetailsRow(item, ::openMap)
     }
 
     private fun openMap(action: PhotoMetadataAction.OpenMap) {
