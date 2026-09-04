@@ -1,5 +1,6 @@
 package com.bownee.lenswave.proton
 
+import android.os.SystemClock
 import androidx.work.ExistingWorkPolicy
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
@@ -7,9 +8,13 @@ import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import me.proton.core.domain.entity.UserId
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -20,8 +25,10 @@ interface ProtonThumbnailScheduler {
     /** Queues a run that starts once the phone is charging, for the previews a normal run deferred. */
     fun enqueueWhileCharging(userId: UserId)
 
+    /** The app is back on screen: the same as [enqueue], never a cancel of a run in progress. */
     suspend fun resume(userId: UserId)
 
+    /** The only request that cancels a run in progress; for a listing that changed underneath it. */
     suspend fun restart(userId: UserId)
 
     suspend fun cancelAndAwait(userId: UserId)
@@ -38,10 +45,16 @@ internal interface ProtonThumbnailFollowUpScheduler {
 /**
  * Every run of one user shares one unique work name, so WorkManager never has two of them
  * runnable at once. Requests from the app use KEEP: a run that is queued or going is the run
- * they want. Requests the worker makes about itself (the charging follow-up) use
- * APPEND_OR_REPLACE, the one policy that neither drops the request because the current run is
- * still going (KEEP would) nor cancels that run (REPLACE would): the follow-up is chained after
- * it, and a chain whose head was cancelled is replaced instead of extended.
+ * they want. Requests the worker makes about itself (the follow-ups) use APPEND_OR_REPLACE, the
+ * one policy that neither drops the request because the current run is still going (KEEP
+ * would) nor cancels that run (REPLACE would): the follow-up is chained after it, and a chain
+ * whose head was cancelled is replaced instead of extended.
+ *
+ * The app asks for a run on every refresh, tab switch, album and resume. Each ask used to be a
+ * WorkManager transaction, and a resume replaced whatever was there, cancelling a batch in
+ * progress. Now the scheduler watches the unique work and answers from memory: an ask while a
+ * run is queued or going is nothing, and asks are otherwise spaced by
+ * [ProtonThumbnailEnqueuePolicy.DEBOUNCE_MILLIS]. Only [restart] still replaces.
  */
 @Singleton
 internal class ProtonThumbnailWorkScheduler
@@ -51,11 +64,25 @@ internal class ProtonThumbnailWorkScheduler
     ) : ProtonThumbnailScheduler,
         ProtonThumbnailFollowUpScheduler {
         private val legacyWorkCancelled = AtomicBoolean(false)
+        private val observationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        private val observed = ConcurrentHashMap<String, Observation>()
 
         override fun enqueue(userId: UserId) {
             cancelLegacyWork(userId)
+            val workName = ProtonWorkNames.thumbnails(userId)
+            val observation = observe(workName)
+            val now = SystemClock.elapsedRealtime()
+            if (!ProtonThumbnailEnqueuePolicy.shouldEnqueue(
+                    observation.active,
+                    observation.lastEnqueuedAtMillis,
+                    now,
+                )
+            ) {
+                return
+            }
+            observation.lastEnqueuedAtMillis = now
             workManager.enqueueUniqueWork(
-                ProtonWorkNames.thumbnails(userId),
+                workName,
                 ExistingWorkPolicy.KEEP,
                 ProtonThumbnailWorker.request(userId),
             )
@@ -82,18 +109,20 @@ internal class ProtonThumbnailWorkScheduler
         }
 
         override suspend fun resume(userId: UserId) {
-            withContext(Dispatchers.IO) {
-                val workName = ProtonWorkNames.thumbnails(userId)
-                val states = workManager.getWorkInfosForUniqueWork(workName).get().map { work -> work.state }
-                // A run that is still going keeps its progress; anything else is replaced.
-                if (WorkInfo.State.RUNNING in states) return@withContext
-                replace(workName, userId)
-            }
+            enqueue(userId)
         }
 
         override suspend fun restart(userId: UserId) {
             withContext(Dispatchers.IO) {
-                replace(ProtonWorkNames.thumbnails(userId), userId)
+                val workName = ProtonWorkNames.thumbnails(userId)
+                observe(workName).lastEnqueuedAtMillis = SystemClock.elapsedRealtime()
+                workManager
+                    .enqueueUniqueWork(
+                        workName,
+                        ExistingWorkPolicy.REPLACE,
+                        ProtonThumbnailWorker.request(userId),
+                    ).result
+                    .get()
             }
         }
 
@@ -115,19 +144,50 @@ internal class ProtonThumbnailWorkScheduler
             }
         }
 
-        private fun replace(
-            workName: String,
-            userId: UserId,
-        ) {
-            workManager
-                .enqueueUniqueWork(
-                    workName,
-                    ExistingWorkPolicy.REPLACE,
-                    ProtonThumbnailWorker.request(userId),
-                ).result
-                .get()
+        /**
+         * One subscription per work name for the life of the process. WorkManager pushes state
+         * changes from its database, so [Observation.active] is answered without a query, and
+         * the run that just ended clears the debounce: the next ask after a run is a new one.
+         */
+        private fun observe(workName: String): Observation =
+            observed.computeIfAbsent(workName) {
+                Observation().also { observation ->
+                    observationScope.launch {
+                        workManager.getWorkInfosForUniqueWorkFlow(workName).collect { infos ->
+                            val active = ProtonThumbnailEnqueuePolicy.isActive(infos.map(WorkInfo::state))
+                            if (observation.active && !active) observation.lastEnqueuedAtMillis = null
+                            observation.active = active
+                        }
+                    }
+                }
+            }
+
+        private class Observation {
+            @Volatile var active = false
+
+            @Volatile var lastEnqueuedAtMillis: Long? = null
         }
     }
+
+/** Whether an ask for a run is worth a WorkManager transaction; see [ProtonThumbnailWorkScheduler]. */
+internal object ProtonThumbnailEnqueuePolicy {
+    /** Asks closer together than this are one ask; a refresh fans out into several within a second. */
+    const val DEBOUNCE_MILLIS = 15_000L
+
+    /** A request that is queued, blocked behind a chained run, or running is the run the app wants. */
+    fun isActive(states: Collection<WorkInfo.State>): Boolean = states.any { state -> !state.isFinished }
+
+    fun shouldEnqueue(
+        activeRun: Boolean,
+        lastEnqueuedAtMillis: Long?,
+        nowMillis: Long,
+    ): Boolean {
+        if (activeRun) return false
+        if (lastEnqueuedAtMillis == null) return true
+        // A clock that went backwards must not silence the ask.
+        return nowMillis < lastEnqueuedAtMillis || nowMillis - lastEnqueuedAtMillis >= DEBOUNCE_MILLIS
+    }
+}
 
 @Module
 @InstallIn(SingletonComponent::class)
