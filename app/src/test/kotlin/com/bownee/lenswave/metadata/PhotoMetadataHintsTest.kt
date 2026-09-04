@@ -1,7 +1,9 @@
 package com.bownee.lenswave.metadata
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PhotoMetadataHintsTest {
@@ -23,6 +25,38 @@ class PhotoMetadataHintsTest {
             PhotoMetadataDimensionPolicy.oriented(hints.rawWidth, hints.rawHeight, hints.rotationDegrees),
         )
         assertEquals("image/jpeg", hints.mimeType)
+    }
+
+    @Test
+    fun `exif orientation is applied for containers the decoder returns as stored`() {
+        for (mime in listOf("image/jpeg", "image/tiff", "image/png", "image/webp", "IMAGE/JPEG", null)) {
+            assertTrue("$mime", ImageOrientationPolicy.appliesExifOrientation(mime))
+            assertEquals(6, ImageOrientationPolicy.effectiveOrientation(mime, 6))
+            assertEquals(90, ImageOrientationPolicy.effectiveRotationDegrees(mime, 90))
+        }
+    }
+
+    @Test
+    fun `exif orientation is ignored for the heif family, which the decoder rotates itself`() {
+        for (mime in listOf("image/heic", "image/heif", "image/avif", "image/heic-sequence", "image/HEIF")) {
+            assertFalse(mime, ImageOrientationPolicy.appliesExifOrientation(mime))
+            assertEquals(
+                ImageOrientationPolicy.ORIENTATION_NORMAL,
+                ImageOrientationPolicy.effectiveOrientation(mime, 6),
+            )
+            assertEquals(0, ImageOrientationPolicy.effectiveRotationDegrees(mime, 90))
+        }
+    }
+
+    @Test
+    fun `heic dimensions are taken as already oriented`() {
+        val rotation = ImageOrientationPolicy.effectiveRotationDegrees("image/heic", 90)
+        val hints =
+            PhotoMetadataHints(rawWidth = 3_024, rawHeight = 4_032, rotationDegrees = rotation, mimeType = "image/heic")
+        assertEquals(
+            3_024 to 4_032,
+            PhotoMetadataDimensionPolicy.oriented(hints.rawWidth, hints.rawHeight, hints.rotationDegrees),
+        )
     }
 
     @Test

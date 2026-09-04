@@ -8,6 +8,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.BitmapRegionDecoder
 import android.graphics.Canvas
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
@@ -28,6 +29,7 @@ import androidx.exifinterface.media.ExifInterface
 import com.bownee.lenswave.ExifOrientation
 import com.bownee.lenswave.R
 import com.bownee.lenswave.metadata.ImageMimeSniffer
+import com.bownee.lenswave.metadata.ImageOrientationPolicy
 import com.bownee.lenswave.metadata.PhotoMetadataHints
 import java.io.Closeable
 import java.util.concurrent.Executors
@@ -61,6 +63,10 @@ class FullResolutionPhotoView
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
         private val baseDestination = RectF()
         private val detailDestination = RectF()
+        private val rawDestination = RectF()
+
+        /** Maps stored pixels to the displayed picture; null while the picture is shown as stored. */
+        private var orientationMatrix: Matrix? = null
         private var descriptor: ParcelFileDescriptor? = null
         private var decoder: BitmapRegionDecoder? = null
         private var rawWidth = 0
@@ -154,6 +160,8 @@ class FullResolutionPhotoView
             loadFuture?.cancel(true)
             detailFuture?.cancel(false)
             releaseDecoder()
+            val metrics = resources.displayMetrics
+            val baseBudget = PhotoBaseDecodePolicy.budget(width, height, metrics.widthPixels, metrics.heightPixels)
             loadFuture =
                 decoderExecutor.submit {
                     runCatching {
@@ -162,23 +170,42 @@ class FullResolutionPhotoView
                         var openedBitmap: Bitmap? = null
                         try {
                             openedDescriptor = requireNotNull(context.contentResolver.openFileDescriptor(uri, "r"))
-                            val orientation =
-                                ExifInterface(openedDescriptor.fileDescriptor)
-                                    .getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
                             val mime = sniffMimeType(openedDescriptor)
+                            // HEIF decoders rotate from the container themselves; only formats
+                            // returned as stored need the EXIF tag applied on top.
+                            val orientation =
+                                ImageOrientationPolicy.effectiveOrientation(
+                                    mime,
+                                    ExifInterface(openedDescriptor.fileDescriptor)
+                                        .getAttributeInt(
+                                            ExifInterface.TAG_ORIENTATION,
+                                            ExifInterface.ORIENTATION_NORMAL,
+                                        ),
+                                )
                             openedDecoder = requireNotNull(createRegionDecoder(openedDescriptor))
-                            val sample = calculateBaseSample(openedDecoder.width, openedDecoder.height)
-                            val rawBase =
+                            val sample =
+                                PhotoBaseDecodePolicy.sampleSize(
+                                    openedDecoder.width,
+                                    openedDecoder.height,
+                                    baseBudget,
+                                )
+                            // Decoded as stored; onDraw orients it with a matrix, so a rotated
+                            // picture does not pay for a second full-size copy.
+                            openedBitmap =
                                 requireNotNull(
                                     openedDecoder.decodeRegion(
                                         Rect(0, 0, openedDecoder.width, openedDecoder.height),
                                         BitmapFactory.Options().apply {
                                             inSampleSize = sample
-                                            inPreferredConfig = Bitmap.Config.ARGB_8888
+                                            inPreferredConfig =
+                                                if (PhotoBaseDecodePolicy.isOpaque(mime)) {
+                                                    Bitmap.Config.RGB_565
+                                                } else {
+                                                    Bitmap.Config.ARGB_8888
+                                                }
                                         },
                                     ),
                                 )
-                            openedBitmap = ExifOrientation.apply(rawBase, orientation, true)
                             LoadedPhoto(openedDescriptor, openedDecoder, openedBitmap, sample, orientation, mime).also {
                                 openedDescriptor = null
                                 openedDecoder = null
@@ -201,10 +228,12 @@ class FullResolutionPhotoView
                             rawHeight = loaded.decoder.height
                             rotationDegrees = ExifOrientation.degrees(loaded.orientation)
                             exifOrientation = loaded.orientation
+                            orientationMatrix = ExifOrientation.matrix(loaded.orientation)
                             loadedUri = uri
                             mimeType = loaded.mimeType
                             // A placeholder may already be zoomed; the original takes over the same
-                            // rendered geometry so the picture does not jump when it arrives.
+                            // rendered geometry so the picture does not jump when it arrives. Both
+                            // are in oriented axes: the preview was decoded with its EXIF applied.
                             val keepGeometry = basePlaceholder && imageWidth > 0 && width > 0 && height > 0
                             val renderedWidth = imageWidth * scale
                             imageWidth = if (rotationDegrees % 180 == 0) rawWidth else rawHeight
@@ -234,8 +263,9 @@ class FullResolutionPhotoView
         }
 
         /**
-         * Shows [bitmap] (a screen-sized preview) with full zoom and pan while the original is
-         * still being decoded. The bitmap is not owned by this view and is never recycled here.
+         * Shows [bitmap] (a screen-sized preview, already oriented as [ProtonPreviewCodec] decodes
+         * it) with full zoom and pan while the original is still being decoded. The bitmap is not
+         * owned by this view and is never recycled here.
          */
         fun showPlaceholder(bitmap: Bitmap) {
             zoomAnimator?.cancel()
@@ -247,6 +277,7 @@ class FullResolutionPhotoView
             rawHeight = bitmap.height
             rotationDegrees = 0
             exifOrientation = ExifInterface.ORIENTATION_NORMAL
+            orientationMatrix = null
             loadedUri = null
             mimeType = null
             imageWidth = bitmap.width
@@ -272,6 +303,7 @@ class FullResolutionPhotoView
             imageWidth = 0
             imageHeight = 0
             exifOrientation = ExifInterface.ORIENTATION_NORMAL
+            orientationMatrix = null
             loadedUri = null
             mimeType = null
             rotationDegrees = 0
@@ -302,7 +334,7 @@ class FullResolutionPhotoView
                 offsetX + imageWidth * scale,
                 offsetY + imageHeight * scale,
             )
-            canvas.drawBitmap(base, null, baseDestination, paint)
+            drawOriented(canvas, base, baseDestination)
             val detail = detailBitmap
             val sourceRect = detailRect
             if (detail != null && sourceRect != null) {
@@ -312,8 +344,35 @@ class FullResolutionPhotoView
                     offsetX + sourceRect.right * scale,
                     offsetY + sourceRect.bottom * scale,
                 )
-                canvas.drawBitmap(detail, null, detailDestination, paint)
+                drawOriented(canvas, detail, detailDestination)
             }
+        }
+
+        /**
+         * Draws [bitmap], which holds pixels as stored in the file, into [destination] in oriented
+         * axes. The orientation is a rotation or flip about the centre, so the raw bitmap is drawn
+         * centred on the destination under that transform; its rendered edges are the
+         * destination's, swapped when the orientation turns the picture on its side.
+         */
+        private fun drawOriented(
+            canvas: Canvas,
+            bitmap: Bitmap,
+            destination: RectF,
+        ) {
+            val transform = orientationMatrix
+            if (transform == null) {
+                canvas.drawBitmap(bitmap, null, destination, paint)
+                return
+            }
+            val swapped = ExifOrientation.swapsAxes(exifOrientation)
+            val halfWidth = (if (swapped) destination.height() else destination.width()) / 2f
+            val halfHeight = (if (swapped) destination.width() else destination.height()) / 2f
+            rawDestination.set(-halfWidth, -halfHeight, halfWidth, halfHeight)
+            canvas.save()
+            canvas.translate(destination.centerX(), destination.centerY())
+            canvas.concat(transform)
+            canvas.drawBitmap(bitmap, null, rawDestination, paint)
+            canvas.restore()
         }
 
         override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -500,26 +559,22 @@ class FullResolutionPhotoView
             if (key == requestedDetailKey) return
             requestedDetailKey = key
             val detailGeneration = generation.get()
-            val detailOrientation = exifOrientation
             detailFuture?.cancel(false)
             detailFuture =
                 detailExecutor.submit {
                     // A newer load or clear has already retired this decoder (its recycle is queued
                     // behind this task), so a stale tile is not worth decoding.
                     if (detailGeneration != generation.get() || activeDecoder.isRecycled) return@submit
+                    // Tiles stay in stored axes as well; onDraw orients them like the base.
                     val decoded =
                         runCatching {
-                            val raw =
-                                requireNotNull(
-                                    activeDecoder.decodeRegion(
-                                        rawRect,
-                                        BitmapFactory.Options().apply {
-                                            inSampleSize = sample
-                                            inPreferredConfig = Bitmap.Config.ARGB_8888
-                                        },
-                                    ),
-                                )
-                            ExifOrientation.apply(raw, detailOrientation, true)
+                            activeDecoder.decodeRegion(
+                                rawRect,
+                                BitmapFactory.Options().apply {
+                                    inSampleSize = sample
+                                    inPreferredConfig = Bitmap.Config.ARGB_8888
+                                },
+                            )
                         }.getOrNull()
                     mainHandler.post {
                         if (detailGeneration != generation.get() || requestedDetailKey != key) {
@@ -559,15 +614,6 @@ class FullResolutionPhotoView
             val right = (ceil(rect.right.toDouble() / sample).toInt() * sample).coerceIn(left + 1, maximumWidth)
             val bottom = (ceil(rect.bottom.toDouble() / sample).toInt() * sample).coerceIn(top + 1, maximumHeight)
             return Rect(left, top, right, bottom)
-        }
-
-        private fun calculateBaseSample(
-            width: Int,
-            height: Int,
-        ): Int {
-            var sample = 1
-            while ((width / sample).toLong() * (height / sample) > MAX_BASE_PIXELS) sample *= 2
-            return sample
         }
 
         /** Reads the container signature with a positional read so the descriptor's offset is untouched. */
@@ -648,6 +694,5 @@ class FullResolutionPhotoView
         private companion object {
             const val DOUBLE_TAP_ZOOM = 3f
             const val DOUBLE_TAP_ZOOM_DURATION_MILLIS = 360L
-            const val MAX_BASE_PIXELS = 4_000_000L
         }
     }

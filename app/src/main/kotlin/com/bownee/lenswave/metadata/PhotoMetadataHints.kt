@@ -11,6 +11,36 @@ data class PhotoMetadataHints(
     val mimeType: String?,
 )
 
+/**
+ * Whether the EXIF orientation tag still has to be applied to what the platform decoder returns.
+ * JPEG, TIFF, PNG and WebP come back as stored, so the tag describes a rotation nobody has done
+ * yet. The HEIF family (HEIC, HEIF, AVIF) carries its rotation in container boxes that the decoder
+ * honours itself, so applying the tag on top would rotate the picture twice and report swapped
+ * dimensions in the details sheet.
+ */
+internal object ImageOrientationPolicy {
+    /** The EXIF orientation value meaning "as stored" (ExifInterface.ORIENTATION_NORMAL). */
+    const val ORIENTATION_NORMAL = 1
+
+    fun appliesExifOrientation(mimeType: String?): Boolean =
+        when (mimeType?.lowercase()) {
+            "image/heic", "image/heif", "image/heic-sequence", "image/heif-sequence", "image/avif" -> false
+            else -> true
+        }
+
+    /** The orientation the viewer should apply to decoded pixels of a [mimeType] file. */
+    fun effectiveOrientation(
+        mimeType: String?,
+        exifOrientation: Int,
+    ): Int = if (appliesExifOrientation(mimeType)) exifOrientation else ORIENTATION_NORMAL
+
+    /** The rotation the details sheet should combine with decoder dimensions of a [mimeType] file. */
+    fun effectiveRotationDegrees(
+        mimeType: String?,
+        exifRotationDegrees: Int,
+    ): Int = if (appliesExifOrientation(mimeType)) exifRotationDegrees else 0
+}
+
 /** Pure sizing rules for the dimensions row of the details sheet. */
 internal object PhotoMetadataDimensionPolicy {
     /** Width and height as displayed, once the EXIF rotation is applied to the stored pixels. */
