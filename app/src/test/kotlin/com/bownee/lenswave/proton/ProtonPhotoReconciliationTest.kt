@@ -1,20 +1,31 @@
 package com.bownee.lenswave.proton
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ProtonPhotoReconciliationTest {
     @Test
-    fun reportsRemoteAdditionsAndCachedRemovals() {
+    fun reportsCachedRemovalsAndWhetherAnythingWasAdded() {
         val changes =
             ProtonPhotoReconciliation.compare(
                 cachedNodeUids = listOf("kept", "removed"),
-                remoteNodeUids = listOf("kept", "added"),
+                remoteNodeUids = setOf("kept", "added"),
             )
 
-        assertEquals(setOf("added"), changes.addedNodeUids)
         assertEquals(setOf("removed"), changes.removedNodeUids)
+        assertTrue(changes.hasAdditions)
+        assertFalse(changes.isEmpty)
+
+        val additionsOnly = ProtonPhotoReconciliation.compare(listOf("kept"), setOf("kept", "added"))
+        assertTrue(additionsOnly.removedNodeUids.isEmpty())
+        assertTrue(additionsOnly.hasAdditions)
+
+        val removalsOnly = ProtonPhotoReconciliation.compare(listOf("kept", "gone"), setOf("kept"))
+        assertEquals(setOf("gone"), removalsOnly.removedNodeUids)
+        assertFalse(removalsOnly.hasAdditions)
     }
 
     @Test
@@ -22,10 +33,11 @@ class ProtonPhotoReconciliationTest {
         val changes =
             ProtonPhotoReconciliation.compare(
                 cachedNodeUids = listOf("a", "b", "b"),
-                remoteNodeUids = listOf("b", "a"),
+                remoteNodeUids = setOf("b", "a"),
             )
 
         assertEquals(ProtonPhotoChanges(), changes)
+        assertTrue(changes.isEmpty)
     }
 
     @Test

@@ -1,20 +1,26 @@
 package com.bownee.lenswave.proton
 
 internal data class ProtonPhotoChanges(
-    val addedNodeUids: Set<String> = emptySet(),
+    /** Cached photos the remote listing no longer names. */
     val removedNodeUids: Set<String> = emptySet(),
-)
+    /** Whether the remote listing names anything the cache did not. */
+    val hasAdditions: Boolean = false,
+) {
+    val isEmpty: Boolean get() = removedNodeUids.isEmpty() && !hasAdditions
+}
 
 internal object ProtonPhotoReconciliation {
+    /** Only what a reconcile acts on: the removals it deletes for, and whether anything at all changed. */
     fun compare(
         cachedNodeUids: Collection<String>,
-        remoteNodeUids: Collection<String>,
+        remoteNodeUids: Set<String>,
     ): ProtonPhotoChanges {
-        val cached = cachedNodeUids.toSet()
-        val remote = remoteNodeUids.toSet()
+        val cached = cachedNodeUids.toHashSet()
+        val removed = cached.filterNotTo(HashSet()) { nodeUid -> nodeUid in remoteNodeUids }
+        val retainedCount = cached.size - removed.size
         return ProtonPhotoChanges(
-            addedNodeUids = remote - cached,
-            removedNodeUids = cached - remote,
+            removedNodeUids = removed,
+            hasAdditions = remoteNodeUids.size > retainedCount,
         )
     }
 
