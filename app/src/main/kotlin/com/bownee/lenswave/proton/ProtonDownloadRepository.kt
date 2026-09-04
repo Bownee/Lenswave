@@ -12,7 +12,9 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import me.proton.core.domain.entity.UserId
+import me.proton.drive.sdk.ProtonDriveSdkException
 import me.proton.drive.sdk.ProtonPhotosClient
+import me.proton.drive.sdk.ProtonSdkError
 import me.proton.drive.sdk.entity.NodeUid
 import me.proton.drive.sdk.entity.ThumbnailType
 import java.io.File
@@ -358,6 +360,11 @@ internal class ProtonDownloadRepository
                                     }
                                 },
                                 onFailure = { error ->
+                                    // One sample per pass keeps the log readable while still
+                                    // showing why a rendition is refused.
+                                    if (type == ThumbnailType.PREVIEW && failures.isEmpty()) {
+                                        LenswaveDiagnostics.reportFailure(LenswaveOperation.PREVIEW_DOWNLOAD, error)
+                                    }
                                     failures.record(nodeUid, ThumbnailFailureClassifier.classify(error))
                                 },
                             )
@@ -461,6 +468,7 @@ internal enum class ThumbnailFailureKind(
 internal object ThumbnailFailureClassifier {
     fun classify(error: Throwable): ThumbnailFailureKind {
         if (error is SocketTimeoutException) return ThumbnailFailureKind.NETWORK
+        (error as? ProtonDriveSdkException)?.error?.let { sdkError -> return classify(sdkError) }
         val type = error::class.java.simpleName.lowercase()
         return when {
             "unauthor" in type || "auth" in type -> ThumbnailFailureKind.AUTHENTICATION
@@ -469,4 +477,62 @@ internal object ThumbnailFailureClassifier {
             else -> ThumbnailFailureKind.UNKNOWN
         }
     }
+
+    /**
+     * SDK failures all arrive as one exception class, so the kind has to come from the structured
+     * error: typed data for missing nodes or renditions, the API's "does not exist" code, and the
+     * transport domains for retryable failures. Nested errors are consulted when the outer one is
+     * undecided.
+     */
+    fun classify(sdkError: ProtonSdkError): ThumbnailFailureKind {
+        when (sdkError.additionalData) {
+            is ProtonSdkError.Data.NodeNotFound,
+            is ProtonSdkError.Data.ThumbnailCountMismatch,
+            is ProtonSdkError.Data.MissingContentBlock,
+            -> return ThumbnailFailureKind.NOT_FOUND
+
+            else -> Unit
+        }
+        val description = "${sdkError.type.orEmpty()} ${sdkError.message.orEmpty()}".lowercase()
+        val kind =
+            when {
+                sdkError.primaryCode == HTTP_NOT_FOUND -> {
+                    ThumbnailFailureKind.NOT_FOUND
+                }
+
+                sdkError.secondaryCode == API_CODE_NOT_EXIST -> {
+                    ThumbnailFailureKind.NOT_FOUND
+                }
+
+                "not found" in description || "notfound" in description || "does not exist" in description -> {
+                    ThumbnailFailureKind.NOT_FOUND
+                }
+
+                sdkError.primaryCode == HTTP_UNAUTHORIZED || sdkError.primaryCode == HTTP_FORBIDDEN -> {
+                    ThumbnailFailureKind.AUTHENTICATION
+                }
+
+                "unauthor" in description -> {
+                    ThumbnailFailureKind.AUTHENTICATION
+                }
+
+                sdkError.domain == ProtonSdkError.ErrorDomain.Network ||
+                    sdkError.domain == ProtonSdkError.ErrorDomain.Transport -> {
+                    ThumbnailFailureKind.NETWORK
+                }
+
+                else -> {
+                    ThumbnailFailureKind.UNKNOWN
+                }
+            }
+        if (kind != ThumbnailFailureKind.UNKNOWN) return kind
+        return sdkError.innerError?.let(::classify) ?: ThumbnailFailureKind.UNKNOWN
+    }
+
+    private const val HTTP_UNAUTHORIZED = 401L
+    private const val HTTP_FORBIDDEN = 403L
+    private const val HTTP_NOT_FOUND = 404L
+
+    /** Proton API response code for "the requested resource does not exist". */
+    private const val API_CODE_NOT_EXIST = 2501L
 }

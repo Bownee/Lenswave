@@ -34,6 +34,7 @@ internal enum class LenswaveOperation(
     TAG_SYNC_PANORAMAS("tag-sync-panoramas"),
     TAG_SYNC_RAW("tag-sync-raw"),
     THUMBNAIL_DOWNLOAD("thumbnail-download"),
+    PREVIEW_DOWNLOAD("preview-download"),
     THUMBNAIL_WORKER("thumbnail-worker"),
     TIMELINE_SYNC("timeline-sync"),
     ;

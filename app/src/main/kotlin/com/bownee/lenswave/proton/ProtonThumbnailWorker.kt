@@ -125,11 +125,26 @@ class ProtonThumbnailWorker(
         }
     }
 
+    private var foregroundUnavailable = false
+
+    /**
+     * Promotes the run to a foreground service so it can outlive the ten-minute background limit.
+     * Android 12+ refuses that while the app is in the background, which is exactly when retries
+     * fire; rather than failing the attempt, the run continues without a notification and lets
+     * the platform stop it at the background limit, after which WorkManager reschedules it.
+     */
     private suspend fun publishForeground(
         factory: ProtonThumbnailForegroundInfoFactory,
         progress: ProtonThumbnailNotificationProgress,
     ) {
-        setForeground(factory.create(workerId = id, progress = progress))
+        if (foregroundUnavailable) return
+        try {
+            setForeground(factory.create(workerId = id, progress = progress))
+        } catch (error: IllegalStateException) {
+            if (!ProtonThumbnailWorkPolicy.isForegroundStartRefusal(error)) throw error
+            foregroundUnavailable = true
+            reportState("background-only")
+        }
     }
 
     private fun resolve(
@@ -202,6 +217,13 @@ internal data class ProtonThumbnailWorkResolution(
 internal object ProtonThumbnailWorkPolicy {
     const val MAX_ATTEMPTS = 25
     const val MAX_RUN_MILLIS = 5L * 60L * 60L * 1_000L + 30L * 60L * 1_000L
+
+    /**
+     * `ForegroundServiceStartNotAllowedException` (API 31+) extends IllegalStateException; it is
+     * matched by name so the check compiles and tests run on the JVM.
+     */
+    fun isForegroundStartRefusal(error: Throwable): Boolean =
+        error::class.java.simpleName == "ForegroundServiceStartNotAllowedException"
 
     fun resolve(
         runAttemptCount: Int,
