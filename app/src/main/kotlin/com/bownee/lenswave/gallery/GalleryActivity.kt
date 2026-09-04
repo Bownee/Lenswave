@@ -175,9 +175,8 @@ class GalleryActivity :
         authCoordinator.register()
         registerTimeChangeReceiver()
         observeGalleryState()
-        if (savedInstanceState == null && LenswaveApplication.isAppUpdateStartupEnabled()) {
-            updatePresenter.checkForUpdate()
-        }
+        // Every instance asks; the checker runs the check once per process and hands its result out once.
+        if (LenswaveApplication.isAppUpdateStartupEnabled()) updatePresenter.checkForUpdate()
     }
 
     override fun onResume() {
