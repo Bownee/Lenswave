@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.bownee.lenswave.LenswaveClock
 import com.bownee.lenswave.proton.ProtonAccountSessionManager
 import com.bownee.lenswave.proton.ProtonAccountSessionState
 import com.bownee.lenswave.proton.ProtonAlbum
@@ -15,6 +16,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -38,6 +40,7 @@ class GalleryViewModel
         private val accountSessionManager: ProtonAccountSessionManager,
         private val navigationStore: GalleryNavigationStore,
         private val savedStateHandle: SavedStateHandle,
+        private val clock: LenswaveClock,
     ) : ViewModel() {
         private val uiStateFactory = GalleryUiStateFactory(AndroidGalleryText(context.resources))
         private val mutableUiState = MutableStateFlow(GalleryUiState())
@@ -54,6 +57,7 @@ class GalleryViewModel
         private var protonAlbumsState = ProtonAlbumsState()
         private var protonAlbumPhotosState = ProtonAlbumPhotosState()
         private var manualRefreshGeneration = 0
+        private var lastPeriodicCheckMillis: Long? = null
 
         val uiState: StateFlow<GalleryUiState> = mutableUiState.asStateFlow()
 
@@ -117,6 +121,20 @@ class GalleryViewModel
 
         fun refreshAfterMutation() {
             requestRefresh(manual = false)
+        }
+
+        /**
+         * Keeps the visible section current while the gallery is on screen. The caller scopes it
+         * to the started lifecycle, so it pauses in the background and resumes with an immediate
+         * check when the last one is overdue. Each check is a quiet, non-forced refresh: the
+         * repository re-enumerates only once the cached listing is older than its freshness limit.
+         */
+        suspend fun runPeriodicSync() {
+            while (true) {
+                delay(GalleryPeriodicSyncPolicy.delayUntilNextCheckMillis(lastPeriodicCheckMillis, clock.nowMillis()))
+                lastPeriodicCheckMillis = clock.nowMillis()
+                if (currentUserId != null && !sessionTransitioning) requestRefresh(manual = false)
+            }
         }
 
         fun resumeThumbnailDownloads() {

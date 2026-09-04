@@ -202,6 +202,11 @@ class GalleryActivity :
                 viewModel.uiState.collectLatest(::render)
             }
         }
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                viewModel.runPeriodicSync()
+            }
+        }
     }
 
     private fun render(state: GalleryUiState) {

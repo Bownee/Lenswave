@@ -8,6 +8,10 @@ All notable changes to Lenswave. The format follows [Keep a Changelog](https://k
 - Previews (~1920 px) of every photo are downloaded in the background after thumbnails, so
   photos open sharp immediately.
 
+- While the gallery is open it checks for new, changed or deleted media every five minutes and
+  re-enumerates the visible section quietly once its cached listing is older than 15 minutes
+  (30 minutes for the album list). Returning from the background triggers an immediate check.
+
 ### Fixed
 - The Proton session database is now keyed with the stored random passphrase. Earlier builds
   zeroed the passphrase before the database was opened, so it was effectively encrypted with a
