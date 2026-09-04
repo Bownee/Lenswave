@@ -1,0 +1,23 @@
+{
+  "skill_name": "app-audit",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Run the full audit on the Lenswave repo again (C:\\Users\\John\\source\\repos\\Lenswave, whatever origin/main is now). All dimensions. I want the report page at the end, and tell me what to fix first.",
+      "expected_output": "A read-only worktree at the exact commit; one reviewer per dimension run in parallel with the checklists from references/dimensions.md and the area file map; the top findings re-verified; a published report following assets/report-template.html with severity tiles, a repeated-work table, per-dimension findings with file:line and fixes, a checked-and-fine list, and an ordered what-to-fix-first; an explicit note of what was not measured.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "the thumbnail downloader seems to eat battery overnight on my phone. can you check the worker code in proton/ and tell me why? don't change anything yet",
+      "expected_output": "Recognises this as the battery/network dimension of the audit; runs the worker reviewer (not all six) with the concrete checklist (foreground-service lifetime, unmetered gating, retry ladders, idle loops under the job wakelock, unique-work names, enqueue churn); reports defects with file:line, user-visible cost and fixes plus what is sound; does not edit code.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "Audit PR #22's branch for anything the fixes might have broken in the sync/reconciliation and storage areas, then fix what you find and push to the same PR.",
+      "expected_output": "A second-pass audit scoped to the two dimensions with prompts listing what the branch changed; findings verified; fix mode per references/fix-mode.md: one fixer per area in its own worktree with file ownership, full check chain, merge, re-audit of changed areas; checks the PR state before pushing and rebases onto main if it was squash-merged; no device tests without the flag that keeps the app installed.",
+      "files": []
+    }
+  ]
+}
