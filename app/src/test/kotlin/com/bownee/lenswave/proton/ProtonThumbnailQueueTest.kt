@@ -7,6 +7,7 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -227,6 +228,36 @@ class ProtonThumbnailQueueTest {
         }
 
     @Test
+    fun aFailedWriteIsRetriedAndReportedOnce() =
+        runTest {
+            val store = FakeStore()
+            val failures = mutableListOf<Throwable>()
+            val queue =
+                ProtonThumbnailQueue(store, FakeClock(), ProtonQueueName.THUMBNAILS, backgroundScope, failures::add)
+            queue.replaceSource(USER_ID, "timeline", candidates("a", "b"))
+            queue.claimReady(USER_ID, limit = 2)
+            store.failWrites = true
+            queue.settle(USER_ID, setOf("a"), emptySet())
+
+            advanceTimeBy(ProtonQueueFlushPolicy.FLUSH_DELAY_MILLIS)
+            runCurrent()
+            assertEquals(1, failures.size)
+            advanceTimeBy(ProtonQueueFlushPolicy.retryDelayAfterFailedWrite(1))
+            runCurrent()
+            assertEquals(1, failures.size)
+            assertEquals(listOf("a", "b"), store.entries.getValue(USER_ID).map { it.nodeUid })
+
+            store.failWrites = false
+            advanceTimeBy(ProtonQueueFlushPolicy.retryDelayAfterFailedWrite(2))
+            runCurrent()
+
+            assertEquals(listOf("b"), store.entries.getValue(USER_ID).map { it.nodeUid })
+            assertEquals(1, failures.size)
+            queue.flush(USER_ID)
+            assertEquals(1, failures.size)
+        }
+
+    @Test
     fun forgettingAUserDiscardsItsPendingWrite() =
         runTest {
             val store = FakeStore()
@@ -348,6 +379,58 @@ class ProtonThumbnailQueueTest {
         }
 
     @Test
+    fun replacingAnUnrelatedSourceLeavesOtherEntriesUntouched() =
+        runTest {
+            val queue = queue(FakeStore(), FakeClock())
+            queue.replaceSource(USER_ID, "timeline", candidates("a", "b"))
+            val before = queue.claimReady(USER_ID, limit = 2)
+            queue.release(USER_ID, before.map { it.nodeUid })
+
+            queue.replaceSource(USER_ID, "album:one", candidates("c"))
+
+            val after = queue.claimReady(USER_ID, limit = 3).filter { it.nodeUid != "c" }
+            assertEquals(before, after)
+            before.zip(after).forEach { (old, new) -> assertTrue(old === new) }
+        }
+
+    @Test
+    fun theQueueFileIsReadOnceAndAUserForgottenDuringTheReadStaysEmpty() =
+        runTest {
+            val store = FakeStore()
+            store.entries[USER_ID] = listOf(ProtonThumbnailQueueEntry("stored", mapOf("timeline" to 1L)))
+            val queue = queue(store, FakeClock())
+
+            assertEquals(1, queue.pendingCount(USER_ID))
+            assertEquals(1, queue.claimReady(USER_ID, limit = 1).size)
+            assertEquals(1, store.readCount)
+
+            queue.forget(USER_ID)
+            store.onRead = { kotlinx.coroutines.runBlocking { queue.forget(USER_ID) } }
+            assertEquals(0, queue.pendingCount(USER_ID))
+            assertEquals(2, store.readCount)
+        }
+
+    @Test
+    fun aRenditionProtonDoesNotHaveIsDroppedAtOnce() =
+        runTest {
+            val store = FakeStore()
+            val queue = queue(store, FakeClock())
+            queue.replaceSource(USER_ID, "timeline", candidates("missing", "flaky", "fine"))
+            queue.claimReady(USER_ID, limit = 3)
+
+            queue.settle(
+                USER_ID,
+                setOf("fine"),
+                mapOf("missing" to ThumbnailFailureKind.NOT_FOUND, "flaky" to ThumbnailFailureKind.UNANSWERED),
+            )
+            queue.flush(USER_ID)
+
+            assertEquals(listOf("flaky"), store.entries.getValue(USER_ID).map { it.nodeUid })
+            assertEquals(1, entry(store, "flaky").retryCount)
+            assertEquals(emptyList<ProtonThumbnailQueueEntry>(), queue.claimReady(USER_ID, limit = 3))
+        }
+
+    @Test
     fun anEntryIsDroppedAfterTheLastAllowedRetry() =
         runTest {
             val store = FakeStore()
@@ -393,17 +476,25 @@ class ProtonThumbnailQueueTest {
         val entries = mutableMapOf<String, List<ProtonThumbnailQueueEntry>>()
         val previewEntries = mutableMapOf<String, List<ProtonThumbnailQueueEntry>>()
         var writeCount = 0
+        var readCount = 0
+        var failWrites = false
+        var onRead: () -> Unit = {}
 
         override fun readQueue(
             userId: String,
             queue: ProtonQueueName,
-        ): List<ProtonThumbnailQueueEntry> = entriesFor(queue)[userId].orEmpty()
+        ): List<ProtonThumbnailQueueEntry> {
+            readCount++
+            onRead()
+            return entriesFor(queue)[userId].orEmpty()
+        }
 
         override fun writeQueue(
             userId: String,
             queue: ProtonQueueName,
             entries: List<ProtonThumbnailQueueEntry>,
         ) {
+            if (failWrites) throw java.io.IOException("disk full")
             writeCount++
             entriesFor(queue)[userId] = entries.toList()
         }

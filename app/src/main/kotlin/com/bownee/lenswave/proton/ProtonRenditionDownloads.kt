@@ -8,6 +8,8 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.produceIn
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeoutOrNull
 import me.proton.core.domain.entity.UserId
 import me.proton.drive.sdk.ProtonPhotosClient
@@ -48,7 +50,11 @@ internal class ProtonRenditionDownloads
             val requested = nodeUids.distinct()
             val successful =
                 requested.filterTo(mutableSetOf()) { nodeUid ->
-                    // A file stat only: decoding here would evict the gallery's own bitmaps.
+                    // A file stat only, deliberately: decoding every stored thumbnail here would
+                    // evict the gallery's own bitmaps and cost far more than it saves. The
+                    // trade-off is that a corrupt stored file counts as available, fails to
+                    // decode in the grid, and is queued again from there (see the gateway's
+                    // invalidateThumbnail); that path is rare and self-correcting.
                     cache.thumbnailExists(userId.id, nodeUid)
                 }
             if (successful.isNotEmpty()) {
@@ -125,7 +131,12 @@ internal class ProtonRenditionDownloads
             // Nodes the SDK skipped in a batch usually answer when asked on their own; asking now
             // keeps them out of the retry backoff.
             val unanswered = failures.filterValues { kind -> kind == ThumbnailFailureKind.UNANSWERED }.keys.toList()
-            downloadChunks(unanswered, batchSize = 1, downloadChunk = ::previewPass).forEach { result ->
+            downloadChunks(
+                unanswered,
+                batchSize = 1,
+                maxConcurrent = ProtonThumbnailDownloadPolicy.MAX_CONCURRENT_SINGLE_NODE_PASSES,
+                downloadChunk = ::previewPass,
+            ).forEach { result ->
                 successful += result.successfulNodeUids
                 result.successfulNodeUids.forEach(failures::remove)
                 failures += result.failures
@@ -147,26 +158,29 @@ internal class ProtonRenditionDownloads
                 substituted.forEach(failures::remove)
                 onProgress(ThumbnailBatchResult(substituted, emptyMap()))
             }
-            val finalFailures = failures.filterKeys { nodeUid -> nodeUid !in successful }
-            if (finalFailures.isNotEmpty()) onProgress(ThumbnailBatchResult(emptySet(), finalFailures))
-            return ThumbnailBatchResult(successful, finalFailures)
+            // Failures are reported once, in the result; reporting them through onProgress as
+            // well made the caller settle each one twice per pass, doubling the backoff steps.
+            return ThumbnailBatchResult(successful, failures.filterKeys { nodeUid -> nodeUid !in successful })
         }
 
+        /**
+         * Runs the SDK passes for [nodeUids] at most [maxConcurrent] at a time. A permit frees as
+         * soon as one pass ends, so a slow pass never holds the others back: the earlier windows
+         * with a barrier per window left most of the concurrency idle whenever one node took
+         * its whole deadline.
+         */
         private suspend fun downloadChunks(
             nodeUids: List<String>,
             batchSize: Int = ProtonThumbnailDownloadPolicy.SDK_BATCH_SIZE,
+            maxConcurrent: Int = ProtonThumbnailDownloadPolicy.MAX_CONCURRENT_BATCHES,
             downloadChunk: suspend (List<String>) -> ThumbnailBatchResult,
         ): List<ThumbnailBatchResult> =
             coroutineScope {
-                val results = mutableListOf<ThumbnailBatchResult>()
-                ProtonThumbnailDownloadPolicy.concurrentWindows(nodeUids, batchSize).forEach { concurrentChunks ->
-                    results +=
-                        concurrentChunks
-                            .map { chunk ->
-                                async { downloadChunk(chunk) }
-                            }.awaitAll()
-                }
-                results
+                val permits = Semaphore(maxConcurrent)
+                ProtonThumbnailDownloadPolicy
+                    .batches(nodeUids, batchSize)
+                    .map { chunk -> async { permits.withPermit { downloadChunk(chunk) } } }
+                    .awaitAll()
             }
 
         private suspend fun downloadChunk(
@@ -388,12 +402,19 @@ internal object ProtonThumbnailDownloadPolicy {
     fun idleTimeoutMillis(type: ThumbnailType): Long =
         if (type == ThumbnailType.PREVIEW) PREVIEW_IDLE_TIMEOUT_MILLIS else SDK_IDLE_TIMEOUT_MILLIS
 
-    fun <T> concurrentWindows(
+    /**
+     * A single-node pass is one node's worth of transfer with the whole deadline to itself, so
+     * more of them can run side by side than full batches; the re-ask of eight unanswered nodes
+     * would otherwise cost four full deadlines of mostly idle time.
+     */
+    const val MAX_CONCURRENT_SINGLE_NODE_PASSES = 4
+
+    fun <T> batches(
         values: List<T>,
         batchSize: Int = SDK_BATCH_SIZE,
-    ): List<List<List<T>>> {
+    ): List<List<T>> {
         require(batchSize > 0) { "The batch size must be positive" }
-        return values.chunked(batchSize).chunked(MAX_CONCURRENT_BATCHES)
+        return values.chunked(batchSize)
     }
 }
 

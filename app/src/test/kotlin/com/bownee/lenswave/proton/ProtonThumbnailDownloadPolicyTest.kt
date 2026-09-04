@@ -8,21 +8,21 @@ import org.junit.Test
 
 class ProtonThumbnailDownloadPolicyTest {
     @Test
-    fun sdkBatchesAndConcurrentWindowsStayBounded() {
+    fun sdkBatchesStayBoundedAndKeepTheirOrder() {
         val nodeUids = (1..65).map { value -> value.toString() }
 
-        val windows = ProtonThumbnailDownloadPolicy.concurrentWindows(nodeUids)
+        val batches = ProtonThumbnailDownloadPolicy.batches(nodeUids)
 
-        assertEquals(nodeUids, windows.flatten().flatten())
+        assertEquals(nodeUids, batches.flatten())
+        assertTrue(batches.all { batch -> batch.size <= ProtonThumbnailDownloadPolicy.SDK_BATCH_SIZE })
+        assertEquals(9, batches.size)
+    }
+
+    @Test
+    fun singleNodePassesRunMoreConcurrentlyThanFullBatches() {
         assertTrue(
-            windows.all { window ->
-                window.size <= ProtonThumbnailDownloadPolicy.MAX_CONCURRENT_BATCHES
-            },
-        )
-        assertTrue(
-            windows.flatten().all { batch ->
-                batch.size <= ProtonThumbnailDownloadPolicy.SDK_BATCH_SIZE
-            },
+            ProtonThumbnailDownloadPolicy.MAX_CONCURRENT_SINGLE_NODE_PASSES >
+                ProtonThumbnailDownloadPolicy.MAX_CONCURRENT_BATCHES,
         )
     }
 
@@ -57,14 +57,14 @@ class ProtonThumbnailDownloadPolicyTest {
 
     @Test
     fun singleNodeBatchesRetryUnansweredNodesOneAtATime() {
-        val windows = ProtonThumbnailDownloadPolicy.concurrentWindows(listOf("a", "b", "c"), batchSize = 1)
+        val batches = ProtonThumbnailDownloadPolicy.batches(listOf("a", "b", "c"), batchSize = 1)
 
-        assertEquals(listOf(listOf(listOf("a"), listOf("b")), listOf(listOf("c"))), windows)
+        assertEquals(listOf(listOf("a"), listOf("b"), listOf("c")), batches)
     }
 
     @Test(expected = IllegalArgumentException::class)
     fun batchSizeMustBePositive() {
-        ProtonThumbnailDownloadPolicy.concurrentWindows(listOf("a"), batchSize = 0)
+        ProtonThumbnailDownloadPolicy.batches(listOf("a"), batchSize = 0)
     }
 
     @Test
