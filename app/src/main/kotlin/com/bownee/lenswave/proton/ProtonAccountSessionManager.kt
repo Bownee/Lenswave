@@ -9,6 +9,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -32,44 +33,75 @@ data class ProtonAccountSessionState(
 
 /** Owns every process-wide Proton account transition, including failure recovery. */
 @Singleton
-class ProtonAccountSessionManager
+class ProtonAccountSessionManager internal constructor(
+    private val primaryAccount: Flow<Account?>,
+    private val transitionCoordinator: ProtonAccountTransitionCoordinator,
+    private val reportFailure: (LenswaveOperation, Throwable) -> Unit,
+    private val scope: CoroutineScope,
+) {
     @Inject
     constructor(
-        private val accountManager: AccountManager,
-        private val transitionCoordinator: ProtonAccountTransitionCoordinator,
-    ) {
-        private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-        private val started = AtomicBoolean()
-        private val mutableState = MutableStateFlow(ProtonAccountSessionState())
-        private var observedUserId: UserId? = null
+        accountManager: AccountManager,
+        transitionCoordinator: ProtonAccountTransitionCoordinator,
+    ) : this(
+        primaryAccount = accountManager.getPrimaryAccount(),
+        transitionCoordinator = transitionCoordinator,
+        reportFailure = { operation, error -> LenswaveDiagnostics.reportFailure(operation, error) },
+        scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+    )
 
-        val state: StateFlow<ProtonAccountSessionState> = mutableState.asStateFlow()
+    private val started = AtomicBoolean()
+    private val mutableState = MutableStateFlow(ProtonAccountSessionState())
+    private var observedUserId: UserId? = null
 
-        fun start() {
-            if (!started.compareAndSet(false, true)) return
-            scope.launch { observeAccounts() }
-        }
+    val state: StateFlow<ProtonAccountSessionState> = mutableState.asStateFlow()
 
-        private suspend fun observeAccounts() {
-            var retryDelayMillis = INITIAL_RETRY_MILLIS
-            while (true) {
-                currentCoroutineContext().ensureActive()
-                try {
-                    accountManager.getPrimaryAccount().collectLatest(::transitionTo)
-                    retryDelayMillis = INITIAL_RETRY_MILLIS
-                } catch (error: CancellationException) {
-                    throw error
-                } catch (error: Throwable) {
-                    LenswaveDiagnostics.reportFailure(LenswaveOperation.ACCOUNT_OBSERVER, error)
-                    delay(retryDelayMillis)
-                    retryDelayMillis = (retryDelayMillis * 2).coerceAtMost(MAX_RETRY_MILLIS)
-                }
+    fun start() {
+        if (!started.compareAndSet(false, true)) return
+        scope.launch { observeAccounts() }
+    }
+
+    private suspend fun observeAccounts() {
+        var retryDelayMillis = INITIAL_RETRY_MILLIS
+        while (true) {
+            currentCoroutineContext().ensureActive()
+            try {
+                primaryAccount.collectLatest(::transitionTo)
+                retryDelayMillis = INITIAL_RETRY_MILLIS
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                reportFailure(LenswaveOperation.ACCOUNT_OBSERVER, error)
+                delay(retryDelayMillis)
+                retryDelayMillis = (retryDelayMillis * 2).coerceAtMost(MAX_RETRY_MILLIS)
             }
         }
+    }
 
-        private suspend fun transitionTo(account: Account?) {
-            val nextUserId = account?.takeIf(Account::isReady)?.userId
-            if (observedUserId == nextUserId) {
+    private suspend fun transitionTo(account: Account?) {
+        val nextUserId = account?.takeIf(Account::isReady)?.userId
+        if (observedUserId == nextUserId) {
+            mutableState.value =
+                ProtonAccountSessionState(
+                    account = account,
+                    activeUserId = nextUserId,
+                    initialized = true,
+                )
+            return
+        }
+
+        mutableState.value =
+            ProtonAccountSessionState(
+                account = account,
+                initialized = mutableState.value.initialized,
+                transitioning = true,
+            )
+        var retryDelayMillis = INITIAL_RETRY_MILLIS
+        while (true) {
+            currentCoroutineContext().ensureActive()
+            try {
+                transitionCoordinator.transition(observedUserId, nextUserId)
+                observedUserId = nextUserId
                 mutableState.value =
                     ProtonAccountSessionState(
                         account = account,
@@ -77,40 +109,19 @@ class ProtonAccountSessionManager
                         initialized = true,
                     )
                 return
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                reportFailure(LenswaveOperation.ACCOUNT_TRANSITION, error)
+                mutableState.value = mutableState.value.copy(transitioning = true)
+                delay(retryDelayMillis)
+                retryDelayMillis = (retryDelayMillis * 2).coerceAtMost(MAX_RETRY_MILLIS)
             }
-
-            mutableState.value =
-                ProtonAccountSessionState(
-                    account = account,
-                    initialized = mutableState.value.initialized,
-                    transitioning = true,
-                )
-            var retryDelayMillis = INITIAL_RETRY_MILLIS
-            while (true) {
-                currentCoroutineContext().ensureActive()
-                try {
-                    transitionCoordinator.transition(observedUserId, nextUserId)
-                    observedUserId = nextUserId
-                    mutableState.value =
-                        ProtonAccountSessionState(
-                            account = account,
-                            activeUserId = nextUserId,
-                            initialized = true,
-                        )
-                    return
-                } catch (error: CancellationException) {
-                    throw error
-                } catch (error: Throwable) {
-                    LenswaveDiagnostics.reportFailure(LenswaveOperation.ACCOUNT_TRANSITION, error)
-                    mutableState.value = mutableState.value.copy(transitioning = true)
-                    delay(retryDelayMillis)
-                    retryDelayMillis = (retryDelayMillis * 2).coerceAtMost(MAX_RETRY_MILLIS)
-                }
-            }
-        }
-
-        private companion object {
-            const val INITIAL_RETRY_MILLIS = 500L
-            const val MAX_RETRY_MILLIS = 30_000L
         }
     }
+
+    private companion object {
+        const val INITIAL_RETRY_MILLIS = 500L
+        const val MAX_RETRY_MILLIS = 30_000L
+    }
+}

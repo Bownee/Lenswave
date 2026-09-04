@@ -518,12 +518,18 @@ internal class ProtonPhotoCache
          * Directory names are hashed user ids and key files are hashed scopes, so an orphaned
          * directory cannot name its key; the alias marker each directory carries does. A directory
          * from before the marker existed leaves its key behind: a wrapped key nothing reads.
+         *
+         * Best effort, like [clearUser]: this runs inside the account transition, which the
+         * session manager retries forever while the gallery shows the account as transitioning,
+         * so a directory that resists deletion is reported once and left for the next sweep. Its
+         * key is deleted regardless, so whatever residue survives is unreadable.
          */
         override fun retainOnlyUser(userId: String?) {
             val retainedName = userId?.let(::safeName)
+            var everythingDeleted = true
             root.listFiles()?.filter { it.name != retainedName }?.forEach { directory ->
                 val keyAlias = File(directory, KEY_ALIAS_FILE).takeIf(File::isFile)?.readText()
-                check(directory.deleteRecursively()) { "Could not remove orphaned Proton cache" }
+                if (!directory.deleteRecursively()) everythingDeleted = false
                 keyAlias?.let { alias ->
                     try {
                         secureFiles.deleteKeyAlias(alias)
@@ -531,6 +537,12 @@ internal class ProtonPhotoCache
                         LenswaveDiagnostics.reportFailure(LenswaveOperation.CACHE_CLEAR, error)
                     }
                 }
+            }
+            if (!everythingDeleted) {
+                LenswaveDiagnostics.reportFailure(
+                    LenswaveOperation.CACHE_CLEAR,
+                    IllegalStateException("Could not remove all orphaned Proton caches; residue is swept later"),
+                )
             }
             originals.retainOnly(userId)
             thumbnails.retainMemoryFor(userId)
