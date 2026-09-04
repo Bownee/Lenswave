@@ -277,6 +277,12 @@ internal class ProtonRenditionDownloads
             val unreportedSuccessful = mutableSetOf<String>()
             val failures = mutableMapOf<String, ThumbnailFailureKind>()
             val reportedKinds = mutableSetOf<ThumbnailFailureKind>()
+            val operation =
+                if (type == ThumbnailType.PREVIEW) {
+                    LenswaveOperation.PREVIEW_DOWNLOAD
+                } else {
+                    LenswaveOperation.THUMBNAIL_DOWNLOAD
+                }
 
             suspend fun publishSuccessful() {
                 if (unreportedSuccessful.isEmpty()) return
@@ -305,8 +311,8 @@ internal class ProtonRenditionDownloads
                         val kind = ThumbnailFailureClassifier.classify(error)
                         // One sample per failure kind and pass keeps the log readable
                         // while still showing why each rendition is refused.
-                        if (type == ThumbnailType.PREVIEW && reportedKinds.add(kind)) {
-                            LenswaveDiagnostics.reportFailure(LenswaveOperation.PREVIEW_DOWNLOAD, error)
+                        if (reportedKinds.add(kind)) {
+                            LenswaveDiagnostics.reportFailure(operation, error)
                         }
                         failures.record(nodeUid, kind)
                     },
@@ -361,14 +367,6 @@ internal class ProtonRenditionDownloads
             publishSuccessful()
             val unanswered = requested.filter { nodeUid -> nodeUid !in successful && nodeUid !in failures }
             if (unanswered.isNotEmpty()) {
-                val operation =
-                    if (type ==
-                        ThumbnailType.PREVIEW
-                    ) {
-                        LenswaveOperation.PREVIEW_DOWNLOAD
-                    } else {
-                        LenswaveOperation.THUMBNAIL_DOWNLOAD
-                    }
                 val reason =
                     if (completed == null || (wentQuiet && !answered)) {
                         "deadline"
