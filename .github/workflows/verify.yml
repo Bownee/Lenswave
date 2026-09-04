@@ -100,7 +100,7 @@ jobs:
           cp app/build/reports/lint-results-*.html reports/ 2>/dev/null || true
           cp -r app/build/reports/jacoco reports/coverage 2>/dev/null || true
           cp -r app/build/test-results reports/unit-test-results 2>/dev/null || true
-          ls -R reports | head -50
+          find reports -maxdepth 2 -type d | sort
 
       - name: Upload evidence
         if: always()
