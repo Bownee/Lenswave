@@ -9,8 +9,6 @@ import com.bownee.lenswave.proton.ProtonGalleryPhoto
 import com.bownee.lenswave.proton.ProtonGalleryState
 import com.bownee.lenswave.proton.ProtonMediaTag
 import com.bownee.lenswave.proton.ProtonTagState
-import com.bownee.lenswave.proton.ProtonThumbnailWorkIssue
-import com.bownee.lenswave.proton.ProtonThumbnailWorkStatus
 import me.proton.core.domain.entity.UserId
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -577,25 +575,6 @@ class GalleryUiStateFactoryTest {
     }
 
     @Test
-    fun `background worker with no pending thumbnails reports nothing`() {
-        val state =
-            factory.create(
-                GalleryUiInputs(
-                    destination = GalleryDestination.Timeline,
-                    protonAccountStatus = ProtonAccountStatus.CONNECTED,
-                    protonGallery =
-                        ProtonGalleryState(
-                            hasLoaded = true,
-                            thumbnailWorkStatus = ProtonThumbnailWorkStatus.Running(1, 25),
-                        ),
-                ),
-            )
-
-        assertFalse(state.isRefreshing)
-        assertNotNull(state.emptyState)
-    }
-
-    @Test
     fun `initial Proton metadata sync does not display refresh indicator`() {
         val state =
             factory.create(
@@ -623,30 +602,6 @@ class GalleryUiStateFactoryTest {
             )
 
         assertTrue(state.isRefreshing)
-    }
-
-    @Test
-    fun `stopped thumbnail work is silent`() {
-        val state =
-            factory.create(
-                GalleryUiInputs(
-                    destination = GalleryDestination.Timeline,
-                    protonAccountStatus = ProtonAccountStatus.CONNECTED,
-                    protonGallery =
-                        ProtonGalleryState(
-                            hasLoaded = true,
-                            thumbnailWorkStatus =
-                                ProtonThumbnailWorkStatus.Stopped(
-                                    attempt = 25,
-                                    maximumAttempts = 25,
-                                    issue = ProtonThumbnailWorkIssue.ERROR,
-                                ),
-                        ),
-                ),
-            )
-
-        assertFalse(state.isRefreshing)
-        assertNotNull(state.emptyState)
     }
 
     @Test

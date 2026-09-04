@@ -9,16 +9,16 @@ import java.io.IOException
 import java.net.SocketTimeoutException
 
 class ThumbnailFailureClassifierTest {
-    @Test fun timeoutIsRetryableNetworkFailure() {
+    @Test fun timeoutIsAnOrdinaryRetryableFailure() {
         assertEquals(
-            ThumbnailFailureKind.NETWORK,
+            ThumbnailFailureKind.OTHER,
             ThumbnailFailureClassifier.classify(SocketTimeoutException()),
         )
     }
 
-    @Test fun authenticationAndNotFoundStayDistinct() {
+    @Test fun onlyMissingRenditionsAreNotFound() {
         assertEquals(
-            ThumbnailFailureKind.AUTHENTICATION,
+            ThumbnailFailureKind.OTHER,
             ThumbnailFailureClassifier.classify(AuthenticationException()),
         )
         assertEquals(
@@ -27,9 +27,9 @@ class ThumbnailFailureClassifierTest {
         )
     }
 
-    @Test fun ordinaryIoFailureIsNetworkFailure() {
+    @Test fun ioFailureIsAnOrdinaryRetryableFailure() {
         assertEquals(
-            ThumbnailFailureKind.NETWORK,
+            ThumbnailFailureKind.OTHER,
             ThumbnailFailureClassifier.classify(IOException()),
         )
     }
@@ -42,7 +42,7 @@ class ThumbnailFailureClassifierTest {
             ),
         )
         assertEquals(
-            ThumbnailFailureKind.UNKNOWN,
+            ThumbnailFailureKind.OTHER,
             ThumbnailFailureClassifier.classify(ProtonDriveSdkException("File thumbnail failure: boom", null, null)),
         )
     }
@@ -63,11 +63,11 @@ class ThumbnailFailureClassifierTest {
             ThumbnailFailureClassifier.classify(sdk(primaryCode = 404L)),
         )
         assertEquals(
-            ThumbnailFailureKind.AUTHENTICATION,
+            ThumbnailFailureKind.OTHER,
             ThumbnailFailureClassifier.classify(sdk(primaryCode = 401L)),
         )
         assertEquals(
-            ThumbnailFailureKind.NETWORK,
+            ThumbnailFailureKind.OTHER,
             ThumbnailFailureClassifier.classify(sdk(domain = ProtonSdkError.ErrorDomain.Network)),
         )
         assertEquals(
@@ -77,7 +77,7 @@ class ThumbnailFailureClassifierTest {
             ),
         )
         assertEquals(
-            ThumbnailFailureKind.UNKNOWN,
+            ThumbnailFailureKind.OTHER,
             ThumbnailFailureClassifier.classify(sdk(domain = ProtonSdkError.ErrorDomain.Cryptography)),
         )
     }

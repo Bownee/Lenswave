@@ -20,8 +20,6 @@ import me.proton.drive.sdk.entity.NodeUid
 import me.proton.drive.sdk.entity.ThumbnailType
 import java.io.File
 import java.io.FileOutputStream
-import java.io.IOException
-import java.net.SocketTimeoutException
 import java.nio.ByteBuffer
 import java.nio.channels.WritableByteChannel
 import javax.inject.Inject
@@ -323,7 +321,7 @@ internal class ProtonDownloadRepository
             successful += previewResult.successfulNodeUids
             previewResult.failures.forEach { (nodeUid, kind) -> failures.record(nodeUid, kind) }
             nodeUids.filterNot { nodeUid -> nodeUid in successful }.forEach { nodeUid ->
-                failures.putIfAbsent(nodeUid, ThumbnailFailureKind.UNKNOWN)
+                failures.putIfAbsent(nodeUid, ThumbnailFailureKind.OTHER)
             }
             val finalFailures = failures.filterKeys { nodeUid -> nodeUid !in successful }
             if (finalFailures.isNotEmpty()) {
@@ -381,7 +379,7 @@ internal class ProtonDownloadRepository
                                 publishSuccessful()
                             }
                         } else {
-                            failures.record(nodeUid, ThumbnailFailureKind.STORAGE)
+                            failures.record(nodeUid, ThumbnailFailureKind.OTHER)
                         }
                     },
                     onFailure = { error ->
@@ -531,22 +529,24 @@ internal object ThumbnailPassCompletionPolicy {
         }
 }
 
+/**
+ * Only three failures change what happens next: a missing rendition gets the thumbnail as its
+ * preview, an unanswered node is asked again on its own, and everything else backs off.
+ */
 internal enum class ThumbnailFailureKind(
     val priority: Int,
 ) {
-    UNKNOWN(0),
+    OTHER(0),
 
     /** The SDK gave no answer for the node before the pass ended; asked again on its own first. */
     UNANSWERED(1),
-    NETWORK(2),
-    NOT_FOUND(3),
-    AUTHENTICATION(4),
-    STORAGE(5),
+
+    /** Proton has no such rendition for the photo; retrying cannot help. */
+    NOT_FOUND(2),
 }
 
 internal object ThumbnailFailureClassifier {
     fun classify(error: Throwable): ThumbnailFailureKind {
-        if (error is SocketTimeoutException) return ThumbnailFailureKind.NETWORK
         if (error is ProtonDriveSdkException) {
             error.error?.let { sdkError -> return classify(sdkError) }
             // Without a structured error the message is all the SDK gives, for example
@@ -554,18 +554,19 @@ internal object ThumbnailFailureClassifier {
             return classifyDescription(error.message.orEmpty().lowercase())
         }
         val type = error::class.java.simpleName.lowercase()
-        return when {
-            "unauthor" in type || "auth" in type -> ThumbnailFailureKind.AUTHENTICATION
-            "notfound" in type || "not_found" in type -> ThumbnailFailureKind.NOT_FOUND
-            error is IOException -> ThumbnailFailureKind.NETWORK
-            else -> ThumbnailFailureKind.UNKNOWN
+        return if ("notfound" in type ||
+            "not_found" in type
+        ) {
+            ThumbnailFailureKind.NOT_FOUND
+        } else {
+            ThumbnailFailureKind.OTHER
         }
     }
 
     /**
-     * SDK failures all arrive as one exception class, so the kind has to come from the structured
-     * error: typed data for missing nodes or renditions, the API's "does not exist" code, and the
-     * transport domains for retryable failures. Nested errors are consulted when the outer one is
+     * SDK failures all arrive as one exception class, so a missing rendition has to be recognised
+     * from the structured error: typed data for missing nodes or renditions, HTTP 404, the API's
+     * "does not exist" code, or the wording. Nested errors are consulted when the outer one is
      * undecided.
      */
     fun classify(sdkError: ProtonSdkError): ThumbnailFailureKind {
@@ -577,47 +578,25 @@ internal object ThumbnailFailureClassifier {
 
             else -> Unit
         }
+        if (sdkError.primaryCode == HTTP_NOT_FOUND || sdkError.secondaryCode == API_CODE_NOT_EXIST) {
+            return ThumbnailFailureKind.NOT_FOUND
+        }
         val description = "${sdkError.type.orEmpty()} ${sdkError.message.orEmpty()}".lowercase()
-        val kind =
-            when {
-                sdkError.primaryCode == HTTP_NOT_FOUND -> {
-                    ThumbnailFailureKind.NOT_FOUND
-                }
-
-                sdkError.secondaryCode == API_CODE_NOT_EXIST -> {
-                    ThumbnailFailureKind.NOT_FOUND
-                }
-
-                sdkError.primaryCode == HTTP_UNAUTHORIZED || sdkError.primaryCode == HTTP_FORBIDDEN -> {
-                    ThumbnailFailureKind.AUTHENTICATION
-                }
-
-                sdkError.domain == ProtonSdkError.ErrorDomain.Network ||
-                    sdkError.domain == ProtonSdkError.ErrorDomain.Transport -> {
-                    ThumbnailFailureKind.NETWORK
-                }
-
-                else -> {
-                    classifyDescription(description)
-                }
-            }
-        if (kind != ThumbnailFailureKind.UNKNOWN) return kind
-        return sdkError.innerError?.let(::classify) ?: ThumbnailFailureKind.UNKNOWN
+        if (classifyDescription(description) == ThumbnailFailureKind.NOT_FOUND) return ThumbnailFailureKind.NOT_FOUND
+        return sdkError.innerError?.let(::classify) ?: ThumbnailFailureKind.OTHER
     }
 
     private fun classifyDescription(description: String): ThumbnailFailureKind =
-        when {
-            MISSING_RENDITION_PHRASES.any { phrase -> phrase in description } -> ThumbnailFailureKind.NOT_FOUND
-            "unauthor" in description -> ThumbnailFailureKind.AUTHENTICATION
-            else -> ThumbnailFailureKind.UNKNOWN
+        if (MISSING_RENDITION_PHRASES.any { phrase -> phrase in description }) {
+            ThumbnailFailureKind.NOT_FOUND
+        } else {
+            ThumbnailFailureKind.OTHER
         }
 
     /** Wordings Proton uses when a photo simply has no such rendition; retrying cannot help. */
     private val MISSING_RENDITION_PHRASES =
         listOf("no image preview", "no preview", "no thumbnail", "not found", "notfound", "does not exist")
 
-    private const val HTTP_UNAUTHORIZED = 401L
-    private const val HTTP_FORBIDDEN = 403L
     private const val HTTP_NOT_FOUND = 404L
 
     /** Proton API response code for "the requested resource does not exist". */

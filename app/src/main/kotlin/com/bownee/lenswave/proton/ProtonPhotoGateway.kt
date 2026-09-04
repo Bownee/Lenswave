@@ -325,10 +325,6 @@ class ProtonPhotoGateway
                 withContext(Dispatchers.IO) {
                     sessionGuard.withActiveSession(userId) { thumbnailWorkProgressInActiveSession(userId) }
                 }
-
-            override fun updateThumbnailWorkStatus(status: ProtonThumbnailWorkStatus?) {
-                timeline.updateThumbnailWorkStatus(status)
-            }
         }
 
         private suspend fun thumbnailWorkProgressInActiveSession(userId: UserId) =

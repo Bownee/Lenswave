@@ -16,8 +16,6 @@ internal interface ProtonThumbnailWorkGateway {
     ): ProtonThumbnailQueueStep
 
     suspend fun thumbnailWorkProgress(userId: UserId): ProtonThumbnailWorkProgress
-
-    fun updateThumbnailWorkStatus(status: ProtonThumbnailWorkStatus?)
 }
 
 @Module

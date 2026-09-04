@@ -290,10 +290,6 @@ internal class ProtonTimelineRepository
             mutableState.value = ProtonGalleryState()
         }
 
-        internal fun updateThumbnailWorkStatus(status: ProtonThumbnailWorkStatus?) {
-            mutableState.value = mutableState.value.copy(thumbnailWorkStatus = status)
-        }
-
         private fun emit(
             userId: UserId,
             photos: List<ProtonGalleryPhoto>,
@@ -301,16 +297,12 @@ internal class ProtonTimelineRepository
             syncing: Boolean,
             tags: Map<ProtonMediaTag, ProtonTagState> = mutableState.value.tags,
         ) {
-            val workerStatus =
-                mutableState.value.thumbnailWorkStatus
-                    .takeIf { status -> status is ProtonThumbnailWorkStatus.Running }
             mutableState.value =
                 ProtonGalleryState(
                     userId = userId.id,
                     photos = photos.toList(),
                     hasLoaded = hasLoaded,
                     syncing = syncing,
-                    thumbnailWorkStatus = workerStatus,
                     tags = tags,
                 )
         }

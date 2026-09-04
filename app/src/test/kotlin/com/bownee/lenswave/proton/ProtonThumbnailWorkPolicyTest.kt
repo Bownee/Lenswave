@@ -13,72 +13,20 @@ class ProtonThumbnailWorkPolicyTest {
     }
 
     @Test
-    fun `complete download succeeds immediately`() {
-        val resolution = ProtonThumbnailWorkPolicy.resolve(runAttemptCount = 0, issue = null)
-
-        assertEquals(ProtonThumbnailWorkDecision.SUCCESS, resolution.decision)
-        assertEquals(null, resolution.status)
-        assertEquals("complete", resolution.diagnosticState)
+    fun `a crashed run is retried a few times and then left alone`() {
+        assertTrue(ProtonThumbnailWorkPolicy.shouldRetryAfterError(runAttemptCount = 0))
+        assertTrue(ProtonThumbnailWorkPolicy.shouldRetryAfterError(runAttemptCount = 1))
+        assertFalse(ProtonThumbnailWorkPolicy.shouldRetryAfterError(runAttemptCount = 2))
+        assertFalse(ProtonThumbnailWorkPolicy.shouldRetryAfterError(runAttemptCount = 40))
     }
 
     @Test
-    fun `incomplete download retries before the attempt limit`() {
-        val resolution =
-            ProtonThumbnailWorkPolicy.resolve(
-                runAttemptCount = ProtonThumbnailWorkPolicy.MAX_ATTEMPTS - 2,
-                issue = ProtonThumbnailWorkIssue.INCOMPLETE,
-            )
-
-        assertEquals(ProtonThumbnailWorkDecision.RETRY, resolution.decision)
-        assertEquals(
-            ProtonThumbnailWorkStatus.RetryScheduled(
-                ProtonThumbnailWorkPolicy.MAX_ATTEMPTS,
-                ProtonThumbnailWorkPolicy.MAX_ATTEMPTS,
-                ProtonThumbnailWorkIssue.INCOMPLETE,
-            ),
-            resolution.status,
-        )
-        assertEquals("retry-incomplete", resolution.diagnosticState)
-    }
-
-    @Test
-    fun `incomplete download fails at the attempt limit`() {
-        val resolution =
-            ProtonThumbnailWorkPolicy.resolve(
-                runAttemptCount = ProtonThumbnailWorkPolicy.MAX_ATTEMPTS - 1,
-                issue = ProtonThumbnailWorkIssue.TIMEOUT,
-            )
-
-        assertEquals(ProtonThumbnailWorkDecision.FAILURE, resolution.decision)
-        assertEquals(
-            ProtonThumbnailWorkStatus.Stopped(
-                ProtonThumbnailWorkPolicy.MAX_ATTEMPTS,
-                ProtonThumbnailWorkPolicy.MAX_ATTEMPTS,
-                ProtonThumbnailWorkIssue.TIMEOUT,
-            ),
-            resolution.status,
-        )
-        assertEquals("stopped-timeout", resolution.diagnosticState)
-    }
-
-    @Test
-    fun `attempt count remains valid when restored work exceeds the limit`() {
-        val resolution =
-            ProtonThumbnailWorkPolicy.resolve(
-                runAttemptCount = ProtonThumbnailWorkPolicy.MAX_ATTEMPTS + 3,
-                issue = ProtonThumbnailWorkIssue.ERROR,
-            )
-
-        assertEquals(ProtonThumbnailWorkDecision.FAILURE, resolution.decision)
-        assertEquals(
-            ProtonThumbnailWorkStatus.Stopped(
-                ProtonThumbnailWorkPolicy.MAX_ATTEMPTS,
-                ProtonThumbnailWorkPolicy.MAX_ATTEMPTS,
-                ProtonThumbnailWorkIssue.ERROR,
-            ),
-            resolution.status,
-        )
-        assertEquals("stopped-error", resolution.diagnosticState)
+    fun `every outcome has a log-safe diagnostic state`() {
+        val safe = Regex("[a-z-]{1,64}")
+        ProtonThumbnailWorkOutcome.entries.forEach { outcome ->
+            assertTrue(outcome.name, safe.matches(outcome.diagnosticState))
+        }
+        assertEquals("complete", ProtonThumbnailWorkOutcome.COMPLETE.diagnosticState)
     }
 
     @Test

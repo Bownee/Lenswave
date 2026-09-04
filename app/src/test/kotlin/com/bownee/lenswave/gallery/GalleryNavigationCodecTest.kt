@@ -30,7 +30,7 @@ class GalleryNavigationCodecTest {
 
     @Test
     fun `incomplete or retired collections fall back to the Library`() {
-        listOf("proton-album", "proton-tag", "proton-albums", "device", "trash").forEach { stored ->
+        listOf("proton-album", "proton-tag", "proton-albums", "device").forEach { stored ->
             assertEquals(
                 GalleryDestination.Library,
                 GalleryNavigationCodec.decode(StoredGalleryNavigation(destination = stored)),

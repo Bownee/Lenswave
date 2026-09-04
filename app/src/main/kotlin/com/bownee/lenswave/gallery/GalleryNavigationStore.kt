@@ -39,7 +39,6 @@ internal object GalleryNavigationCodec {
             DESTINATION_LIBRARY,
             LEGACY_DESTINATION_PROTON_ALBUMS,
             LEGACY_DESTINATION_DEVICE,
-            LEGACY_DESTINATION_TRASH,
             -> {
                 GalleryDestination.Library
             }
@@ -74,7 +73,6 @@ internal object GalleryNavigationCodec {
     private const val LEGACY_DESTINATION_COMBINED = "combined"
     private const val LEGACY_DESTINATION_PROTON_ALBUMS = "proton-albums"
     private const val LEGACY_DESTINATION_DEVICE = "device"
-    private const val LEGACY_DESTINATION_TRASH = "trash"
 }
 
 internal interface GalleryNavigationStore {
