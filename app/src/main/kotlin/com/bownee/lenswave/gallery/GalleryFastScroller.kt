@@ -24,6 +24,10 @@ internal class GalleryFastScroller(
     context: Context,
 ) {
     private val handleSize = context.resources.getDimensionPixelSize(R.dimen.gallery_fast_scroll_handle_size)
+
+    // Resolved once: both are read on every draw and touch, where a density lookup would be waste.
+    private val edgeMargin = context.dp(EDGE_MARGIN_DP)
+    private val touchExpansion = context.dp(TOUCH_EXPANSION_DP)
     private val defaultDrawable =
         requireNotNull(
             ResourcesCompat.getDrawable(
@@ -212,13 +216,11 @@ internal class GalleryFastScroller(
         return (combinedHeight / listView.childCount).coerceAtLeast(1)
     }
 
-    private fun isInsideTouchTarget(event: MotionEvent): Boolean {
-        val expansion = listView.context.dp(TOUCH_EXPANSION_DP)
-        return event.x >= handleBounds.left - expansion &&
-            event.x <= handleBounds.right + expansion &&
-            event.y >= handleBounds.top - expansion &&
-            event.y <= handleBounds.bottom + expansion
-    }
+    private fun isInsideTouchTarget(event: MotionEvent): Boolean =
+        event.x >= handleBounds.left - touchExpansion &&
+            event.x <= handleBounds.right + touchExpansion &&
+            event.y >= handleBounds.top - touchExpansion &&
+            event.y <= handleBounds.bottom + touchExpansion
 
     private fun updateHandleBounds() {
         val top =
@@ -230,11 +232,10 @@ internal class GalleryFastScroller(
                 trackEnd = trackEnd(),
                 handleSize = handleSize,
             )
-        val margin = listView.context.dp(EDGE_MARGIN_DP)
         if (isRtl()) {
-            handleBounds.set(margin, top, margin + handleSize, top + handleSize)
+            handleBounds.set(edgeMargin, top, edgeMargin + handleSize, top + handleSize)
         } else {
-            val right = listView.width - margin
+            val right = listView.width - edgeMargin
             handleBounds.set(right - handleSize, top, right, top + handleSize)
         }
     }
