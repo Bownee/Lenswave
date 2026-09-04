@@ -20,9 +20,16 @@ data class ProtonOriginalDownloadProgress(
                 ?.let { total -> ((downloadedBytes.coerceIn(0L, total) * 100L) / total).toInt() }
 }
 
-/** A file that can be read while the Proton SDK is still appending decrypted bytes to it. */
+/**
+ * A file that can be read while bytes are still being appended to it: by the Proton SDK during
+ * a download, or by the decrypt of a cached original.
+ *
+ * [file] is where the bytes are right now. A decrypt writes into a temporary file and renames it
+ * once the whole original verified, so [complete] may move [file]; a reader that finds its path
+ * gone waits for [awaitCompletion] and opens [file] again.
+ */
 class ProtonOriginalStream(
-    val file: File,
+    file: File,
 ) {
     private val lock = ReentrantLock()
     private val changed = lock.newCondition()
@@ -31,12 +38,25 @@ class ProtonOriginalStream(
     private var failure: Throwable? = null
     private var downloadComplete = false
 
+    @Volatile
+    var file: File = file
+        private set
+
     val progress: StateFlow<ProtonOriginalDownloadProgress> = mutableProgress.asStateFlow()
 
     fun bytesWritten(byteCount: Int) =
         lock.withLock {
             if (byteCount <= 0 || downloadComplete || failure != null) return@withLock
             availableBytes += byteCount
+            publish(downloadedBytes = availableBytes)
+            changed.signalAll()
+        }
+
+    /** The readable prefix is now [totalBytes] long; a total behind what is known is ignored. */
+    fun availableBytes(totalBytes: Long) =
+        lock.withLock {
+            if (totalBytes <= availableBytes || downloadComplete || failure != null) return@withLock
+            availableBytes = totalBytes
             publish(downloadedBytes = availableBytes)
             changed.signalAll()
         }
@@ -52,10 +72,12 @@ class ProtonOriginalStream(
         )
     }
 
-    fun complete() =
+    /** Every byte is on disk, in [committed]: the same file, or the name the growing file was renamed to. */
+    fun complete(committed: File = file) =
         lock.withLock {
             if (failure != null) return@withLock
-            availableBytes = maxOf(availableBytes, file.length())
+            file = committed
+            availableBytes = maxOf(availableBytes, committed.length())
             downloadComplete = true
             publish(
                 downloadedBytes = availableBytes,
@@ -86,6 +108,13 @@ class ProtonOriginalStream(
             failure?.let { error -> throw IOException("Proton media download failed", error) }
             ProtonOriginalReadState(availableBytes, downloadComplete)
         }
+
+    /** Waits until every byte is on disk, then returns the final [file]. */
+    @Throws(IOException::class)
+    fun awaitCompletion(): File {
+        awaitReadable(Long.MAX_VALUE)
+        return file
+    }
 
     /**
      * Emits only when the change is one a reader would notice: a StateFlow value per channel

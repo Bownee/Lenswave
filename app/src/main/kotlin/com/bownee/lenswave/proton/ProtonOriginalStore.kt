@@ -4,12 +4,42 @@ import android.content.Context
 import com.bownee.lenswave.LenswaveClock
 import com.bownee.lenswave.storage.AtomicFileStore
 import com.bownee.lenswave.storage.SecureFileStore
+import dagger.Binds
+import dagger.Module
+import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
+import dagger.hilt.components.SingletonComponent
 import java.io.File
 import java.util.concurrent.CancellationException
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
+
+/**
+ * Decrypts a cached original for a reader that starts before the decrypt is over: the video
+ * player. [ProtonMediaCache.readOriginal] is the same operation without the callbacks.
+ */
+internal interface ProtonOriginalMaterializer {
+    /**
+     * The plaintext copy, or null when nothing is cached. [onStarted] names the growing plaintext
+     * file before the first segment is written and [onBytesWritten] follows every verified
+     * segment with the plaintext total; neither is called for a copy that was already on disk.
+     * The growing file is renamed to the returned one once the whole original verified.
+     */
+    fun materialize(
+        userId: String,
+        nodeUid: String,
+        shouldContinue: () -> Boolean,
+        onStarted: (plaintextInProgress: File) -> Unit,
+        onBytesWritten: (totalBytes: Long) -> Unit,
+    ): File?
+}
+
+@Module
+@InstallIn(SingletonComponent::class)
+internal abstract class ProtonOriginalStoreModule {
+    @Binds abstract fun bindMaterializer(implementation: ProtonOriginalStore): ProtonOriginalMaterializer
+}
 
 /**
  * Encrypted on-disk store for full-size originals plus the short-lived plaintext copies the
@@ -27,7 +57,7 @@ internal class ProtonOriginalStore
         @ApplicationContext context: Context,
         private val secureFiles: SecureFileStore,
         private val clock: LenswaveClock,
-    ) {
+    ) : ProtonOriginalMaterializer {
         private val originals = File(context.cacheDir, ProtonStorageLayout.ORIGINALS_DIRECTORY).apply { mkdirs() }
         private val decrypted = File(context.cacheDir, ProtonStorageLayout.DECRYPTED_DIRECTORY)
 
@@ -59,6 +89,14 @@ internal class ProtonOriginalStore
             userId: String,
             nodeUid: String,
             shouldContinue: () -> Boolean = { true },
+        ): File? = materialize(userId, nodeUid, shouldContinue, onStarted = {}, onBytesWritten = {})
+
+        override fun materialize(
+            userId: String,
+            nodeUid: String,
+            shouldContinue: () -> Boolean,
+            onStarted: (plaintextInProgress: File) -> Unit,
+            onBytesWritten: (totalBytes: Long) -> Unit,
         ): File? {
             wipeStaleDecryptedCopies()
             val file = file(userId, nodeUid)
@@ -74,7 +112,7 @@ internal class ProtonOriginalStore
             }
             return try {
                 materialized.delete()
-                secureFiles.decryptFile(scope(userId), file, materialized, shouldContinue)
+                secureFiles.decryptFile(scope(userId), file, materialized, onStarted, onBytesWritten, shouldContinue)
                 transientReadFailures.recovered()
                 file.setLastModified(clock.nowMillis())
                 materialized.setLastModified(clock.nowMillis())

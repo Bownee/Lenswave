@@ -7,6 +7,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import java.io.File
 import java.io.IOException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutionException
@@ -57,6 +58,29 @@ class ProtonOriginalStreamTest {
         } finally {
             executor.shutdownNow()
         }
+    }
+
+    @Test
+    fun `a decrypt reports totals and completion moves the stream to the committed file`() {
+        val growing = temporaryFolder.newFile("video.image.part")
+        val committed = File(temporaryFolder.root, "video.image")
+        val stream = ProtonOriginalStream(growing)
+
+        growing.writeBytes(ByteArray(1_000))
+        stream.availableBytes(1_000L)
+        // A total that lags what is already known changes nothing.
+        stream.availableBytes(500L)
+        assertEquals(ProtonOriginalReadState(1_000L, complete = false), stream.awaitReadable(0L))
+        assertEquals(growing, stream.file)
+
+        growing.appendBytes(ByteArray(24))
+        assertTrue(growing.renameTo(committed))
+        stream.complete(committed)
+
+        assertEquals(committed, stream.file)
+        assertEquals(committed, stream.awaitCompletion())
+        assertEquals(ProtonOriginalReadState(1_024L, complete = true), stream.awaitReadable(0L))
+        assertEquals(ProtonOriginalDownloadProgress(1_024L, 1_024L, complete = true), stream.progress.value)
     }
 
     @Test

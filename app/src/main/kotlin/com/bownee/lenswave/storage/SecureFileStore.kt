@@ -146,11 +146,17 @@ class SecureFileStore internal constructor(
      * every segment; once it returns false the decrypt stops with a [CopyInterruptedException],
      * nothing is committed and the partial plaintext is removed. A file in a whole-file legacy
      * format is asked once, before it starts: it is decrypted in one piece, see [decryptLegacyFile].
+     *
+     * A reader that wants the plaintext before the decrypt is over gets the growing temporary
+     * file through [onStarted] and the verified plaintext total through [onBytesWritten] after
+     * every segment; the temporary is renamed to [target] once the whole file verified.
      */
     fun decryptFile(
         scope: String,
         encrypted: File,
         target: File,
+        onStarted: (plaintextInProgress: File) -> Unit = {},
+        onBytesWritten: (totalBytes: Long) -> Unit = {},
         shouldContinue: () -> Boolean = { true },
     ) {
         target.parentFile?.mkdirs()
@@ -159,11 +165,12 @@ class SecureFileStore internal constructor(
             FileInputStream(encrypted).use { rawInput ->
                 val version = readMagic(rawInput)
                 FileOutputStream(temporary).use { output ->
+                    onStarted(temporary)
                     if (version == SEGMENTED_VERSION) {
-                        SegmentedEnvelope.decrypt(dataKey(scope), rawInput, output, shouldContinue)
+                        SegmentedEnvelope.decrypt(dataKey(scope), rawInput, output, onBytesWritten, shouldContinue)
                     } else {
                         if (!shouldContinue()) throw CopyInterruptedException()
-                        decryptLegacyFile(scope, version, encrypted, rawInput, output)
+                        onBytesWritten(decryptLegacyFile(scope, version, encrypted, rawInput, output))
                     }
                 }
             }
@@ -192,11 +199,13 @@ class SecureFileStore internal constructor(
         encrypted: File,
         rawInput: InputStream,
         output: FileOutputStream,
-    ) {
+    ): Long {
         if (encrypted.length() > LEGACY_FILE_LIMIT_BYTES) throw LegacyFileTooLargeException()
         val cipher = readLegacyHeader(scope, version, rawInput)
         val ciphertext = rawInput.readBytes()
-        output.write(cipher.doFinal(ciphertext))
+        val plaintext = cipher.doFinal(ciphertext)
+        output.write(plaintext)
+        return plaintext.size.toLong()
     }
 
     private class LegacyFileTooLargeException :
