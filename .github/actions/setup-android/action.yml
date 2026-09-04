@@ -17,6 +17,9 @@ runs:
         # dependency transforms and unchanged task outputs instead of rebuilding from scratch.
         cache-read-only: false
         add-job-summary: on-failure
+        # The default on-success cleanup provisions a second Gradle distribution and spends ~40 s
+        # per job pruning the user home; the 10 GiB repository cache already evicts stale entries.
+        cache-cleanup: never
 
     - name: Tune Gradle for the CI runner
       shell: bash
