@@ -52,6 +52,17 @@ internal class GalleryUiStateFactory(
             is GalleryDestination.AlbumPhotos -> album(inputs, destination)
         }
 
+    /**
+     * A placeholder for [inputs] that costs O(1): the destination, title and account facts are
+     * final, the page is empty and no empty-state panel shows, exactly like a section that has
+     * not loaded yet. [create] builds the full state off the main thread and replaces it.
+     */
+    fun skeleton(inputs: GalleryUiInputs): GalleryUiState =
+        base(
+            inputs = inputs,
+            content = if (inputs.destination == GalleryDestination.Library) NO_SECTIONS else NO_PHOTOS,
+        )
+
     private fun timeline(inputs: GalleryUiInputs): GalleryUiState {
         protonUnavailable(inputs)?.let { return it }
         val content = memo.photos(inputs.protonGallery.photos, memo.tagIndex(inputs.protonGallery.tags))
@@ -297,5 +308,6 @@ internal class GalleryUiStateFactory(
 
     private companion object {
         val NO_PHOTOS = GalleryContent.Photos(emptyList())
+        val NO_SECTIONS = GalleryContent.Library(emptyList())
     }
 }

@@ -74,6 +74,13 @@ class GalleryViewModel
                 ),
             )
 
+        /**
+         * The initial value is a skeleton because it is built on whichever thread first touches
+         * this property (the main thread in the activity's onCreate); mapping and sorting a warm
+         * repository's timeline there would delay the first frame. The full state follows from
+         * the Default dispatcher. Sharing stops shortly after the last collector leaves, so the
+         * join does not recompute states while the gallery is off screen.
+         */
         val uiState: StateFlow<GalleryUiState> =
             combine(
                 protonRepository.state,
@@ -86,10 +93,9 @@ class GalleryViewModel
                 .flowOn(Dispatchers.Default)
                 .stateIn(
                     scope = viewModelScope,
-                    started = SharingStarted.Eagerly,
-                    // The first state is built in place so the screen never renders a placeholder.
+                    started = SharingStarted.WhileSubscribed(stopTimeoutMillis = UI_STATE_STOP_TIMEOUT_MILLIS),
                     initialValue =
-                        uiStateFactory.create(
+                        uiStateFactory.skeleton(
                             uiInputs(
                                 protonRepository.state.value,
                                 protonRepository.albumsState.value,
@@ -339,6 +345,7 @@ class GalleryViewModel
             const val STATE_ALBUM_UID = "gallery.album-uid"
             const val STATE_ALBUM_NAME = "gallery.album-name"
             const val STATE_TAG = "gallery.proton-tag"
+            const val UI_STATE_STOP_TIMEOUT_MILLIS = 5_000L
 
             private fun accountStatus(state: ProtonAccountSessionState): ProtonAccountStatus =
                 ProtonAccountStatus.resolve(

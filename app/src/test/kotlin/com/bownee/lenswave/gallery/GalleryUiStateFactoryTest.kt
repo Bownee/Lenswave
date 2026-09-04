@@ -630,6 +630,35 @@ class GalleryUiStateFactoryTest {
         assertTrue(asset.isFavorite)
     }
 
+    @Test
+    fun `skeleton carries the destination facts but neither photos nor an empty panel`() {
+        val userId = UserId("user")
+        val photos = ProtonGalleryState(photos = listOf(ProtonGalleryPhoto("volume~a", 1, true)), hasLoaded = true)
+        val album = GalleryDestination.AlbumPhotos(ProtonAlbumReference("album", "Trip"))
+        val inputs =
+            GalleryUiInputs(
+                destination = album,
+                protonAccountStatus = ProtonAccountStatus.DISCONNECTED,
+                protonGallery = photos,
+                currentUserId = userId,
+                isRefreshing = true,
+            )
+
+        val skeleton = factory.skeleton(inputs)
+
+        assertEquals(album, skeleton.destination)
+        assertEquals("Trip", skeleton.title)
+        assertEquals(userId, skeleton.currentUserId)
+        assertTrue(skeleton.isProtonConnected)
+        assertTrue(skeleton.isRefreshing)
+        assertTrue(skeleton.visibleAssets.isEmpty())
+        assertNull(skeleton.emptyState)
+        assertEquals(
+            GalleryContent.Library(emptyList()),
+            factory.skeleton(inputs.copy(destination = GalleryDestination.Library)).content,
+        )
+    }
+
     private fun GalleryUiState.librarySectionKeys(): List<String> =
         (content as GalleryContent.Library).sections.map { it.key }
 }
