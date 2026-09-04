@@ -420,6 +420,12 @@ internal object ProtonThumbnailDownloadPolicy {
         if (type == ThumbnailType.PREVIEW) PREVIEW_IDLE_TIMEOUT_MILLIS else SDK_IDLE_TIMEOUT_MILLIS
 
     /**
+     * A preview batch the SDK never answers gives up here rather than at the pass deadline,
+     * which is sized for the transfer once answers are flowing.
+     */
+    const val PREVIEW_FIRST_ANSWER_TIMEOUT_MILLIS = 30_000L
+
+    /**
      * How long a pass waits for the next SDK answer. The idle window only starts once the SDK
      * has answered at least once: before that it is still fetching the batch's metadata and
      * keys, and giving up on a slow but working batch threw the whole batch away.
@@ -428,7 +434,12 @@ internal object ProtonThumbnailDownloadPolicy {
         type: ThumbnailType,
         answered: Boolean,
         passTimeoutMillis: Long,
-    ): Long = if (answered) idleTimeoutMillis(type) else passTimeoutMillis
+    ): Long =
+        when {
+            answered -> idleTimeoutMillis(type)
+            type == ThumbnailType.PREVIEW -> minOf(PREVIEW_FIRST_ANSWER_TIMEOUT_MILLIS, passTimeoutMillis)
+            else -> passTimeoutMillis
+        }
 
     /**
      * A single-node pass is one node's worth of transfer with the whole deadline to itself, so

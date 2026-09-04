@@ -75,12 +75,29 @@ class ProtonThumbnailDownloadPolicyTest {
             deadline,
             ProtonThumbnailDownloadPolicy.answerWaitMillis(ThumbnailType.THUMBNAIL, answered = false, deadline),
         )
+    }
+
+    @Test
+    fun previewPassGivesUpOnTheFirstAnswerBeforeItsDeadline() {
+        val firstAnswer = ProtonThumbnailDownloadPolicy.PREVIEW_FIRST_ANSWER_TIMEOUT_MILLIS
+
+        assertTrue(firstAnswer < ProtonThumbnailDownloadPolicy.PREVIEW_PASS_TIMEOUT_MILLIS)
+        assertTrue(firstAnswer > ProtonThumbnailDownloadPolicy.idleTimeoutMillis(ThumbnailType.PREVIEW))
         assertEquals(
-            ProtonThumbnailDownloadPolicy.PREVIEW_PASS_TIMEOUT_MILLIS,
+            firstAnswer,
             ProtonThumbnailDownloadPolicy.answerWaitMillis(
                 ThumbnailType.PREVIEW,
                 answered = false,
                 ProtonThumbnailDownloadPolicy.PREVIEW_PASS_TIMEOUT_MILLIS,
+            ),
+        )
+        // The preview fetched in place of a thumbnail runs under the shorter thumbnail deadline.
+        assertEquals(
+            ProtonThumbnailDownloadPolicy.SDK_PASS_TIMEOUT_MILLIS,
+            ProtonThumbnailDownloadPolicy.answerWaitMillis(
+                ThumbnailType.PREVIEW,
+                answered = false,
+                ProtonThumbnailDownloadPolicy.SDK_PASS_TIMEOUT_MILLIS,
             ),
         )
     }
