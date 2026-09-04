@@ -3,6 +3,7 @@ package com.bownee.lenswave.gallery
 import android.content.Context
 import android.content.res.ColorStateList
 import android.graphics.Color
+import android.graphics.drawable.Drawable
 import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
@@ -430,6 +431,12 @@ internal class GalleryScreen(
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
             }
+        // Built once for the row; each chip draws its own copies off the shared constant state.
+        val chipBackgrounds =
+            FilterChip.Backgrounds(
+                selected = UiStyle.rippled(UiStyle.rounded(activity, UiStyle.surfaceRaised, 12), UiStyle.accent),
+                plain = UiStyle.rippled(UiStyle.rounded(activity, Color.TRANSPARENT, 12), UiStyle.accent),
+            )
 
         fun addChip(
             destination: GalleryDestination,
@@ -437,7 +444,7 @@ internal class GalleryScreen(
             @DrawableRes icon: Int,
         ) {
             val chip =
-                FilterChip(activity, label, icon).apply {
+                FilterChip(activity, label, icon, chipBackgrounds).apply {
                     setOnClickListener { actions.onFilterSelected(destination) }
                 }
             chips[destination] = chip
@@ -621,29 +628,46 @@ internal class GalleryScreen(
         }
     }
 
-    /** A media-type filter: icon and label in a pill that fills when selected. */
+    /**
+     * A media-type filter: icon and label in a pill that fills when selected. The eleven chips
+     * are built in the activity's onCreate, so the vector icon is inflated only once the chip
+     * joins the window, and the two pill backgrounds are copies off shared constant state rather
+     * than four fresh drawables per chip.
+     */
     private class FilterChip(
         context: Context,
         label: String,
-        @DrawableRes icon: Int,
+        @DrawableRes private val icon: Int,
+        backgrounds: Backgrounds,
     ) : LinearLayout(context) {
+        /** The two looks every chip shares; each chip takes its own drawable off their constant state. */
+        class Backgrounds(
+            val selected: Drawable,
+            val plain: Drawable,
+        )
+
         private val iconView =
             ImageView(context).apply {
-                setImageResource(icon)
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             }
         private val labelView = UiStyle.label(context, label, 14f, medium = true)
 
         // Both looks are built once; a render only swaps them when the chip's state changes.
-        private val selectedBackground =
-            UiStyle.rippled(
-                UiStyle.rounded(context, UiStyle.surfaceRaised, 12),
-                UiStyle.accent,
-            )
-        private val plainBackground = UiStyle.rippled(UiStyle.rounded(context, Color.TRANSPARENT, 12), UiStyle.accent)
+        private val selectedBackground = backgrounds.selected.copyForView()
+        private val plainBackground = backgrounds.plain.copyForView()
         private val selectedTint = ColorStateList.valueOf(UiStyle.text)
         private val plainTint = ColorStateList.valueOf(UiStyle.muted)
         private var isSelectedChip: Boolean? = null
+        private var iconResolved = false
+
+        private fun Drawable.copyForView(): Drawable = constantState?.newDrawable(resources) ?: this
+
+        override fun onAttachedToWindow() {
+            super.onAttachedToWindow()
+            if (iconResolved) return
+            iconResolved = true
+            iconView.setImageResource(icon)
+        }
 
         init {
             orientation = HORIZONTAL
