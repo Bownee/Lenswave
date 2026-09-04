@@ -304,13 +304,16 @@ class PhotoViewerActivity : FragmentActivity() {
                 request.displayName.ifBlank { getString(R.string.photo) },
             )
         playerView.contentDescription = photoView.contentDescription
-        updateFavoriteButton()
-        scheduleLoadingPanel()
+        // Favourite and delete act on the photo, not on the bytes, so they are usable at once.
+        setActionsEnabled(true)
         val requestedPhoto = request
         if (requestedPhoto.displayName.isBlank()) resolveDisplayName(requestedPhoto)
         photoLoadJob =
             lifecycleScope.launch {
                 showCachedProtonThumbnail(requestedPhoto)
+                // Photos load the original quietly behind the preview; the spinner only appears
+                // when there is nothing at all to show. Videos keep their download progress.
+                if (requestedPhoto.mediaKind == MediaKind.VIDEO || !thumbnailPreview.isVisible) scheduleLoadingPanel()
                 if (requestedPhoto.mediaKind != MediaKind.VIDEO) launch { showCachedProtonPreview(requestedPhoto) }
                 try {
                     val file =
@@ -399,6 +402,8 @@ class PhotoViewerActivity : FragmentActivity() {
         }
 
         clearThumbnailPreview()
+        // A preview is a picture to look at, so any spinner scheduled for an empty screen goes.
+        hideLoadingPanel()
         previewStableId = requestedPhoto.stableId
         thumbnailPreview.setImageBitmap(bitmap)
         thumbnailPreview.visibility = View.VISIBLE
@@ -762,13 +767,16 @@ class PhotoViewerActivity : FragmentActivity() {
         retryButton.visibility = View.VISIBLE
     }
 
+    private var actionsEnabled = false
+
     private fun setActionsEnabled(enabled: Boolean) {
+        actionsEnabled = enabled
         deleteButton.isEnabled = enabled
         deleteButton.alpha = if (enabled) 1f else 0.45f
         updateFavoriteButton(enabled)
     }
 
-    private fun updateFavoriteButton(enabled: Boolean = photoReady) {
+    private fun updateFavoriteButton(enabled: Boolean = actionsEnabled) {
         favoriteButton.visibility = View.VISIBLE
         favoriteButton.isEnabled = enabled && !favoriteInProgress
         favoriteButton.alpha = if (favoriteButton.isEnabled) 1f else 0.45f
