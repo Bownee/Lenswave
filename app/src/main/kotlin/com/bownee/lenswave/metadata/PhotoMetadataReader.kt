@@ -74,8 +74,9 @@ class PhotoMetadataReader
                 }
                 rawWidth = bounds.outWidth.takeIf { it > 0 } ?: exif?.width.orZero()
                 rawHeight = bounds.outHeight.takeIf { it > 0 } ?: exif?.height.orZero()
-                rotationDegrees = exif?.rotationDegrees.orZero()
                 detectedMimeType = bounds.outMimeType
+                rotationDegrees =
+                    ImageOrientationPolicy.effectiveRotationDegrees(detectedMimeType, exif?.rotationDegrees.orZero())
             }
             val mimeType = resolver.getType(uri).orEmpty().ifBlank { detectedMimeType.orEmpty() }
             val (width, height) = PhotoMetadataDimensionPolicy.oriented(rawWidth, rawHeight, rotationDegrees)

@@ -41,6 +41,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import me.proton.core.domain.entity.UserId
@@ -94,6 +95,10 @@ class PhotoViewerActivity : FragmentActivity() {
     private lateinit var video: ViewerVideoController
     private lateinit var request: PhotoRequest
     private var navigationRequests: MutableList<PhotoRequest> = mutableListOf()
+
+    /** The gallery's full list and where [navigationRequests] sits in it; null after a process death. */
+    private var navigationSource: PhotoNavigationSources.Source? = null
+    private var navigationWindow: PhotoNavigationWindowPolicy.Window? = null
     private var resolvedUri: Uri? = null
     private var photoTransitioning = false
     private var deletionInProgress = false
@@ -106,6 +111,9 @@ class PhotoViewerActivity : FragmentActivity() {
     private var prefetchJob: Job? = null
     private var loadingPanelRunnable: Runnable? = null
 
+    /** Set in onDestroy; posted work that outlives the Activity checks it and does nothing. */
+    private var destroyed = false
+
     /** Accumulates what the gallery must refresh; a later result must not drop an earlier flag. */
     private val resultIntent = Intent()
 
@@ -113,6 +121,7 @@ class PhotoViewerActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
         request = PhotoRequest.from(intent)
         navigationRequests = PhotoRequest.navigationFrom(intent).ifEmpty { listOf(request) }.toMutableList()
+        restoreNavigationSource()
         configureEdgeToEdgeWindow()
         buildInterface()
         onBackPressedDispatcher.addCallback(
@@ -125,14 +134,18 @@ class PhotoViewerActivity : FragmentActivity() {
     }
 
     override fun onDestroy() {
+        destroyed = true
         photoLoadJob?.cancel()
         prefetchJob?.cancel()
+        photoDetailsScroll.removeCallbacks(detailsSynchronizationRunnable)
+        mediaFrame.removeCallbacks(mediaBoundsRunnable)
         details.release()
         cancelLoadingPanelDelay()
         clearThumbnailPreview()
         swipe.release()
         photoView.close()
         video.release()
+        if (isFinishing) navigationSource?.let { PhotoNavigationSources.clear(it.token) }
         super.onDestroy()
     }
 
@@ -305,8 +318,49 @@ class PhotoViewerActivity : FragmentActivity() {
     }
 
     /**
+     * Finds the in-process gallery list the intent's window was cut from. The window is trusted
+     * only if it still lines up with that list; after a process death there is no list and the
+     * viewer keeps the window the intent carried.
+     */
+    private fun restoreNavigationSource() {
+        val source = PhotoNavigationSources.find(intent.getLongExtra(EXTRA_NAVIGATION_TOKEN, -1L)) ?: return
+        val start = intent.getIntExtra(EXTRA_NAVIGATION_START, -1)
+        val window = PhotoNavigationWindowPolicy.Window(start, start + navigationRequests.size)
+        val linesUp =
+            start >= 0 &&
+                window.end <= source.assets.size &&
+                source.assets[start].stableId == navigationRequests.first().stableId &&
+                source.assets[window.end - 1].stableId == navigationRequests.last().stableId
+        if (!linesUp) return
+        navigationSource = source
+        navigationWindow = window
+    }
+
+    /**
+     * Grows the navigation window from the gallery list while the user swipes towards an edge.
+     * Existing entries are kept (they may carry a resolved name or a changed favourite); the
+     * list is replaced rather than mutated so the swipe controller rebuilds its index, and the
+     * intent's window follows so a recreated Activity starts from where the user is.
+     */
+    private fun extendNavigationWindow() {
+        val source = navigationSource ?: return
+        val window = navigationWindow ?: return
+        val local = navigationRequests.indexOfFirst { it.stableId == request.stableId }
+        if (local < 0) return
+        val grown = PhotoNavigationWindowPolicy.extended(window, window.start + local, source.assets.size) ?: return
+        val extended = ArrayList<PhotoRequest>(grown.size)
+        source.assets.subList(grown.start, window.start).mapTo(extended) { PhotoRequest.from(it, source.userId) }
+        extended.addAll(navigationRequests)
+        source.assets.subList(window.end, grown.end).mapTo(extended) { PhotoRequest.from(it, source.userId) }
+        navigationRequests = extended
+        navigationWindow = grown
+        intent.putParcelableArrayListExtra(EXTRA_NAVIGATION, ArrayList(extended))
+        intent.putExtra(EXTRA_NAVIGATION_START, grown.start)
+    }
+
+    /**
      * Replaces one entry of the navigation list in place. The list keeps its identity and order,
-     * so the swipe controller's index stays valid and nothing copies two hundred requests.
+     * so the swipe controller's index stays valid and nothing copies the whole window.
      */
     private fun updateNavigationRequest(
         stableId: String,
@@ -331,7 +385,7 @@ class PhotoViewerActivity : FragmentActivity() {
         }
         detailsSheet.minimumHeight = (availableHeight * DETAILS_MINIMUM_HEIGHT_FRACTION).roundToInt()
         scheduleMediaBoundsUpdate()
-        photoDetailsScroll.post(details::synchronizeWithImage)
+        postDetailsSynchronization()
     }
 
     private fun loadPhoto() {
@@ -494,7 +548,7 @@ class PhotoViewerActivity : FragmentActivity() {
         thumbnailPreview.translationX = photoView.translationX
         // Shown at full opacity straight away: fading it up from black reads as a brightness dip.
         thumbnailPreview.alpha = 1f
-        photoDetailsScroll.post(details::synchronizeWithImage)
+        postDetailsSynchronization()
     }
 
     /**
@@ -522,7 +576,7 @@ class PhotoViewerActivity : FragmentActivity() {
         if (thumbnailPreview.isVisible) photoView.translationX = thumbnailPreview.translationX
         photoView.alpha = 1f
         clearThumbnailPreview()
-        photoDetailsScroll.post(details::synchronizeWithImage)
+        postDetailsSynchronization()
     }
 
     private fun showPhoto(uri: Uri) {
@@ -531,7 +585,8 @@ class PhotoViewerActivity : FragmentActivity() {
         video.stop()
         playerView.visibility = View.GONE
         photoView.visibility = View.VISIBLE
-        if (details.shown) details.ensureMetadataLoaded()
+        // The metadata read waits for the decode: the photo view's hints then spare it a second
+        // bounds parse of the file, which with the sheet open used to happen on every swipe.
         photoView.load(uri) { result ->
             if (request.stableId != requestedStableId) return@load
             result
@@ -541,9 +596,7 @@ class PhotoViewerActivity : FragmentActivity() {
                     hideLoadingPanel()
                     setActionsEnabled(true)
                     if (details.shown) details.ensureMetadataLoaded()
-                    photoDetailsScroll.post {
-                        if (request.stableId == requestedStableId) details.synchronizeWithImage()
-                    }
+                    postDetailsSynchronization()
                     if (thumbnailPreview.isVisible) {
                         // The full image fades in over the opaque thumbnail, which is only removed
                         // once the fade completes, so brightness never dips through the black scrim.
@@ -564,6 +617,8 @@ class PhotoViewerActivity : FragmentActivity() {
                     }
                     prefetchAdjacentOriginals(requestedStableId)
                 }.onFailure { error ->
+                    // An open sheet still gets its rows, read without hints.
+                    if (details.shown) details.ensureMetadataLoaded()
                     handlePhotoLoadFailure(error, getString(R.string.could_not_display_photo))
                 }
         }
@@ -627,6 +682,7 @@ class PhotoViewerActivity : FragmentActivity() {
     /** Called by the swipe controller once the current media has slid away. */
     private fun commitNavigation(adjacent: PhotoRequest) {
         setCurrentRequest(adjacent)
+        extendNavigationWindow()
         resetPhotoStateForNavigation()
         swipe.adoptPeekAsPreview()
         photoTransitioning = false
@@ -641,7 +697,7 @@ class PhotoViewerActivity : FragmentActivity() {
         thumbnailPreview.translationX = 0f
         thumbnailPreview.visibility = View.VISIBLE
         photoView.alpha = 0f
-        photoDetailsScroll.post(details::synchronizeWithImage)
+        postDetailsSynchronization()
     }
 
     private fun resetPhotoStateForNavigation() {
@@ -771,24 +827,22 @@ class PhotoViewerActivity : FragmentActivity() {
 
     /**
      * Decrypts the next photo's cached original ahead of a swipe so it opens from a ready file.
-     * Only the direction of travel is prepared; on first open both neighbours are. Nothing is
-     * downloaded: only originals already in the encrypted cache qualify.
+     * Only the direction of travel is prepared; on first open that is the forward neighbour, the
+     * one most people swipe to first, so a single decrypt competes with the photo on screen.
+     * Nothing is downloaded: only originals already in the encrypted cache qualify.
      */
     private fun prefetchAdjacentOriginals(stableId: String) {
-        val offsets = if (swipe.lastNavigationOffset == 0) listOf(-1, 1) else listOf(swipe.lastNavigationOffset)
-        val neighbours =
-            offsets
-                .mapNotNull { offset -> swipe.adjacentTo(stableId, offset) }
-                .filter { it.mediaKind != MediaKind.VIDEO }
-        if (neighbours.isEmpty()) return
+        val offset = if (swipe.lastNavigationOffset == 0) 1 else swipe.lastNavigationOffset
+        val neighbour = swipe.adjacentTo(stableId, offset)?.takeIf { it.mediaKind != MediaKind.VIDEO } ?: return
         prefetchJob?.cancel()
         prefetchJob =
             lifecycleScope.launch(Dispatchers.IO) {
-                neighbours.forEach { neighbour ->
-                    runCatching {
-                        originalMedia.prepareCachedOriginal(UserId(neighbour.userId), neighbour.nodeUid)
-                    }.onFailure { error -> if (error is CancellationException) throw error }
-                }
+                // The decrypt itself cannot be interrupted, so the only cheap place to honour a
+                // cancellation from beginNavigation is before it starts.
+                ensureActive()
+                runCatching {
+                    originalMedia.prepareCachedOriginal(UserId(neighbour.userId), neighbour.nodeUid)
+                }.onFailure { error -> if (error is CancellationException) throw error }
             }
     }
 
@@ -943,10 +997,18 @@ class PhotoViewerActivity : FragmentActivity() {
     private fun scheduleMediaBoundsUpdate() {
         if (mediaBoundsUpdatePending) return
         mediaBoundsUpdatePending = true
-        mediaFrame.post {
+        mediaFrame.post(mediaBoundsRunnable)
+    }
+
+    private val mediaBoundsRunnable =
+        Runnable {
             mediaBoundsUpdatePending = false
-            updateMediaBounds()
+            if (!destroyed) updateMediaBounds()
         }
+
+    /** The views the vertical inset applies to; built once rather than on every bounds pass. */
+    private val insetMediaViews: List<View> by lazy {
+        listOf(photoView, thumbnailPreview, peekPreview, playerView, loadingPanel)
     }
 
     private fun updateMediaBounds() {
@@ -959,7 +1021,7 @@ class PhotoViewerActivity : FragmentActivity() {
             )
         if (inset <= 0) return
         var changed = false
-        listOf(photoView, thumbnailPreview, peekPreview, playerView, loadingPanel).forEach { media ->
+        insetMediaViews.forEach { media ->
             val params = media.layoutParams as FrameLayout.LayoutParams
             if (params.topMargin == inset && params.bottomMargin == inset) return@forEach
             params.topMargin = inset
@@ -968,8 +1030,27 @@ class PhotoViewerActivity : FragmentActivity() {
             changed = true
         }
         if (!changed) return
-        if (photoReady || thumbnailPreview.isVisible) photoDetailsScroll.post(details::synchronizeWithImage)
+        if (photoReady || thumbnailPreview.isVisible) postDetailsSynchronization()
     }
+
+    private var detailsSynchronizationPending = false
+
+    /**
+     * Re-attaches the sheet on the next main-loop turn, once whatever asked for it has laid out.
+     * Several callers ask in the same frame; one pass serves them all, and the runnable is a
+     * field so onDestroy can withdraw it rather than let it touch a torn-down Activity.
+     */
+    private fun postDetailsSynchronization() {
+        if (detailsSynchronizationPending) return
+        detailsSynchronizationPending = true
+        photoDetailsScroll.post(detailsSynchronizationRunnable)
+    }
+
+    private val detailsSynchronizationRunnable =
+        Runnable {
+            detailsSynchronizationPending = false
+            if (!destroyed) details.synchronizeWithImage()
+        }
 
     private fun clearThumbnailPreview() {
         video.cancelPendingPreviewClear()
@@ -1000,6 +1081,8 @@ class PhotoViewerActivity : FragmentActivity() {
         const val EXTRA_PHOTO_DELETED = "com.bownee.lenswave.extra.PHOTO_DELETED"
         const val EXTRA_FAVORITE_CHANGED = "com.bownee.lenswave.extra.FAVORITE_CHANGED"
         const val EXTRA_NAVIGATION = "com.bownee.lenswave.extra.NAVIGATION"
+        const val EXTRA_NAVIGATION_START = "com.bownee.lenswave.extra.NAVIGATION_START"
+        const val EXTRA_NAVIGATION_TOKEN = "com.bownee.lenswave.extra.NAVIGATION_TOKEN"
         private const val DETAILS_MINIMUM_HEIGHT_FRACTION = 0.55f
         private const val MEDIA_ACTION_GAP_DP = 8
         private const val VIDEO_CONTROLS_HEIGHT_DP = 80
@@ -1014,20 +1097,19 @@ class PhotoViewerActivity : FragmentActivity() {
         ): Intent {
             val request = PhotoRequest.from(photo, userId.id)
             val currentIndex = navigation.indexOfFirst { it.stableId == photo.stableId }.coerceAtLeast(0)
-            val from = (currentIndex - NAVIGATION_RADIUS).coerceAtLeast(0)
-            val to = (currentIndex + NAVIGATION_RADIUS + 1).coerceAtMost(navigation.size)
+            val window = PhotoNavigationWindowPolicy.initial(currentIndex, navigation.size)
+            // The intent carries a small window, parcelled directly; the full list stays in the
+            // process and the viewer grows the window from it while the user swipes.
             return request.writeTo(Intent(context, PhotoViewerActivity::class.java)).apply {
                 putParcelableArrayListExtra(
                     EXTRA_NAVIGATION,
-                    ArrayList(
-                        navigation.subList(from, to).map {
-                            PhotoRequest.from(it, userId.id).toBundle()
-                        },
-                    ),
+                    navigation.subList(window.start, window.end).mapTo(ArrayList(window.size)) {
+                        PhotoRequest.from(it, userId.id)
+                    },
                 )
+                putExtra(EXTRA_NAVIGATION_START, window.start)
+                putExtra(EXTRA_NAVIGATION_TOKEN, PhotoNavigationSources.publish(userId.id, navigation))
             }
         }
-
-        private const val NAVIGATION_RADIUS = 100
     }
 }

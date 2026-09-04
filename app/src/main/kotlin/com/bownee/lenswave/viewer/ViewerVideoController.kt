@@ -74,11 +74,22 @@ internal class ViewerVideoController(
     /** The media the player was last asked to show; null once [stop] has cleared it. */
     private var activeStableId: String? = null
 
+    /**
+     * Counts every [show]; the current value tags the media item so an event the player queued for
+     * an earlier item is recognised after a `stop(); show(other)` pair, where the stable-id guards
+     * alone would pass.
+     */
+    private var showGeneration = 0L
+
     private val playerListener =
         object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 val requestedStableId = activeStableId ?: return
                 if (playbackState != Player.STATE_READY || host.currentStableId != requestedStableId) return
+                // An event delivered late for a previous item: the player has since been given a
+                // new one, whose tag differs and which is buffering again.
+                val activePlayer = player ?: return
+                if (!isCurrentShow(activePlayer) || activePlayer.playbackState != Player.STATE_READY) return
                 if (host.mediaReady) return
                 progressJob?.cancel()
                 progressJob = null
@@ -106,11 +117,16 @@ internal class ViewerVideoController(
             override fun onPlayerError(error: PlaybackException) {
                 LenswaveDiagnostics.reportFailure(LenswaveOperation.VIDEO_PLAYBACK, error)
                 val requestedStableId = activeStableId ?: return
-                if (host.currentStableId == requestedStableId) {
-                    host.handleLoadFailure(error, context.getString(R.string.could_not_play_video))
-                }
+                if (host.currentStableId != requestedStableId) return
+                // A stale error: prepare() for a newer item has already cleared it from the player.
+                val activePlayer = player ?: return
+                if (!isCurrentShow(activePlayer) || activePlayer.playerError !== error) return
+                host.handleLoadFailure(error, context.getString(R.string.could_not_play_video))
             }
         }
+
+    private fun isCurrentShow(activePlayer: ExoPlayer): Boolean =
+        activePlayer.currentMediaItem?.localConfiguration?.tag == showGeneration
 
     /** Plays an original that is already fully on disk. */
     fun show(uri: Uri) = show(uri, dataSourceFactory = null)
@@ -180,7 +196,13 @@ internal class ViewerVideoController(
         playerView.alpha = 0f
         val activePlayer = ensurePlayer()
         activeStableId = requestedStableId
-        val mediaItem = MediaItem.fromUri(uri)
+        showGeneration++
+        val mediaItem =
+            MediaItem
+                .Builder()
+                .setUri(uri)
+                .setTag(showGeneration)
+                .build()
         if (dataSourceFactory == null) {
             activePlayer.setMediaItem(mediaItem)
         } else {

@@ -4,10 +4,14 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.LruCache
+import androidx.exifinterface.media.ExifInterface
+import com.bownee.lenswave.ExifOrientation
 import com.bownee.lenswave.LenswaveClock
+import com.bownee.lenswave.metadata.ImageOrientationPolicy
 import com.bownee.lenswave.storage.AtomicFileStore
 import com.bownee.lenswave.storage.SecureFileStore
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.io.ByteArrayInputStream
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
@@ -37,10 +41,18 @@ internal class ProtonPreviewStore
 
         /**
          * The last few decoded previews, so a swipe back (or the same photo opened again) skips
-         * the decrypt and decode. Evicted bitmaps are not recycled: the viewer may still be drawing
-         * one as its placeholder, and the garbage collector reclaims them soon enough.
+         * the decrypt and decode. Sized in kilobytes against a share of the heap: a screen-sized
+         * ARGB preview is about 11 MB, so counting entries would pin tens of megabytes for good.
+         * Evicted bitmaps are not recycled: the viewer may still be drawing one as its
+         * placeholder, and the garbage collector reclaims them soon enough.
          */
-        private val decoded = LruCache<PreviewKey, Bitmap>(DECODED_CACHE_ENTRIES)
+        private val decoded =
+            object : LruCache<PreviewKey, Bitmap>(decodedCacheSizeKilobytes()) {
+                override fun sizeOf(
+                    key: PreviewKey,
+                    value: Bitmap,
+                ): Int = (value.byteCount / 1_024).coerceAtLeast(1)
+            }
 
         fun exists(
             userId: String,
@@ -251,8 +263,14 @@ internal class ProtonPreviewStore
             const val EXTENSION = "preview"
             const val LOCK_COUNT = 32
 
-            /** The photo on screen plus one neighbour either side. */
-            const val DECODED_CACHE_ENTRIES = 3
+            /**
+             * Room for the photo on screen and a neighbour or two: a sixteenth of the heap, held
+             * between one large preview and a handful so a small heap still gets a swipe back.
+             */
+            fun decodedCacheSizeKilobytes(): Int =
+                (Runtime.getRuntime().maxMemory() / 1_024 / 16)
+                    .coerceIn(12L * 1_024, 40L * 1_024)
+                    .toInt()
         }
     }
 
@@ -281,6 +299,11 @@ internal object ProtonPreviewCodec {
         return bounds.outWidth > 0 && bounds.outHeight > 0
     }
 
+    /**
+     * Decodes the preview the way it is meant to be seen: the EXIF orientation is applied, so the
+     * bitmap has the same axes as the oriented original it stands in for and the viewer can hand
+     * its zoom geometry over without a jump.
+     */
     fun decode(
         bytes: ByteArray,
         targetLongEdge: Int,
@@ -294,6 +317,16 @@ internal object ProtonPreviewCodec {
                 inPreferredConfig = Bitmap.Config.ARGB_8888
                 inSampleSize = ProtonPreviewDecodePolicy.sampleSize(bounds.outWidth, bounds.outHeight, targetLongEdge)
             }
-        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+        val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options) ?: return null
+        val orientation =
+            runCatching {
+                ExifInterface(ByteArrayInputStream(bytes))
+                    .getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+            }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
+        return ExifOrientation.apply(
+            decoded,
+            ImageOrientationPolicy.effectiveOrientation(bounds.outMimeType, orientation),
+            true,
+        )
     }
 }

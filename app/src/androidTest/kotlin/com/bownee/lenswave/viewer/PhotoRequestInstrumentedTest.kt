@@ -1,6 +1,7 @@
 package com.bownee.lenswave.viewer
 
 import android.content.Intent
+import android.os.Parcel
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.bownee.lenswave.gallery.MediaKind
 import org.junit.Assert.assertEquals
@@ -42,10 +43,31 @@ class PhotoRequestInstrumentedTest {
                     Intent().apply {
                         putParcelableArrayListExtra(
                             PhotoViewerActivity.EXTRA_NAVIGATION,
-                            arrayListOf(request.toBundle()),
+                            arrayListOf(request),
                         )
                     },
                 ).single(),
         )
+    }
+
+    @Test fun requestRoundTripsThroughAParcel() {
+        val request =
+            PhotoRequest(
+                stableId = "proton:2",
+                nodeUid = "volume~node",
+                userId = "user",
+                capturedAt = 78L,
+                displayName = "still.heic",
+                mediaKind = MediaKind.IMAGE,
+                isFavorite = true,
+            )
+        val parcel = Parcel.obtain()
+        try {
+            request.writeToParcel(parcel, 0)
+            parcel.setDataPosition(0)
+            assertEquals(request, PhotoRequest.CREATOR.createFromParcel(parcel))
+        } finally {
+            parcel.recycle()
+        }
     }
 }
