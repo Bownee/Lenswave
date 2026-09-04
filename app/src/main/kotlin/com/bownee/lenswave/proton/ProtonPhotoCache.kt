@@ -10,6 +10,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -31,6 +32,13 @@ internal class ProtonPhotoCache
         ProtonSessionCache,
         ProtonThumbnailQueueStore {
         private val root = File(context.filesDir, ProtonStorageLayout.METADATA_DIRECTORY).apply { mkdirs() }
+
+        /**
+         * One rendition listing per user, shared by every snapshot read until a rendition is
+         * written, removed or swept. A cold start hydrates the timeline, the tags and the albums
+         * and each read used to list both directories and hash every name into a set on its own.
+         */
+        private val renditions = ConcurrentHashMap<String, ProtonStoredRenditions>()
 
         /** Metadata hydration only needs availability; authenticated contents are validated when read. */
         override fun thumbnailExists(
@@ -55,6 +63,7 @@ internal class ProtonPhotoCache
             bytes: ByteArray,
         ) {
             thumbnails.write(userId, nodeUid, bytes)
+            forgetRenditions(userId)
         }
 
         override fun removeThumbnail(
@@ -62,6 +71,7 @@ internal class ProtonPhotoCache
             nodeUid: String,
         ) {
             thumbnails.remove(userId, nodeUid)
+            forgetRenditions(userId)
         }
 
         override fun thumbnailCount(userId: String): Int = thumbnails.count(userId)
@@ -82,6 +92,7 @@ internal class ProtonPhotoCache
             bytes: ByteArray,
         ) {
             previews.write(userId, nodeUid, bytes)
+            forgetRenditions(userId)
         }
 
         override fun loadPreview(
@@ -95,12 +106,23 @@ internal class ProtonPhotoCache
             nodeUid: String,
         ) {
             previews.remove(userId, nodeUid)
+            forgetRenditions(userId)
         }
 
         override fun previewCount(userId: String): Int = previews.count(userId)
 
+        /**
+         * The listing runs under the map's lock, so a write that lands while it runs waits and
+         * then drops the result rather than leaving a listing that predates it memoized.
+         */
         override fun storedRenditions(userId: String): ProtonStoredRenditions =
-            ProtonStoredRenditions(thumbnails.storedNames(userId), previews.storedNames(userId))
+            renditions.computeIfAbsent(userId) {
+                ProtonStoredRenditions(thumbnails.storedNames(userId), previews.storedNames(userId))
+            }
+
+        private fun forgetRenditions(userId: String) {
+            renditions.remove(userId)
+        }
 
         override fun readTimelineSnapshot(
             userId: String,
@@ -324,6 +346,7 @@ internal class ProtonPhotoCache
             thumbnails.maintain(userId)
             previews.maintain(userId)
             originals.maintain(userId)
+            forgetRenditions(userId)
         }
 
         override fun reconcilePhotos(
@@ -354,6 +377,7 @@ internal class ProtonPhotoCache
             thumbnails.removeUnreferenced(userId, referencedNames)
             previews.removeUnreferenced(userId, referencedNames)
             originals.removeUnreferenced(userId, referencedNames)
+            forgetRenditions(userId)
         }
 
         override fun removePhotos(
@@ -362,10 +386,11 @@ internal class ProtonPhotoCache
         ) {
             val removed = nodeUids.toSet()
             removed.forEach { nodeUid ->
-                removeThumbnail(userId, nodeUid)
-                removePreview(userId, nodeUid)
+                thumbnails.remove(userId, nodeUid)
+                previews.remove(userId, nodeUid)
                 originals.remove(userId, nodeUid)
             }
+            forgetRenditions(userId)
             val availability = storedRenditions(userId)
             // A listing that did not contain any of the photos is left as it is; rewriting it
             // would encrypt and commit the same contents again under the sync mutex.
@@ -414,6 +439,7 @@ internal class ProtonPhotoCache
         override fun clearUser(userId: String) {
             thumbnails.clearMemory(userId)
             previews.forget(userId)
+            forgetRenditions(userId)
             val indexDeleted = userDirectory(userId).deleteRecursively()
             val originalsDeleted = originals.clear(userId)
             if (!indexDeleted || !originalsDeleted) {
@@ -433,6 +459,7 @@ internal class ProtonPhotoCache
             originals.retainOnly(userId)
             thumbnails.retainMemoryFor(userId)
             previews.retainCountsFor(userId)
+            renditions.keys.removeAll { key -> key != userId }
         }
 
         private fun indexFile(userId: String): File = File(userDirectory(userId), "index.json")

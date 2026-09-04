@@ -12,10 +12,11 @@ import java.io.File
  * is cached" and "is anything cached"; a corrupt file is discarded and reads as absent, while a
  * file that merely could not be read right now (a transient crypto or I/O failure) is kept and
  * reads as absent for this call only.
- * Every hydrated photo carries its rendition availability from [storedRenditions]; pass one
- * snapshot to several reads to list the rendition directories only once.
+ * Every hydrated photo carries its rendition availability from [storedRenditions], which is
+ * memoized per user until a rendition changes; callers that already hold one pass it explicitly.
  */
 internal interface ProtonTimelineCache {
+    /** Memoized per user; a fresh listing only after a rendition was written, removed or swept. */
     fun storedRenditions(userId: String): ProtonStoredRenditions
 
     fun readTimelineSnapshot(
