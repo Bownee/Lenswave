@@ -63,10 +63,19 @@
         android:roundIcon="@mipmap/ic_launcher"
         android:supportsRtl="true"
         android:theme="@style/Theme.Lenswave"
+        android:usesCleartextTraffic="false"
         tools:replace="android:theme">
+        <!--
+            The launcher activity owns its task outright: an empty affinity keeps other apps'
+            activities (task hijacking) out of it, and singleTask keeps a second instance from being
+            started into a foreign task. The viewer is started from it without task flags, so it
+            joins this task regardless of affinity.
+        -->
         <activity
             android:name=".gallery.GalleryActivity"
-            android:exported="true">
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:taskAffinity="">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
