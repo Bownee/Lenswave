@@ -66,10 +66,14 @@ class ProtonPhotoGateway
         internal val thumbnailWork: ProtonThumbnailWorkGateway = ThumbnailWork()
 
         /**
-         * The transition holds only what the grid needs: the cached listings. Everything else runs
-         * afterwards as an ordinary session operation, so thumbnail reads and the account state
-         * stop waiting on cache trimming and queue reconciliation, and a disconnect still waits for
-         * that housekeeping to finish before it erases the user's files.
+         * The transition holds only what the grid needs: the cached listings, loaded first so the
+         * grid gets them as early as possible. Wiping the previous process's plaintext copies
+         * ([ProtonSessionCache.prepareUser], thousands of unlinks on a large cache) follows inside
+         * the same transition: nothing may materialize a new plaintext copy until the wipe is
+         * done, and no session operation can start before the transition ends. Everything else
+         * runs afterwards as an ordinary session operation, so thumbnail reads and the account
+         * state stop waiting on cache trimming and queue reconciliation, and a disconnect still
+         * waits for that housekeeping to finish before it erases the user's files.
          */
         override suspend fun activate(userId: UserId) {
             withContext(Dispatchers.IO) {
@@ -86,9 +90,9 @@ class ProtonPhotoGateway
                     }
                     timeline.reset()
                     albums.reset()
-                    cache.prepareUser(userId.id)
                     timeline.loadCached(userId)
                     albums.loadCached(userId)
+                    cache.prepareUser(userId.id)
                 }
             }
             housekeepingScope.launch { runActivationHousekeeping(userId) }
