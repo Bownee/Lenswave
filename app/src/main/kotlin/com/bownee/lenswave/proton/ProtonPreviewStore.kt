@@ -4,10 +4,14 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.LruCache
+import androidx.exifinterface.media.ExifInterface
+import com.bownee.lenswave.ExifOrientation
 import com.bownee.lenswave.LenswaveClock
+import com.bownee.lenswave.metadata.ImageOrientationPolicy
 import com.bownee.lenswave.storage.AtomicFileStore
 import com.bownee.lenswave.storage.SecureFileStore
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.io.ByteArrayInputStream
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
@@ -245,6 +249,11 @@ internal object ProtonPreviewCodec {
         return bounds.outWidth > 0 && bounds.outHeight > 0
     }
 
+    /**
+     * Decodes the preview the way it is meant to be seen: the EXIF orientation is applied, so the
+     * bitmap has the same axes as the oriented original it stands in for and the viewer can hand
+     * its zoom geometry over without a jump.
+     */
     fun decode(
         bytes: ByteArray,
         targetLongEdge: Int,
@@ -258,6 +267,16 @@ internal object ProtonPreviewCodec {
                 inPreferredConfig = Bitmap.Config.ARGB_8888
                 inSampleSize = ProtonPreviewDecodePolicy.sampleSize(bounds.outWidth, bounds.outHeight, targetLongEdge)
             }
-        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+        val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options) ?: return null
+        val orientation =
+            runCatching {
+                ExifInterface(ByteArrayInputStream(bytes))
+                    .getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+            }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
+        return ExifOrientation.apply(
+            decoded,
+            ImageOrientationPolicy.effectiveOrientation(bounds.outMimeType, orientation),
+            true,
+        )
     }
 }
