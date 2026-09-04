@@ -14,7 +14,7 @@ class ProtonDatabaseInstrumentedTest {
     @Test
     fun roomDatabaseIsEncrypted() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
-        val secureFiles = SecureFileStore()
+        val secureFiles = SecureFileStore(context)
         val database = context.getDatabasePath("proton-session.db")
         val passphraseFile = java.io.File(context.noBackupFilesDir, "proton-session.key")
         context.deleteDatabase(database.name)

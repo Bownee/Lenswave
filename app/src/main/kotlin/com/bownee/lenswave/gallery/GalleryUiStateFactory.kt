@@ -250,20 +250,30 @@ internal class GalleryUiStateFactory(
             }
 
             ProtonAccountStatus.CONNECTING -> {
-                base(
-                    inputs = inputs,
-                    emptyState =
-                        GalleryEmptyState(
-                            title = text.string(R.string.loading_metadata),
-                            message = "",
-                        ),
-                )
+                // Cached metadata goes on screen at once; only a first launch waits for the sync.
+                if (inputs.hasCachedTimeline()) {
+                    null
+                } else {
+                    base(
+                        inputs = inputs,
+                        emptyState =
+                            GalleryEmptyState(
+                                title = text.string(R.string.loading_metadata),
+                                message = "",
+                            ),
+                    )
+                }
             }
 
             ProtonAccountStatus.CONNECTED -> {
                 null
             }
         }
+
+    private fun GalleryUiInputs.hasCachedTimeline(): Boolean =
+        protonGallery.hasLoaded &&
+            protonGallery.userId != null &&
+            (currentUserId == null || protonGallery.userId == currentUserId.id)
 
     private fun base(
         inputs: GalleryUiInputs,

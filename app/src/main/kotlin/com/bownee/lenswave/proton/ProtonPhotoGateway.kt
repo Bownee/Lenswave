@@ -64,9 +64,10 @@ class ProtonPhotoGateway
                     }
                     timeline.reset()
                     albums.reset()
-                    cache.trimUser(userId.id)
+                    // Cached metadata goes on screen first; housekeeping can wait.
                     timeline.loadCached(userId)
                     albums.loadCached(userId)
+                    cache.trimUser(userId.id)
                     reconcileTimelineThumbnailQueue(userId)
                     reconcileTimelinePreviewQueue(userId)
                     reconcileAlbumCoverThumbnailQueue(userId)
@@ -79,6 +80,8 @@ class ProtonPhotoGateway
             forceRemote: Boolean,
         ) = withContext(Dispatchers.IO) {
             sessionGuard.withActiveSession(userId) {
+                // A manual refresh re-checks photos whose renditions were missing last time.
+                if (forceRemote) previewQueue.forgetAbandoned(userId.id)
                 timeline.syncMetadata(userId, forceRemote)
                 reconcileTimelineThumbnailQueue(userId)
                 reconcileTimelinePreviewQueue(userId)

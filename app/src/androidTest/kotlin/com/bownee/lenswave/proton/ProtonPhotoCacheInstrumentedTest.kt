@@ -25,7 +25,7 @@ class ProtonPhotoCacheInstrumentedTest {
         val context = isolatedContext()
         val userId = "cache-${UUID.randomUUID()}"
         val clock = FakeClock(System.currentTimeMillis())
-        val cache = createCache(context, SecureFileStore(), clock)
+        val cache = createCache(context, SecureFileStore(File(context.filesDir, "secure-keys")), clock)
         val index =
             File(
                 context.filesDir,
@@ -67,7 +67,7 @@ class ProtonPhotoCacheInstrumentedTest {
         val context = isolatedContext()
         val userId = "retention-${UUID.randomUUID()}"
         val clock = FakeClock(System.currentTimeMillis())
-        val cache = createCache(context, SecureFileStore(), clock)
+        val cache = createCache(context, SecureFileStore(File(context.filesDir, "secure-keys")), clock)
         val thumbnail = validThumbnail()
         try {
             cache.writeThumbnail(userId, "old", thumbnail)
@@ -94,7 +94,7 @@ class ProtonPhotoCacheInstrumentedTest {
         val context = isolatedContext()
         val userId = "decode-${UUID.randomUUID()}"
         val nodeUid = "truncated"
-        val secureFiles = SecureFileStore()
+        val secureFiles = SecureFileStore(File(context.filesDir, "secure-keys"))
         val cache = createCache(context, secureFiles, FakeClock(System.currentTimeMillis()))
         val truncatedThumbnail = validThumbnail().copyOf(33)
         val thumbnailFile =
@@ -128,7 +128,7 @@ class ProtonPhotoCacheInstrumentedTest {
     @Test fun decodedThumbnailsAreSizedOnceAndSharedAcrossConsumers() {
         val context = isolatedContext()
         val userId = "decoded-${UUID.randomUUID()}"
-        val secureFiles = SecureFileStore()
+        val secureFiles = SecureFileStore(File(context.filesDir, "secure-keys"))
         val clock = FakeClock(System.currentTimeMillis())
         val cache = createCache(context, secureFiles, clock)
         val output = ByteArrayOutputStream()
@@ -162,7 +162,7 @@ class ProtonPhotoCacheInstrumentedTest {
         val cache =
             createCache(
                 context,
-                SecureFileStore(),
+                SecureFileStore(File(context.filesDir, "secure-keys")),
                 FakeClock(System.currentTimeMillis()),
             )
         val entries =
@@ -196,7 +196,7 @@ class ProtonPhotoCacheInstrumentedTest {
         val cache =
             createCache(
                 context,
-                SecureFileStore(),
+                SecureFileStore(File(context.filesDir, "secure-keys")),
                 FakeClock(System.currentTimeMillis()),
             )
         val retained = ProtonGalleryPhoto("volume~retained", 200L, false)

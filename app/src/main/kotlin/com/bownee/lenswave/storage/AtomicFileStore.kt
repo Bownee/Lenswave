@@ -64,5 +64,21 @@ internal object AtomicFileStore {
         MessageDigest
             .getInstance("SHA-256")
             .digest(value.toByteArray(Charsets.UTF_8))
-            .joinToString("") { byte -> "%02x".format(byte) }
+            .toHex()
+
+    /**
+     * Lower-case hex without `String.format`, which costs tens of microseconds per byte on
+     * Android; the cache hashes thousands of node uids every time the gallery opens.
+     */
+    fun ByteArray.toHex(): String {
+        val out = CharArray(size * 2)
+        forEachIndexed { index, byte ->
+            val value = byte.toInt() and 0xff
+            out[index * 2] = HEX_DIGITS[value ushr 4]
+            out[index * 2 + 1] = HEX_DIGITS[value and 0x0f]
+        }
+        return String(out)
+    }
+
+    private val HEX_DIGITS = "0123456789abcdef".toCharArray()
 }

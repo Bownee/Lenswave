@@ -292,6 +292,39 @@ internal class ProtonPhotoCache
             )
         }
 
+        override fun readAbandoned(
+            userId: String,
+            queue: ProtonQueueName,
+        ): Set<String> {
+            val file = abandonedFile(userId, queue)
+            if (!file.isFile) return emptySet()
+            return runCatching {
+                val array = JSONArray(readText(userId, file))
+                buildSet { for (position in 0 until array.length()) add(array.getString(position)) }
+            }.getOrElse {
+                file.delete()
+                emptySet()
+            }
+        }
+
+        override fun writeAbandoned(
+            userId: String,
+            queue: ProtonQueueName,
+            nodeUids: Set<String>,
+        ) {
+            val file = abandonedFile(userId, queue)
+            if (nodeUids.isEmpty()) {
+                file.delete()
+                return
+            }
+            writeAtomically(
+                userId,
+                file,
+                JSONArray(nodeUids.sorted()).toString(),
+                "Could not commit Proton abandoned downloads",
+            )
+        }
+
         override fun reconcileAlbums(
             userId: String,
             remoteAlbumUids: Collection<String>,
@@ -522,6 +555,11 @@ internal class ProtonPhotoCache
             userId: String,
             queue: ProtonQueueName,
         ): File = File(userDirectory(userId), queue.fileName)
+
+        private fun abandonedFile(
+            userId: String,
+            queue: ProtonQueueName,
+        ): File = File(userDirectory(userId), queue.abandonedFileName)
 
         private fun userDirectory(userId: String): File = File(root, safeName(userId))
 

@@ -15,6 +15,14 @@ All notable changes to Lenswave. The format follows [Keep a Changelog](https://k
 - Favourites toggled in the viewer now refresh the gallery when you return.
 - Swiping quickly after a video became ready no longer shows a black frame.
 - Cached-thumbnail counts and decrypted-cache cleanup no longer run on the main thread.
+- Photos that have no preview on Proton are remembered, so the preview download no longer
+  restarts and stalls on them after every launch. A manual refresh re-checks them.
+- The gallery opens with the cached photos straight away instead of a "Loading metadata" panel;
+  the sync then runs quietly. Opening the cache took several seconds because file names were
+  hex-encoded byte by byte with `String.format`; it now takes a fraction of a second.
+- Cached files are encrypted with a per-account data key that the Android Keystore wraps,
+  instead of running every byte through the Keystore cipher. Existing files are converted as
+  they are read.
 
 ### Changed
 - Proton-only: device photos, the editor and the picker were removed.

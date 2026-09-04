@@ -16,11 +16,15 @@ receives fixes.
 
 ## What the app protects on the device
 
-- The Proton session database is SQLCipher-encrypted with a random 32-byte passphrase that is
-  itself wrapped by an Android Keystore key (`storage/SecureFileStore.kt`).
-- Cached thumbnails and originals are stored encrypted with per-account Keystore keys and are
-  erased when the account disconnects. Decrypted copies used for viewing live in the cache
-  directory for at most 30 minutes.
+- Encrypted files use envelope encryption (`storage/SecureFileStore.kt`): each scope owns a
+  random AES-256 data key that encrypts file contents with AES-GCM in software, and the data key
+  is stored in `noBackupFilesDir/secure-keys` wrapped by a non-exportable Android Keystore key.
+  Deleting the Keystore key also deletes the wrapped data key.
+- The Proton session database is SQLCipher-encrypted with a random 32-byte passphrase stored
+  through the same mechanism.
+- Cached metadata, thumbnails, previews and originals are encrypted with the account's data key
+  and are erased when the account disconnects. Decrypted copies used for viewing live in the
+  cache directory for at most 30 minutes.
 - Nothing is uploaded anywhere except Proton's own API; telemetry is opt-in and off by default.
 
 ## Supply chain

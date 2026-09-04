@@ -11,6 +11,7 @@ import com.bownee.lenswave.proton.ProtonMediaTag
 import com.bownee.lenswave.proton.ProtonTagState
 import com.bownee.lenswave.proton.ProtonThumbnailWorkIssue
 import com.bownee.lenswave.proton.ProtonThumbnailWorkStatus
+import me.proton.core.domain.entity.UserId
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -267,6 +268,62 @@ class GalleryUiStateFactoryTest {
         assertNotNull(state.emptyState)
         assertNull(state.emptyState?.action)
         assertTrue(state.emptyState?.title?.contains(R.string.loading_metadata.toString()) == true)
+    }
+
+    @Test
+    fun `restoring Proton session shows cached photos instead of the loading panel`() {
+        val state =
+            factory.create(
+                GalleryUiInputs(
+                    destination = GalleryDestination.Timeline,
+                    protonAccountStatus = ProtonAccountStatus.CONNECTING,
+                    currentUserId = UserId("user"),
+                    protonGallery =
+                        ProtonGalleryState(
+                            userId = "user",
+                            hasLoaded = true,
+                            photos =
+                                listOf(
+                                    ProtonGalleryPhoto(
+                                        nodeUid = "photo",
+                                        captureTimeEpochSeconds = 10L,
+                                        hasThumbnail = false,
+                                    ),
+                                ),
+                        ),
+                ),
+            )
+
+        assertNull(state.emptyState)
+        assertEquals(1, state.visibleAssets.size)
+    }
+
+    @Test
+    fun `cached photos of another user stay hidden while the session switches`() {
+        val state =
+            factory.create(
+                GalleryUiInputs(
+                    destination = GalleryDestination.Timeline,
+                    protonAccountStatus = ProtonAccountStatus.CONNECTING,
+                    currentUserId = UserId("next"),
+                    protonGallery =
+                        ProtonGalleryState(
+                            userId = "previous",
+                            hasLoaded = true,
+                            photos =
+                                listOf(
+                                    ProtonGalleryPhoto(
+                                        nodeUid = "photo",
+                                        captureTimeEpochSeconds = 10L,
+                                        hasThumbnail = false,
+                                    ),
+                                ),
+                        ),
+                ),
+            )
+
+        assertTrue(state.emptyState?.title?.contains(R.string.loading_metadata.toString()) == true)
+        assertTrue(state.visibleAssets.isEmpty())
     }
 
     @Test

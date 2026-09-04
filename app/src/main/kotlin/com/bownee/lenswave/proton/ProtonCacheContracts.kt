@@ -185,6 +185,18 @@ internal interface ProtonThumbnailQueueStore {
         queue: ProtonQueueName,
         entries: List<ProtonThumbnailQueueEntry>,
     )
+
+    /** Node uids the server has no rendition for; they are never queued again. */
+    fun readAbandoned(
+        userId: String,
+        queue: ProtonQueueName,
+    ): Set<String>
+
+    fun writeAbandoned(
+        userId: String,
+        queue: ProtonQueueName,
+        nodeUids: Set<String>,
+    )
 }
 
 @Module

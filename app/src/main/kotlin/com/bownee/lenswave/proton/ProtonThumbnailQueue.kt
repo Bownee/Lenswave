@@ -13,9 +13,10 @@ import javax.inject.Singleton
 /** Identifies one persisted download queue; each has its own file under the user's metadata. */
 internal enum class ProtonQueueName(
     val fileName: String,
+    val abandonedFileName: String,
 ) {
-    THUMBNAILS("thumbnail-queue.json"),
-    PREVIEWS("preview-queue.json"),
+    THUMBNAILS("thumbnail-queue.json", "thumbnail-abandoned.json"),
+    PREVIEWS("preview-queue.json", "preview-abandoned.json"),
 }
 
 /** The queue of grid thumbnails; always drained before [PreviewQueue]. */
@@ -88,6 +89,7 @@ internal class ProtonThumbnailQueue(
     private val mutex = Mutex()
     private val entriesByUser = mutableMapOf<String, LinkedHashMap<String, ProtonThumbnailQueueEntry>>()
     private val claimedNodeUids = mutableMapOf<String, MutableSet<String>>()
+    private val abandonedByUser = mutableMapOf<String, MutableSet<String>>()
 
     suspend fun replaceSource(
         userId: String,
@@ -123,8 +125,12 @@ internal class ProtonThumbnailQueue(
                         },
                 )
             }
+            // Photos the server has no rendition for stay out of the queue across restarts;
+            // otherwise every sync would retry them and the worker would never finish.
+            val abandoned = abandoned(userId)
             pendingCandidatesBySource.forEach { (source, candidates) ->
                 candidates.distinctBy(ProtonThumbnailCandidate::nodeUid).forEach { candidate ->
+                    if (candidate.nodeUid in abandoned) return@forEach
                     val existing = entries[candidate.nodeUid]
                     entries[candidate.nodeUid] = existing?.copy(
                         sourceCaptureTimes =
@@ -210,6 +216,9 @@ internal class ProtonThumbnailQueue(
             val entries = entries(userId)
             val completed = successfulNodeUids.mapNotNull(entries::remove)
             val abandoned = abandonedNodeUids.count { nodeUid -> entries.remove(nodeUid) != null }
+            if (abandonedNodeUids.isNotEmpty() && abandoned(userId).addAll(abandonedNodeUids)) {
+                store.writeAbandoned(userId, name, abandoned(userId))
+            }
             val now = clock.nowMillis()
             failedNodeUids.forEach { nodeUid ->
                 val entry = entries[nodeUid] ?: return@forEach
@@ -262,12 +271,25 @@ internal class ProtonThumbnailQueue(
                 ?.let { retryAt -> (retryAt - clock.nowMillis()).coerceAtLeast(0L) }
         }
 
+    /** Lets abandoned items be queued again, for a refresh that should re-check the server. */
+    suspend fun forgetAbandoned(userId: String) {
+        mutex.withLock {
+            if (abandoned(userId).isEmpty()) return
+            abandonedByUser.remove(userId)
+            store.writeAbandoned(userId, name, emptySet())
+        }
+    }
+
     suspend fun forget(userId: String) {
         mutex.withLock {
             entriesByUser.remove(userId)
             claimedNodeUids.remove(userId)
+            abandonedByUser.remove(userId)
         }
     }
+
+    private fun abandoned(userId: String): MutableSet<String> =
+        abandonedByUser.getOrPut(userId) { store.readAbandoned(userId, name).toMutableSet() }
 
     private fun entries(userId: String): LinkedHashMap<String, ProtonThumbnailQueueEntry> =
         entriesByUser.getOrPut(userId) {

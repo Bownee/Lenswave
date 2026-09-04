@@ -15,7 +15,7 @@ class SecureFileStoreInstrumentedTest {
     @Test
     fun payloadIsAuthenticatedEncryptedAndDestroyedWithItsKey() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
-        val store = SecureFileStore()
+        val store = SecureFileStore(context)
         val scope = "instrumentation-${UUID.randomUUID()}"
         val target = File(context.cacheDir, "$scope.bin")
         val plaintext = "private Proton token and photo metadata".toByteArray()
