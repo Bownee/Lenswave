@@ -91,16 +91,24 @@ jobs:
           emulator-options: -no-window -gpu software -noaudio -no-boot-anim -camera-back none
           script: echo "Generated AVD snapshot for caching."
 
-      # Both variants are compiled before the emulator boots so it is not sitting idle through
-      # the R8 pass, and the connected tasks below find their APKs up to date.
-      - name: Build device-test APKs
+      # APKs are compiled before the emulator boots so it is not sitting idle through the build,
+      # and the connected tasks below find them up to date.
+      - name: Build debug device-test APKs
         run: |
           ./gradlew assembleDebug assembleDebugAndroidTest \
             -Plenswave.includeX86TestAbi=true --stacktrace
+
+      # The R8-optimised variant is a full second build and its contract is only exercised by one
+      # instrumented test, so pull requests skip it; every push to main and every release tag still
+      # runs it (release.yml checks the same contract while packaging).
+      - name: Build minified device-test APKs
+        if: github.event_name != 'pull_request'
+        run: |
           ./gradlew assembleMinified assembleMinifiedAndroidTest \
             -Plenswave.instrumentationBuildType=minified -Plenswave.includeX86TestAbi=true --stacktrace
 
       - name: Verify minified instrumentation contract
+        if: github.event_name != 'pull_request'
         shell: bash
         run: scripts/verify-minified-contract.sh app/build/outputs/mapping/minified
 
@@ -118,7 +126,11 @@ jobs:
           emulator-options: -no-window -gpu software -no-snapshot-save -noaudio -no-boot-anim -camera-back none
           script: |
             ./gradlew connectedDebugAndroidTest -Plenswave.includeX86TestAbi=true --stacktrace
-            ./gradlew connectedMinifiedAndroidTest -Plenswave.instrumentationBuildType=minified -Plenswave.includeX86TestAbi=true -Pandroid.testInstrumentationRunnerArguments.class=com.bownee.lenswave.proton.ProtonSdkJniContractInstrumentedTest --stacktrace
+            if [ "$RUN_MINIFIED_CONTRACT" = "true" ]; then
+              ./gradlew connectedMinifiedAndroidTest -Plenswave.instrumentationBuildType=minified -Plenswave.includeX86TestAbi=true -Pandroid.testInstrumentationRunnerArguments.class=com.bownee.lenswave.proton.ProtonSdkJniContractInstrumentedTest --stacktrace
+            fi
+        env:
+          RUN_MINIFIED_CONTRACT: ${{ github.event_name != 'pull_request' }}
 
       - name: Upload device-test evidence
         if: always()

@@ -31,6 +31,10 @@ Instrumented tests run against the debug build by default. To exercise the R8-op
 
 Add `-Plenswave.includeX86TestAbi=true` when the target is an x86_64 emulator.
 
+Pull-request CI runs only the debug device tests; the R8-optimised build and its keep-rule contract
+run on every push to main and on release tags. Run the command above locally when you touch
+`proguard-rules.pro`, `proguard-instrumentation.pro`, or the Proton SDK version.
+
 ## Dependencies
 
 All versions live in `gradle/libs.versions.toml`. Two generated files pin what actually resolves and
