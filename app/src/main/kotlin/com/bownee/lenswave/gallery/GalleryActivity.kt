@@ -114,6 +114,7 @@ class GalleryActivity :
         }
     private var pendingScrollRestore: GalleryDestination? = null
     private var pendingSelectionRestore = false
+    private var viewerLaunched = false
     private var safeBottom = 0
     private var thumbnailCacheIdentity: GalleryThumbnailCacheIdentity? = null
 
@@ -171,6 +172,7 @@ class GalleryActivity :
 
     override fun onResume() {
         super.onResume()
+        viewerLaunched = false
         viewModel.resumeThumbnailDownloads()
         updatePresenter.showPendingUpdate()
     }
@@ -422,8 +424,11 @@ class GalleryActivity :
         settingsPresenter.showMenu(screen.settingsButton)
     }
 
+    /** A second tap before the viewer is up must not open a second viewer; the guard lifts on resume. */
     private fun openPhoto(photo: GalleryAsset) {
         val userId = currentUiState.currentUserId ?: return
+        if (viewerLaunched) return
+        viewerLaunched = true
         viewerLauncher.launch(
             PhotoViewerActivity.createIntent(
                 this,
