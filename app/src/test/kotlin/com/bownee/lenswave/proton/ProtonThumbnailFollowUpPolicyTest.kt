@@ -112,6 +112,69 @@ class ProtonThumbnailFollowUpPolicyTest {
         assertNull(followUp(ProtonThumbnailWorkOutcome.PAUSED, workRemaining = true, previewsDeferred = true))
     }
 
+    @Test
+    fun `a refused foreground promotion is followed up after a long pause`() {
+        assertEquals(
+            ProtonThumbnailFollowUp(
+                requiresCharging = false,
+                initialDelayMillis = ProtonThumbnailForegroundBudgetPolicy.FOREGROUND_REFUSED_DELAY_MILLIS,
+            ),
+            followUp(ProtonThumbnailWorkOutcome.FOREGROUND_UNAVAILABLE, workRemaining = true),
+        )
+        assertEquals(
+            ProtonThumbnailFollowUp(requiresCharging = true),
+            followUp(ProtonThumbnailWorkOutcome.FOREGROUND_UNAVAILABLE, previewsDeferred = true),
+        )
+        assertNull(followUp(ProtonThumbnailWorkOutcome.FOREGROUND_UNAVAILABLE))
+    }
+
+    @Test
+    fun `the foreground budget holds every follow-up back at least as long as it says`() {
+        val budget = 5L * 60L * 60L * 1_000L
+
+        assertEquals(
+            budget,
+            followUp(ProtonThumbnailWorkOutcome.TIMED_OUT, workRemaining = true, foregroundBudgetDelayMillis = budget)
+                ?.initialDelayMillis,
+        )
+        assertEquals(
+            budget,
+            followUp(
+                ProtonThumbnailWorkOutcome.WAITING_FOR_RETRY,
+                workRemaining = true,
+                retryAfterMillis = 30_000L,
+                foregroundBudgetDelayMillis = budget,
+            )?.initialDelayMillis,
+        )
+        assertEquals(
+            ProtonThumbnailFollowUp(requiresCharging = true, initialDelayMillis = budget),
+            followUp(
+                ProtonThumbnailWorkOutcome.COMPLETE,
+                previewsDeferred = true,
+                foregroundBudgetDelayMillis = budget,
+            ),
+        )
+        // A longer backoff of its own is kept, and the ladder position survives the floor.
+        val max = ProtonThumbnailFollowUpPolicy.MAX_NETWORK_WAIT_DELAY_MILLIS
+        assertEquals(
+            ProtonThumbnailFollowUp(requiresCharging = false, initialDelayMillis = max, networkWaitAttempt = 9),
+            followUp(
+                ProtonThumbnailWorkOutcome.WAITING_FOR_NETWORK,
+                workRemaining = true,
+                networkWaitAttempt = 8,
+                foregroundBudgetDelayMillis = 1_000L,
+            ),
+        )
+        assertNull(
+            followUp(ProtonThumbnailWorkOutcome.PAUSED, workRemaining = true, foregroundBudgetDelayMillis = budget),
+        )
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun `a budget delay cannot be negative`() {
+        followUp(ProtonThumbnailWorkOutcome.COMPLETE, foregroundBudgetDelayMillis = -1L)
+    }
+
     @Test(expected = IllegalArgumentException::class)
     fun `a follow-up cannot be due in the past`() {
         ProtonThumbnailFollowUp(requiresCharging = false, initialDelayMillis = -1L)
@@ -123,11 +186,13 @@ class ProtonThumbnailFollowUpPolicyTest {
         previewsDeferred: Boolean = false,
         retryAfterMillis: Long? = null,
         networkWaitAttempt: Int = 0,
+        foregroundBudgetDelayMillis: Long = 0L,
     ) = ProtonThumbnailFollowUpPolicy.followUp(
         outcome,
         workRemaining,
         previewsDeferred,
         retryAfterMillis,
         networkWaitAttempt,
+        foregroundBudgetDelayMillis,
     )
 }

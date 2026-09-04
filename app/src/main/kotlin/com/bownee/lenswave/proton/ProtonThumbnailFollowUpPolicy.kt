@@ -56,9 +56,11 @@ internal object ProtonThumbnailFollowUpPolicy {
     /**
      * [workRemaining] is whether either queue still has entries this kind of run may serve,
      * [previewsDeferred] whether previews are only waiting for the charger,
-     * [retryAfterMillis] the earliest backoff the last idle step reported, when any, and
+     * [retryAfterMillis] the earliest backoff the last idle step reported, when any,
      * [networkWaitAttempt] how many runs in a row ended waiting for the network before this
-     * one (zero after any run that processed a batch).
+     * one (zero after any run that processed a batch), and [foregroundBudgetDelayMillis] how
+     * long the next run has to wait for the day's foreground allowance
+     * ([ProtonThumbnailForegroundBudgetPolicy]); every follow-up waits at least that long.
      */
     fun followUp(
         outcome: ProtonThumbnailWorkOutcome,
@@ -66,6 +68,24 @@ internal object ProtonThumbnailFollowUpPolicy {
         previewsDeferred: Boolean,
         retryAfterMillis: Long?,
         networkWaitAttempt: Int = 0,
+        foregroundBudgetDelayMillis: Long = 0L,
+    ): ProtonThumbnailFollowUp? {
+        require(foregroundBudgetDelayMillis >= 0L) { "A budget delay cannot be negative" }
+        val followUp =
+            followUpBeforeBudget(outcome, workRemaining, previewsDeferred, retryAfterMillis, networkWaitAttempt)
+        return if (followUp == null || followUp.initialDelayMillis >= foregroundBudgetDelayMillis) {
+            followUp
+        } else {
+            followUp.copy(initialDelayMillis = foregroundBudgetDelayMillis)
+        }
+    }
+
+    private fun followUpBeforeBudget(
+        outcome: ProtonThumbnailWorkOutcome,
+        workRemaining: Boolean,
+        previewsDeferred: Boolean,
+        retryAfterMillis: Long?,
+        networkWaitAttempt: Int,
     ): ProtonThumbnailFollowUp? =
         when (outcome) {
             ProtonThumbnailWorkOutcome.WAITING_FOR_NETWORK -> {
@@ -83,6 +103,17 @@ internal object ProtonThumbnailFollowUpPolicy {
             ProtonThumbnailWorkOutcome.TIMED_OUT -> {
                 if (workRemaining) {
                     ProtonThumbnailFollowUp(requiresCharging = false, initialDelayMillis = RUN_LIMIT_DELAY_MILLIS)
+                } else {
+                    chargingRun(previewsDeferred)
+                }
+            }
+
+            ProtonThumbnailWorkOutcome.FOREGROUND_UNAVAILABLE -> {
+                if (workRemaining) {
+                    ProtonThumbnailFollowUp(
+                        requiresCharging = false,
+                        initialDelayMillis = ProtonThumbnailForegroundBudgetPolicy.FOREGROUND_REFUSED_DELAY_MILLIS,
+                    )
                 } else {
                     chargingRun(previewsDeferred)
                 }

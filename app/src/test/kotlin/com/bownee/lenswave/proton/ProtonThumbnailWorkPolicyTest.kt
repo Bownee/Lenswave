@@ -33,6 +33,15 @@ class ProtonThumbnailWorkPolicyTest {
     }
 
     @Test
+    fun `a run without its notification ends after the background-only allowance`() {
+        val allowance = ProtonThumbnailForegroundBudgetPolicy.BACKGROUND_ONLY_RUN_MILLIS
+
+        assertFalse(ProtonThumbnailWorkPolicy.backgroundOnlyDeadlineReached(null, nowMillis = Long.MAX_VALUE))
+        assertFalse(ProtonThumbnailWorkPolicy.backgroundOnlyDeadlineReached(1_000L, nowMillis = 1_000L + allowance - 1))
+        assertTrue(ProtonThumbnailWorkPolicy.backgroundOnlyDeadlineReached(1_000L, nowMillis = 1_000L + allowance))
+    }
+
+    @Test
     fun `the previews-allowed answer is reused for a few seconds`() {
         val cache = ProtonThumbnailWorkPolicy.PREVIEWS_ALLOWED_CACHE_MILLIS
         assertFalse(ProtonThumbnailWorkPolicy.isPreviewsAllowedFresh(checkedAtMillis = null, nowMillis = 10_000L))
