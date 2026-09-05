@@ -88,6 +88,23 @@ class AppUpdateCheckerTest {
             assertEquals("0.20.0", fixture.checker.findAvailableUpdate("0.19.4")?.versionName)
         }
 
+    @Test fun snoozeInBackgroundWritesTheSnoozeInTheCheckersOwnScope() =
+        runBlocking {
+            val fixture = Fixture(LatestReleaseResult.NotModified)
+            fixture.store.state =
+                AppUpdateState(
+                    latestVersionName = "0.20.0",
+                    nextCheckAtMillis = Long.MAX_VALUE,
+                )
+
+            // The caller does not wait; the write is owned by the checker, not the activity that asked.
+            fixture.checker.snoozeInBackground("0.20.0").join()
+
+            assertEquals("0.20.0", fixture.store.state.snoozedVersionName)
+            assertEquals(1_000L + 7L * 24L * 60L * 60L * 1_000L, fixture.store.state.snoozedUntilMillis)
+            assertNull(fixture.checker.findAvailableUpdate("0.19.4"))
+        }
+
     @Test fun startupUpdateRunsOneCheckPerProcessAndIsHandedOutUntilMarkedShown() =
         runBlocking {
             val fixture = Fixture(LatestReleaseResult.Modified("0.20.0", null))

@@ -46,27 +46,31 @@ class ProtonThumbnailWorker(
                 applicationContext,
                 RepositoryEntryPoint::class.java,
             )
+        val requestedUserId = UserId(userId)
         // The user paused downloads from the notification; a request that slipped past the
         // scheduler's check (one already queued when the pause was set) ends here.
-        if (entryPoint.pauseStore().isPaused(UserId(userId))) return finish(ProtonThumbnailWorkOutcome.PAUSED)
+        if (entryPoint.pauseStore().isPaused(requestedUserId)) {
+            return endBeforeQueues(entryPoint, requestedUserId, ProtonThumbnailWorkOutcome.PAUSED)
+        }
         val runGuard = entryPoint.runGuard()
         // Unique work de-duplicates per name and per WorkManager instance; this is the
         // process-wide guarantee that two batch loops never share the queues, and so that the
         // release of stale claims below the gateway only ever comes from the single active run.
-        if (!runGuard.tryBegin()) return finish(ProtonThumbnailWorkOutcome.ALREADY_RUNNING)
+        if (!runGuard.tryBegin()) {
+            return endBeforeQueues(entryPoint, requestedUserId, ProtonThumbnailWorkOutcome.ALREADY_RUNNING)
+        }
         var networkMonitor: ProtonThumbnailNetworkMonitor? = null
         val previewAdmission = entryPoint.previewAdmission()
         // The downloader asks between the chunks of a preview batch whether previews are still
         // allowed, so a batch a glance at the app authorised does not outlive the glance.
         previewAdmission.bind(::previewsAllowed)
-        val requestedUserId = UserId(userId)
         return try {
             val session =
                 withTimeoutOrNull(SESSION_READY_TIMEOUT_MILLIS) {
                     entryPoint.accountSessionManager().state.first { state ->
                         state.initialized && !state.transitioning
                     }
-                } ?: return finish(ProtonThumbnailWorkOutcome.SESSION_UNAVAILABLE)
+                } ?: return endBeforeQueues(entryPoint, requestedUserId, ProtonThumbnailWorkOutcome.SESSION_UNAVAILABLE)
             if (session.activeUserId != requestedUserId) {
                 return Result.failure()
             }
@@ -196,6 +200,36 @@ class ProtonThumbnailWorker(
         }
     }
 
+    /**
+     * Whether this run took the place of a charging follow-up the scheduler found waiting; see
+     * [ProtonThumbnailFollowUp.replacesChargingRun].
+     */
+    private val replacedChargingRun: Boolean
+        get() = inputData.getBoolean(KEY_REPLACES_CHARGING_RUN, false)
+
+    /**
+     * Ends a run that never reached the queues. The one follow-up such a run can owe is the
+     * charging run it displaced ([replacedChargingRun]): without it the previews that run was
+     * for would wait for the next app open. The policy says no for a pause, and so does the
+     * scheduler; the request is still enqueued from here so it chains after this run under the
+     * unique name rather than being dropped by a KEEP.
+     */
+    private fun endBeforeQueues(
+        entryPoint: RepositoryEntryPoint,
+        userId: UserId,
+        outcome: ProtonThumbnailWorkOutcome,
+    ): Result {
+        ProtonThumbnailFollowUpPolicy
+            .followUp(
+                outcome,
+                workRemaining = false,
+                previewsDeferred = false,
+                retryAfterMillis = null,
+                replacedChargingRun = replacedChargingRun,
+            )?.let { followUp -> entryPoint.followUpScheduler().enqueueFollowUp(userId, followUp) }
+        return finish(outcome)
+    }
+
     /** This run's time under the foreground service so far, ending at [nowMillis]; null when never promoted. */
     private fun foregroundRun(nowMillis: Long): ProtonForegroundRun? =
         foregroundStartedAtMillis?.let { startedAt ->
@@ -247,6 +281,7 @@ class ProtonThumbnailWorker(
                     networkWaitAttempt = if (processedBatch) 0 else networkWaitAttempt,
                     foregroundBudgetDelayMillis =
                         ProtonThumbnailForegroundBudgetPolicy.delayUntilAffordableMillis(runs, now),
+                    replacedChargingRun = replacedChargingRun,
                 )
             if (followUp != null) followUps.enqueueFollowUp(userId, followUp)
             return finish(outcome)
@@ -360,6 +395,7 @@ class ProtonThumbnailWorker(
     companion object {
         const val KEY_USER_ID = "user-id"
         const val KEY_NETWORK_WAIT_ATTEMPT = "network-wait-attempt"
+        const val KEY_REPLACES_CHARGING_RUN = "replaces-charging-run"
         private const val SESSION_READY_TIMEOUT_MILLIS = 30_000L
         private const val NETWORK_READY_TIMEOUT_MILLIS = 5_000L
         private const val FOREGROUND_YIELD_TIMEOUT_MILLIS = 5_000L
@@ -370,10 +406,16 @@ class ProtonThumbnailWorker(
             requiresCharging: Boolean = false,
             initialDelayMillis: Long = 0L,
             networkWaitAttempt: Int = 0,
+            replacesChargingRun: Boolean = false,
         ): OneTimeWorkRequest =
             OneTimeWorkRequestBuilder<ProtonThumbnailWorker>()
-                .setInputData(workDataOf(KEY_USER_ID to userId.id, KEY_NETWORK_WAIT_ATTEMPT to networkWaitAttempt))
-                .setConstraints(
+                .setInputData(
+                    workDataOf(
+                        KEY_USER_ID to userId.id,
+                        KEY_NETWORK_WAIT_ATTEMPT to networkWaitAttempt,
+                        KEY_REPLACES_CHARGING_RUN to replacesChargingRun,
+                    ),
+                ).setConstraints(
                     Constraints
                         .Builder()
                         // Unmetered is what the run needs, so a request enqueued without Wi-Fi

@@ -10,6 +10,7 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.CancellationException
 import java.util.concurrent.ConcurrentHashMap
 import javax.crypto.AEADBadTagException
 import javax.crypto.KeyGenerator
@@ -168,6 +169,35 @@ class SecureFileStoreTest {
                 .orEmpty()
                 .none { it.name.endsWith(".part") },
         )
+    }
+
+    @Test
+    fun `a commit gate that declines leaves the target untouched and no temporary behind`() {
+        val store = store()
+        val directory = temporaryFolder.newFolder("gated")
+        val plaintext = File(directory, "plain.bin").apply { writeBytes(ByteArray(70_000) { it.toByte() }) }
+        val encrypted = File(directory, "encrypted.bin")
+        val decrypted = File(directory, "decrypted.bin")
+
+        store.encryptFile(scope, plaintext, encrypted, "encrypt failed") { _ -> }
+        assertFalse(encrypted.exists())
+        store.encryptFile(scope, plaintext, encrypted, "encrypt failed")
+        assertTrue(encrypted.isFile)
+
+        var offered = 0
+        store.decryptFile(scope, encrypted, decrypted, commitGate = { _ -> offered++ })
+        assertEquals(1, offered)
+        assertFalse(decrypted.exists())
+        store.decryptFile(scope, encrypted, decrypted, commitGate = { commit -> commit() })
+        // A trailing lambda is the stop check, as the instrumented test relies on; a stop before
+        // the first segment cancels a file of any size.
+        assertThrows(CancellationException::class.java) {
+            store.decryptFile(scope, encrypted, File(directory, "stopped")) { false }
+        }
+        assertFalse(File(directory, "stopped").exists())
+        assertArrayEquals(plaintext.readBytes(), decrypted.readBytes())
+        // Only the three files this test named are left: every temporary was removed.
+        assertEquals(setOf("plain.bin", "encrypted.bin", "decrypted.bin"), directory.list()?.toSet())
     }
 
     @Test

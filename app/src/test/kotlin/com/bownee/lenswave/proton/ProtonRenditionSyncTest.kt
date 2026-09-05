@@ -7,6 +7,7 @@ import kotlinx.coroutines.yield
 import me.proton.core.domain.entity.UserId
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.net.UnknownHostException
@@ -239,6 +240,115 @@ class ProtonRenditionSyncTest {
             assertTrue(thumbnails.claimReady(USER.id, limit = 2).isEmpty())
             clock.value += ProtonThumbnailQueue.NETWORK_RETRY_MILLIS
             assertEquals(2, thumbnails.claimReady(USER.id, limit = 2).size)
+        }
+
+    @Test
+    fun `two batches in a row the SDK never answered end the run instead of claiming the next one`() =
+        test { sync ->
+            thumbnails.replaceSource(USER.id, ProtonSyncKeys.QueueSource.TIMELINE, candidates("a", "b"))
+            previews.replaceSource(USER.id, ProtonSyncKeys.QueueSource.TIMELINE_PREVIEWS, candidates("p"))
+            source.thumbnailProgress = emptyList()
+            source.thumbnailResult = stalled("a", "b")
+
+            // One stalled batch may be a slow first answer: the run goes on to the next batch.
+            assertEquals(ProtonThumbnailQueueStep.Processed, sync.downloadNextBatch(USER, allowPreviews = true) {})
+
+            thumbnails.replaceSource(USER.id, ProtonSyncKeys.QueueSource.ALBUM_COVERS, candidates("c", "d"))
+            source.thumbnailResult = stalled("c", "d")
+            val writesBefore = store.writeCount
+
+            val step = sync.downloadNextBatch(USER, allowPreviews = true) {}
+
+            // The preview is ready now, but the step reports the stalled nodes' retry instead:
+            // too long to sleep for, so the worker ends the run waiting for it, and the
+            // queues are written as at any run end.
+            assertEquals(
+                ProtonThumbnailQueueStep.Idle(
+                    hasPending = true,
+                    retryAfterMillis = ProtonThumbnailQueue.NETWORK_RETRY_MILLIS,
+                ),
+                step,
+            )
+            assertNull(ProtonBackgroundBatchPolicy.idleWaitMillis(step as ProtonThumbnailQueueStep.Idle))
+            assertEquals(listOf(setOf("a", "b"), setOf("c", "d")), source.thumbnailRequests.map { it.toSet() })
+            assertEquals(0, source.previewCalls)
+            assertEquals(writesBefore + 2, store.writeCount)
+            // No node took a backoff step, and all are claimable again shortly.
+            assertTrue(store.readQueue(USER.id, ProtonQueueName.THUMBNAILS).all { entry -> entry.retryCount == 0 })
+            assertTrue(thumbnails.claimReady(USER.id, limit = 4).isEmpty())
+            clock.value += ProtonThumbnailQueue.NETWORK_RETRY_MILLIS
+            assertEquals(4, thumbnails.claimReady(USER.id, limit = 4).size)
+        }
+
+    @Test
+    fun `a batch the SDK answered in between starts the stall count over`() =
+        test { sync ->
+            thumbnails.replaceSource(USER.id, ProtonSyncKeys.QueueSource.TIMELINE, candidates("a"))
+            source.thumbnailProgress = emptyList()
+            source.thumbnailResult = stalled("a")
+            assertEquals(ProtonThumbnailQueueStep.Processed, sync.downloadNextBatch(USER, allowPreviews = true) {})
+
+            thumbnails.replaceSource(USER.id, ProtonSyncKeys.QueueSource.ALBUM_COVERS, candidates("b"))
+            source.thumbnailResult = ThumbnailBatchResult(setOf("b"), emptyMap())
+            assertEquals(ProtonThumbnailQueueStep.Processed, sync.downloadNextBatch(USER, allowPreviews = true) {})
+
+            thumbnails.replaceSource(USER.id, ProtonSyncKeys.QueueSource.albumPhotos("album"), candidates("c"))
+            source.thumbnailResult = stalled("c")
+
+            // The third batch stalled, but the one before it answered: one stall, not two.
+            assertEquals(ProtonThumbnailQueueStep.Processed, sync.downloadNextBatch(USER, allowPreviews = true) {})
+        }
+
+    @Test
+    fun `a preview batch the SDK never answered twice ends the run the same way`() =
+        test { sync ->
+            previews.replaceSource(USER.id, ProtonSyncKeys.QueueSource.TIMELINE_PREVIEWS, candidates("a"))
+            source.previewResult = stalled("a")
+            assertEquals(ProtonThumbnailQueueStep.Processed, sync.downloadNextBatch(USER, allowPreviews = true) {})
+            previews.replaceSource(USER.id, ProtonSyncKeys.QueueSource.TIMELINE_PREVIEWS, candidates("a", "b"))
+            source.previewResult = stalled("a", "b")
+
+            val step = sync.downloadNextBatch(USER, allowPreviews = true) {}
+
+            assertEquals(
+                ProtonThumbnailQueueStep.Idle(
+                    hasPending = true,
+                    retryAfterMillis = ProtonThumbnailQueue.NETWORK_RETRY_MILLIS,
+                ),
+                step,
+            )
+            assertEquals(2, previews.pendingCount(USER.id))
+        }
+
+    /** The result of a batch the SDK never answered: every node a network failure, nothing stored. */
+    private fun stalled(vararg nodeUids: String) =
+        ThumbnailBatchResult(
+            emptySet(),
+            nodeUids.associateWith { ThumbnailFailureKind.TRANSIENT_NETWORK },
+            stalled = true,
+        )
+
+    @Test
+    fun `previews a stalled batch never asked for are given back without a step`() =
+        test { sync ->
+            previews.replaceSource(USER.id, ProtonSyncKeys.QueueSource.TIMELINE_PREVIEWS, candidates("a", "b"))
+            source.previewResult =
+                ThumbnailBatchResult(
+                    emptySet(),
+                    mapOf("a" to ThumbnailFailureKind.TRANSIENT_NETWORK),
+                    deferredNodeUids = setOf("b"),
+                    stalled = true,
+                )
+
+            sync.downloadNextBatch(USER, allowPreviews = true) {}
+            previews.flush(USER.id)
+
+            // "a" waits out the network retry; "b" was never asked, so it is claimable at once
+            // and its entry is untouched.
+            val entries = store.readQueue(USER.id, ProtonQueueName.PREVIEWS).associateBy { entry -> entry.nodeUid }
+            assertEquals(0, entries.getValue("b").networkRetryCount)
+            assertEquals(0L, entries.getValue("b").retryAtMillis)
+            assertEquals(listOf("b"), previews.claimReady(USER.id, limit = 2).map { entry -> entry.nodeUid })
         }
 
     @Test

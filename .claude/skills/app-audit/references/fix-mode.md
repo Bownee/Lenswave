@@ -57,3 +57,21 @@
   `dumpsys window | grep isKeyguardShowing` before blaming the code, and report such runs as
   not evaluated rather than as failures.
 - With several transports for one device, set `ANDROID_SERIAL`.
+
+## Before the push: what the JVM chain cannot see
+
+- Run `scripts/scan-view-init-order.sh` (in the skill directory) over every Kotlin file under
+  a UI package that a fixer touched. A hit means a constructor reads a field declared below
+  its `init` block; move the declarations above the block.
+- Re-fetch `origin/main` and compare against the audited commit. If it moved structurally,
+  merge it into the integration branch first and re-run the chain there.
+- After the PR is open, watch with `gh pr checks <n> --watch --interval 60` in a background
+  shell. If only the device job fails, fetch the run's `device-tests-*` artifact
+  (`gh run download <run-id> -n <artifact-name>`) and read the `TEST-*.xml` failures.
+  Emulator errors before the line "Emulator booted" are infrastructure; anything after is code.
+- When a fixer adds a parameter to a Kotlin function whose callers pass a trailing lambda,
+  the new parameter must not become the last one: the trailing lambda rebinds to it, and a
+  lambda returning Boolean coerces to a Unit-returning parameter without a compiler error.
+  This turned a stop check into a commit gate and the JVM chain stayed green; only the
+  device job saw that no cancellation was thrown. Keep the lambda callers rely on last, and
+  have reviewers grep `git diff` for signature changes followed by a trailing-lambda call.

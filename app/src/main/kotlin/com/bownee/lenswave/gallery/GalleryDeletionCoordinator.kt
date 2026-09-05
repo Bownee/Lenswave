@@ -3,6 +3,7 @@ package com.bownee.lenswave.gallery
 import android.widget.Toast
 import androidx.fragment.app.FragmentActivity
 import com.bownee.lenswave.R
+import me.proton.core.domain.entity.UserId
 
 /**
  * Confirms a gallery selection's move to Proton Trash and reports the outcome. The confirmation
@@ -13,15 +14,19 @@ import com.bownee.lenswave.R
 internal class GalleryDeletionCoordinator(
     private val activity: FragmentActivity,
 ) {
-    fun delete(assets: List<GalleryAsset>) {
+    /** [userId] is the account the selection belongs to; the confirmation is bound to it. */
+    fun delete(
+        userId: UserId,
+        assets: List<GalleryAsset>,
+    ) {
         when (val decision = PhotoDeletionPolicy.decide(assets.map { it.toPhotoTarget() })) {
             PhotoDeletionDecision.Empty -> Unit
-            is PhotoDeletionDecision.Allowed -> execute(decision.plan)
+            is PhotoDeletionDecision.Allowed -> execute(userId, decision.plan)
         }
     }
 
     /** Shows what a mutation the view model ran came to. */
-    fun showOutcome(event: GalleryMutationEvent) {
+    fun showOutcome(event: GalleryMutationEvent.Trash) {
         when (event) {
             is GalleryMutationEvent.Trashed -> {
                 showMessage(
@@ -42,13 +47,19 @@ internal class GalleryDeletionCoordinator(
         }
     }
 
-    private fun execute(plan: PhotoDeletionPlan) {
+    private fun execute(
+        userId: UserId,
+        plan: PhotoDeletionPlan,
+    ) {
         when (plan.operation) {
-            PhotoDeletionOperation.MOVE_TO_TRASH -> confirmMoveToTrash(plan.targets)
+            PhotoDeletionOperation.MOVE_TO_TRASH -> confirmMoveToTrash(userId, plan.targets)
         }
     }
 
-    private fun confirmMoveToTrash(photos: List<PhotoTarget>) {
+    private fun confirmMoveToTrash(
+        userId: UserId,
+        photos: List<PhotoTarget>,
+    ) {
         val fragmentManager = activity.supportFragmentManager
         // The confirmation answers a tap that just happened; one that cannot show now is simply not shown.
         val decision =
@@ -58,7 +69,7 @@ internal class GalleryDeletionCoordinator(
             )
         if (decision != GalleryDialogPromptPolicy.Decision.SHOW) return
         TrashConfirmationDialogFragment
-            .create(photos.map(PhotoTarget::nodeUid), singlePhoto = false)
+            .create(userId, photos.map(PhotoTarget::nodeUid), singlePhoto = false)
             .show(fragmentManager, TrashConfirmationDialogFragment.TAG)
     }
 

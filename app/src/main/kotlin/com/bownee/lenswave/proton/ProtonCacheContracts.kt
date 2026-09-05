@@ -177,18 +177,25 @@ interface ProtonMediaCache {
         shouldContinue: () -> Boolean = { true },
     ): File?
 
+    /** A private plaintext file for a download to write and the encrypted original it commits to; see [ProtonOriginalTarget]. */
     fun createOriginalTarget(
         userId: String,
         nodeUid: String,
-    ): Pair<File, File>
+    ): ProtonOriginalTarget
 
+    /**
+     * Encrypts the download into its original and moves the plaintext to the shared path; see
+     * [ProtonOriginalCommit] for what the viewer reads and whether the original landed. Throws
+     * [ProtonOriginalRemovedException], with the plaintext deleted, when the photo was removed
+     * since [createOriginalTarget]; a cache that cannot keep the original reports that itself.
+     */
     fun commitOriginal(
         userId: String,
         nodeUid: String,
-        plaintext: File,
-        target: File,
-    ): File
+        download: ProtonOriginalTarget,
+    ): ProtonOriginalCommit
 
+    /** Accounts for an original [commitOriginal] stored, trimming the oldest past the size cap. */
     fun onOriginalStored(
         userId: String,
         target: File,

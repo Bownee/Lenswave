@@ -9,8 +9,14 @@ import kotlin.math.sqrt
  * image pixels; the view maps the result back to the decoder's raw axes.
  */
 internal object PhotoDetailDecodePolicy {
-    /** Smallest tile budget, so a tiny view still gets a useful tile. */
-    const val MIN_DETAIL_PIXELS = 1_000_000L
+    /** Smallest tile budget in bytes (a million ARGB pixels), so a tiny view still gets a useful tile. */
+    const val MIN_DETAIL_BYTES = 4_000_000L
+
+    /** What a pixel of an ARGB 8888 tile costs; the viewport factor below was tuned against it. */
+    private const val ARGB_8888_BYTES_PER_PIXEL = 4
+
+    /** What a pixel of an RGB 565 tile costs, for containers that cannot carry transparency. */
+    private const val RGB_565_BYTES_PER_PIXEL = 2
 
     /**
      * How much larger than the viewport a tile may be. At the sample the display needs, the
@@ -37,11 +43,26 @@ internal object PhotoDetailDecodePolicy {
         val region: Region,
     )
 
-    /** Pixel budget of one detail tile for a view of the given size. */
+    /** Bytes a decoded pixel costs: an opaque container decodes to RGB 565, anything else to ARGB 8888. */
+    fun bytesPerPixel(opaque: Boolean): Int = if (opaque) RGB_565_BYTES_PER_PIXEL else ARGB_8888_BYTES_PER_PIXEL
+
+    /**
+     * Pixel budget of one detail tile for a view of the given size. The budget is a memory
+     * budget: twice the viewport in ARGB bytes, so an [opaque] photo's 16-bit tile may carry
+     * twice the pixels of a transparent one for the same heap.
+     */
     fun budget(
         viewWidth: Int,
         viewHeight: Int,
-    ): Long = max(MIN_DETAIL_PIXELS, VIEWPORT_BUDGET_FACTOR * viewWidth.toLong() * viewHeight.toLong())
+        opaque: Boolean,
+    ): Long {
+        val bytes =
+            max(
+                MIN_DETAIL_BYTES,
+                VIEWPORT_BUDGET_FACTOR * viewWidth.toLong() * viewHeight.toLong() * ARGB_8888_BYTES_PER_PIXEL,
+            )
+        return bytes / bytesPerPixel(opaque)
+    }
 
     /**
      * The sample size of a detail tile, or null when the base bitmap already carries at least one

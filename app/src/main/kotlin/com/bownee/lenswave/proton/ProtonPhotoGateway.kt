@@ -48,6 +48,8 @@ class ProtonPhotoGateway internal constructor(
     private val previewQueue: ProtonThumbnailQueue,
     private val clientProvider: ProtonPhotosClientProvider,
     private val cache: ProtonSessionCache,
+    /** The rendition files themselves, for the invalidations below; the loads go through [renditions]. */
+    private val renditionStore: ProtonMediaCache,
     private val sessionGuard: ProtonSessionGuard,
     /** Process-wide, like the session itself; [runActivationHousekeeping] guards every use. */
     private val housekeepingScope: CoroutineScope,
@@ -67,6 +69,7 @@ class ProtonPhotoGateway internal constructor(
         @PreviewQueue previewQueue: ProtonThumbnailQueue,
         clientProvider: ProtonPhotosClientProvider,
         cache: ProtonSessionCache,
+        renditionStore: ProtonMediaCache,
         sessionGuard: ProtonSessionGuard,
     ) : this(
         timeline = timeline,
@@ -78,6 +81,7 @@ class ProtonPhotoGateway internal constructor(
         previewQueue = previewQueue,
         clientProvider = clientProvider,
         cache = cache,
+        renditionStore = renditionStore,
         sessionGuard = sessionGuard,
         housekeepingScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
     )
@@ -96,6 +100,9 @@ class ProtonPhotoGateway internal constructor(
 
     /** Background thumbnail work; kept off the public class surface, see [ProtonThumbnailWorkGateway]. */
     internal val thumbnailWork: ProtonThumbnailWorkGateway = ThumbnailWork()
+
+    /** How often each stored preview that failed to decode has been queued again; see [loadPreview]. */
+    private val previewInvalidations = ProtonRenditionInvalidationLimiter()
 
     /**
      * The transition holds only what the grid needs: the cached listings, loaded so the grid
@@ -118,6 +125,7 @@ class ProtonPhotoGateway internal constructor(
                         // user's directory and data key.
                         thumbnailQueue.forget(previous.id)
                         previewQueue.forget(previous.id)
+                        previewInvalidations.forget(previous.id)
                         renditionSync.finishPublishing(previous)
                         originals.forgetUser(previous)
                         cache.clearUser(previous.id)
@@ -264,7 +272,26 @@ class ProtonPhotoGateway internal constructor(
         targetLongEdge: Int,
     ): Bitmap? =
         withContext(Dispatchers.IO) {
-            sessionGuard.withActiveSession(userId) { renditions.loadPreview(userId, nodeUid, targetLongEdge) }
+            sessionGuard.withActiveSession(userId) {
+                // Asked before the load: a preview the store held and then failed to decode is
+                // discarded by the load itself, so afterwards it reads as never stored.
+                val wasStored = renditionStore.previewExists(userId.id, nodeUid)
+                try {
+                    renditions.loadPreview(userId, nodeUid, targetLongEdge) ?: run {
+                        // Bounded: a preview Proton keeps serving in a form nothing decodes
+                        // would otherwise be downloaded again on every open of the photo. Past
+                        // the bound the stored file stays, so nothing queues it again, and the
+                        // viewer keeps falling back to the thumbnail.
+                        if (wasStored && previewInvalidations.allowsRequeue(userId.id, nodeUid)) {
+                            invalidatePreviewInActiveSession(userId, nodeUid)
+                        }
+                        null
+                    }
+                } catch (_: ProtonRenditionUnavailableException) {
+                    // Intact but undecryptable right now; the viewer asks again on its next open.
+                    null
+                }
+            }
         }
 
     override suspend fun loadThumbnail(
@@ -370,6 +397,7 @@ class ProtonPhotoGateway internal constructor(
                 // transfers first so none can land after the user's directory is gone.
                 thumbnailQueue.forget(userId.id)
                 previewQueue.forget(userId.id)
+                previewInvalidations.forget(userId.id)
                 renditionSync.finishPublishing(userId)
                 originals.forgetUser(userId)
                 cache.clearUser(userId.id)
@@ -410,6 +438,42 @@ class ProtonPhotoGateway internal constructor(
         userId: UserId,
         nodeUid: String,
     ) {
+        val placement = queuePlacement(nodeUid)
+        renditions.removeThumbnail(userId, nodeUid)
+        val nodeUids = setOf(nodeUid)
+        timeline.markThumbnailsUnavailable(userId, nodeUids)
+        albums.markCoverThumbnailsUnavailable(userId, nodeUids)
+        albums.markAlbumPhotoThumbnailsUnavailable(userId, nodeUids)
+        thumbnailQueue.retryNow(userId.id, ProtonThumbnailCandidate(nodeUid, placement.captureTime), placement.sources)
+    }
+
+    /**
+     * [invalidateThumbnailInActiveSession] for a stored preview that no longer decrypts or
+     * decodes (or was left zero-length): until now the store deleted the file and the viewer
+     * fell back to the thumbnail for good, since nothing queued the preview again. The preview
+     * queue has one source, so the entry is queued from it whatever listing showed the photo.
+     */
+    private suspend fun invalidatePreviewInActiveSession(
+        userId: UserId,
+        nodeUid: String,
+    ) {
+        val placement = queuePlacement(nodeUid)
+        renditionStore.removePreview(userId.id, nodeUid)
+        timeline.markPreviewsUnavailable(userId, setOf(nodeUid))
+        previewQueue.retryNow(
+            userId.id,
+            ProtonThumbnailCandidate(nodeUid, placement.captureTime),
+            setOf(ProtonSyncKeys.QueueSource.TIMELINE_PREVIEWS),
+        )
+    }
+
+    /** Where a photo sits in the published listings: the thumbnail queue sources that show it and its newest capture time. */
+    private class QueuePlacement(
+        val sources: Set<String>,
+        val captureTime: Long,
+    )
+
+    private fun queuePlacement(nodeUid: String): QueuePlacement {
         val timelinePhoto = timelinePhotoIndex.find(timeline.state.value.photos, nodeUid)
         val albumPhotosState = albums.albumPhotosState.value
         val albumPhoto = albumPhotoIndex.find(albumPhotosState.photos, nodeUid)
@@ -428,12 +492,7 @@ class ProtonPhotoGateway internal constructor(
             listOfNotNull(timelinePhoto, albumPhoto)
                 .maxOfOrNull(ProtonGalleryPhoto::captureTimeEpochSeconds)
                 ?: UNKNOWN_CAPTURE_TIME
-        renditions.removeThumbnail(userId, nodeUid)
-        val nodeUids = setOf(nodeUid)
-        timeline.markThumbnailsUnavailable(userId, nodeUids)
-        albums.markCoverThumbnailsUnavailable(userId, nodeUids)
-        albums.markAlbumPhotoThumbnailsUnavailable(userId, nodeUids)
-        thumbnailQueue.retryNow(userId.id, ProtonThumbnailCandidate(nodeUid, captureTime), sources)
+        return QueuePlacement(sources, captureTime)
     }
 
     private suspend fun reconcileTimelineThumbnailQueue(userId: UserId) {

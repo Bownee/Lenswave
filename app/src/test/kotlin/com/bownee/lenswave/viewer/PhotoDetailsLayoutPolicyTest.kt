@@ -1,6 +1,8 @@
 package com.bownee.lenswave.viewer
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PhotoDetailsLayoutPolicyTest {
@@ -80,5 +82,17 @@ class PhotoDetailsLayoutPolicyTest {
                 attachmentOffset = 500,
             ),
         )
+    }
+
+    @Test
+    fun `an open sheet waits for the surface to be measured`() {
+        assertTrue(PhotoDetailsLayoutPolicy.awaitsLayout(shown = true, surfaceHeight = 0, viewportHeight = 2_000))
+        assertTrue(PhotoDetailsLayoutPolicy.awaitsLayout(shown = true, surfaceHeight = 3_300, viewportHeight = 0))
+        assertFalse(PhotoDetailsLayoutPolicy.awaitsLayout(shown = true, surfaceHeight = 3_300, viewportHeight = 2_000))
+    }
+
+    @Test
+    fun `a closed sheet never waits for layout`() {
+        assertFalse(PhotoDetailsLayoutPolicy.awaitsLayout(shown = false, surfaceHeight = 0, viewportHeight = 0))
     }
 }

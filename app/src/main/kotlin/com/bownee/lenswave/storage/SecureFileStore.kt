@@ -121,11 +121,17 @@ class SecureFileStore internal constructor(
         write(scope, file, text.toByteArray(Charsets.UTF_8), failureMessage)
     }
 
+    /**
+     * Encrypts [plaintext] into [target] through a temporary file. [commitGate] is handed the
+     * commit (the rename onto [target]) and decides whether it runs; a gate that does not call
+     * it leaves [target] untouched and the temporary is removed either way.
+     */
     fun encryptFile(
         scope: String,
         plaintext: File,
         target: File,
         failureMessage: String,
+        commitGate: (commit: () -> Unit) -> Unit = { commit -> commit() },
     ) {
         target.parentFile?.mkdirs()
         val temporary = File.createTempFile("${target.name}.", ".part", target.parentFile)
@@ -136,7 +142,7 @@ class SecureFileStore internal constructor(
                 output.write(SEGMENTED_VERSION.toInt())
                 FileInputStream(plaintext).use { input -> SegmentedEnvelope.encrypt(key, input, output) }
             }
-            commitWith(scope, key) { AtomicFileStore.commit(temporary, target, failureMessage) }
+            commitGate { commitWith(scope, key) { AtomicFileStore.commit(temporary, target, failureMessage) } }
         } finally {
             temporary.delete()
         }
@@ -152,7 +158,8 @@ class SecureFileStore internal constructor(
      * file through [onStarted], with the plaintext size the header and file length promise (null
      * when they do not add up; the decrypt then fails on its own), and the verified plaintext
      * total through [onBytesWritten] after every segment; the temporary is renamed to [target]
-     * once the whole file verified.
+     * once the whole file verified. [commitGate] is handed that rename, as in [encryptFile]: a
+     * gate that does not call it leaves [target] untouched.
      */
     fun decryptFile(
         scope: String,
@@ -160,6 +167,10 @@ class SecureFileStore internal constructor(
         target: File,
         onStarted: (plaintextInProgress: File, expectedBytes: Long?) -> Unit = { _, _ -> },
         onBytesWritten: (totalBytes: Long) -> Unit = {},
+        commitGate: (commit: () -> Unit) -> Unit = { commit -> commit() },
+        // Last on purpose: a caller's trailing lambda is the stop check. Appending a parameter
+        // after it once rebound such a lambda to the commit gate, silently, because a Boolean
+        // lambda coerces to Unit; the device test caught it, the JVM chain did not.
         shouldContinue: () -> Boolean = { true },
     ) {
         target.parentFile?.mkdirs()
@@ -178,7 +189,7 @@ class SecureFileStore internal constructor(
                     }
                 }
             }
-            AtomicFileStore.commit(temporary, target, "Could not materialize encrypted photo")
+            commitGate { AtomicFileStore.commit(temporary, target, "Could not materialize encrypted photo") }
         } catch (error: LegacyFileTooLargeException) {
             // Deleted after the stream is closed: an open file cannot be removed on every platform.
             encrypted.delete()

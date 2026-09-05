@@ -60,6 +60,7 @@ class GalleryViewModelTest {
     private val session = MutableStateFlow(ProtonAccountSessionState())
     private val navigationStore = FakeNavigationStore()
     private val deletionExecutor = FakeDeletionExecutor(events)
+    private val telemetryWriter = FakeTelemetryWriter(events)
     private val savedState = SavedStateHandle()
     private val text = CountingText()
 
@@ -246,29 +247,124 @@ class GalleryViewModelTest {
             val viewModel = connectedViewModel()
             viewModel.setSelection(setOf("p1"))
 
-            viewModel.trashPhotos(listOf("p1"))
-            viewModel.trashPhotos(listOf("p2"))
+            viewModel.trashPhotos(USER, listOf("p1"))
+            viewModel.trashPhotos(USER, listOf("p2"))
             runCurrent()
 
-            assertEquals("a second call while one is in flight is dropped", listOf("trash:u:p1"), events)
+            assertEquals("a second call while one is in flight is refused", listOf("trash:u:p1"), events)
             deletionExecutor.result = PhotoMutationResult(successfulCount = 1, failedCount = 1)
             deletionExecutor.held.single().complete(Unit)
             runCurrent()
 
             assertTrue(viewModel.selectedStableIds.isEmpty())
-            // The activity that started the call may be gone; the next one still hears the outcome.
+            // The activity that started the call may be gone; the next one still hears the outcome,
+            // and the refused call is reported as failed rather than dropped without a word.
             val received = mutableListOf<GalleryMutationEvent>()
             backgroundScope.launch { viewModel.mutationEvents.collect { received += it } }
             runCurrent()
-            assertEquals(listOf(GalleryMutationEvent.Trashed(successfulCount = 1, failedCount = 1)), received)
+            assertEquals(
+                listOf(
+                    GalleryMutationEvent.TrashFailed,
+                    GalleryMutationEvent.Trashed(successfulCount = 1, failedCount = 1),
+                ),
+                received,
+            )
 
             deletionExecutor.failure = IllegalStateException("offline")
-            viewModel.trashPhotos(listOf("p2"))
+            viewModel.trashPhotos(USER, listOf("p2"))
             runCurrent()
             deletionExecutor.held.last().complete(Unit)
             runCurrent()
 
             assertEquals(GalleryMutationEvent.TrashFailed, received.last())
+        }
+
+    @Test
+    fun `saveTelemetryPreference writes in the view model scope and reports the outcome to a late collector`() =
+        runTest(dispatcher) {
+            val viewModel = connectedViewModel()
+
+            viewModel.saveTelemetryPreference(enabled = true)
+            runCurrent()
+            assertEquals(listOf("telemetry:u:true"), events)
+            // The activity that opened the dialog may have been recreated meanwhile; the write goes on.
+            telemetryWriter.held.single().complete(Unit)
+            runCurrent()
+
+            val received = mutableListOf<GalleryMutationEvent>()
+            backgroundScope.launch { viewModel.mutationEvents.collect { received += it } }
+            runCurrent()
+            assertEquals(
+                listOf<GalleryMutationEvent>(GalleryMutationEvent.TelemetryPreferenceSaved(saved = true)),
+                received,
+            )
+
+            telemetryWriter.failure = IllegalStateException("offline")
+            viewModel.saveTelemetryPreference(enabled = false)
+            runCurrent()
+            telemetryWriter.held.last().complete(Unit)
+            runCurrent()
+            assertEquals(GalleryMutationEvent.TelemetryPreferenceSaved(saved = false), received.last())
+        }
+
+    @Test
+    fun `saveTelemetryPreference while no session ever arrives is reported as not saved and writes nothing`() =
+        runTest(dispatcher) {
+            val viewModel = viewModel()
+            val received = mutableListOf<GalleryMutationEvent>()
+            backgroundScope.launch { viewModel.mutationEvents.collect { received += it } }
+
+            viewModel.saveTelemetryPreference(enabled = true)
+            advanceTimeBy(9_999L)
+            runCurrent()
+            assertTrue("the write waits for the restored session", received.isEmpty())
+
+            advanceTimeBy(2L)
+            runCurrent()
+
+            assertEquals(
+                listOf<GalleryMutationEvent>(GalleryMutationEvent.TelemetryPreferenceSaved(saved = false)),
+                received,
+            )
+            assertTrue(events.none { it.startsWith("telemetry:") })
+
+            // A session that settles without an account is reported the same way, at once.
+            session.value = ProtonAccountSessionState(initialized = true)
+            viewModel.saveTelemetryPreference(enabled = true)
+            runCurrent()
+            assertEquals(2, received.size)
+            assertEquals(GalleryMutationEvent.TelemetryPreferenceSaved(saved = false), received.last())
+            assertTrue(events.none { it.startsWith("telemetry:") })
+        }
+
+    @Test
+    fun `a telemetry preference saved before the restored session has settled is written once the account arrives`() =
+        runTest(dispatcher) {
+            val viewModel = viewModel()
+            val received = mutableListOf<GalleryMutationEvent>()
+            backgroundScope.launch { viewModel.mutationEvents.collect { received += it } }
+
+            // The privacy dialog restored by the fragment manager answers before the session flow does.
+            viewModel.saveTelemetryPreference(enabled = true)
+            runCurrent()
+            assertTrue("nothing is written without an account", events.none { it.startsWith("telemetry:") })
+            assertTrue(received.isEmpty())
+
+            session.value =
+                ProtonAccountSessionState(readyAccount(USER), USER, initialized = true, transitioning = true)
+            runCurrent()
+            assertTrue("a transitioning session is not an account yet", events.none { it.startsWith("telemetry:") })
+
+            session.value = ProtonAccountSessionState(readyAccount(USER), USER, initialized = true)
+            runCurrent()
+            assertEquals(listOf("telemetry:u:true"), events.filter { it.startsWith("telemetry:") })
+            telemetryWriter.held.single().complete(Unit)
+            runCurrent()
+
+            assertEquals(
+                listOf<GalleryMutationEvent>(GalleryMutationEvent.TelemetryPreferenceSaved(saved = true)),
+                received,
+            )
         }
 
     @Test
@@ -280,7 +376,7 @@ class GalleryViewModelTest {
             viewModel.setSelection(setOf("p1"))
             deletionExecutor.failure = ProtonSessionChangedException()
 
-            viewModel.trashPhotos(listOf("p1"))
+            viewModel.trashPhotos(USER, listOf("p1"))
             runCurrent()
             deletionExecutor.held.single().complete(Unit)
             runCurrent()
@@ -293,10 +389,131 @@ class GalleryViewModelTest {
             )
 
             deletionExecutor.failure = null
-            viewModel.trashPhotos(listOf("p1"))
+            viewModel.trashPhotos(USER, listOf("p1"))
             runCurrent()
 
             assertEquals("the in-flight guard was released", listOf("trash:u:p1", "trash:u:p1"), events)
+        }
+
+    @Test
+    fun `a trash confirmed before the restored session has settled runs once the account arrives`() =
+        runTest(dispatcher) {
+            reader.state.value = loadedTimeline("p1")
+            reader.albumsState.value = ProtonAlbumsState(userId = USER.id, hasLoaded = true)
+            val viewModel = viewModel()
+            backgroundScope.launch { viewModel.uiState.collect {} }
+            val received = mutableListOf<GalleryMutationEvent>()
+            backgroundScope.launch { viewModel.mutationEvents.collect { received += it } }
+            runCurrent()
+
+            // The confirmation dialog restored by the fragment manager answers before the session flow does.
+            viewModel.trashPhotos(USER, listOf("p1"))
+            runCurrent()
+            assertTrue("nothing is trashed without an account", events.none { it.startsWith("trash:") })
+            assertTrue(received.isEmpty())
+
+            session.value =
+                ProtonAccountSessionState(readyAccount(USER), USER, initialized = true, transitioning = true)
+            runCurrent()
+            assertTrue("a transitioning session is not an account yet", events.none { it.startsWith("trash:") })
+
+            session.value = ProtonAccountSessionState(readyAccount(USER), USER, initialized = true)
+            runCurrent()
+            assertEquals(listOf("trash:u:p1"), events.filter { it.startsWith("trash:") })
+            deletionExecutor.held.single().complete(Unit)
+            runCurrent()
+
+            assertEquals(
+                listOf<GalleryMutationEvent>(GalleryMutationEvent.Trashed(successfulCount = 1, failedCount = 0)),
+                received,
+            )
+        }
+
+    @Test
+    fun `a trash confirmed while no session ever arrives is reported as failed`() =
+        runTest(dispatcher) {
+            val viewModel = viewModel()
+            val received = mutableListOf<GalleryMutationEvent>()
+            backgroundScope.launch { viewModel.mutationEvents.collect { received += it } }
+            viewModel.setSelection(setOf("p1"))
+
+            viewModel.trashPhotos(USER, listOf("p1"))
+            advanceTimeBy(9_999L)
+            runCurrent()
+            assertTrue(received.isEmpty())
+
+            advanceTimeBy(2L)
+            runCurrent()
+
+            assertEquals(listOf<GalleryMutationEvent>(GalleryMutationEvent.TrashFailed), received)
+            assertTrue(events.none { it.startsWith("trash:") })
+            assertEquals(
+                "the photos were not trashed, so the selection stands",
+                setOf("p1"),
+                viewModel.selectedStableIds,
+            )
+
+            // A session that settles without an account fails the same way, and the guard is free again.
+            session.value = ProtonAccountSessionState(initialized = true)
+            viewModel.trashPhotos(USER, listOf("p1"))
+            runCurrent()
+            assertEquals(2, received.size)
+            assertEquals(GalleryMutationEvent.TrashFailed, received.last())
+        }
+
+    @Test
+    fun `a second confirmation during the session wait is reported as failed without stopping the first`() =
+        runTest(dispatcher) {
+            val viewModel = viewModel()
+            val received = mutableListOf<GalleryMutationEvent>()
+            backgroundScope.launch { viewModel.mutationEvents.collect { received += it } }
+
+            viewModel.trashPhotos(USER, listOf("p1"))
+            runCurrent()
+            viewModel.trashPhotos(USER, listOf("p2"))
+            runCurrent()
+            assertEquals(listOf<GalleryMutationEvent>(GalleryMutationEvent.TrashFailed), received)
+
+            session.value = ProtonAccountSessionState(readyAccount(USER), USER, initialized = true)
+            runCurrent()
+            assertEquals(
+                "the first confirmation still runs",
+                listOf("trash:u:p1"),
+                events.filter { it.startsWith("trash:") },
+            )
+            deletionExecutor.held.single().complete(Unit)
+            runCurrent()
+            assertEquals(GalleryMutationEvent.Trashed(successfulCount = 1, failedCount = 0), received.last())
+        }
+
+    @Test
+    fun `a trash confirmed for one account is not run under another one the restored session settles on`() =
+        runTest(dispatcher) {
+            val other = UserId("other")
+            val viewModel = viewModel()
+            val received = mutableListOf<GalleryMutationEvent>()
+            backgroundScope.launch { viewModel.mutationEvents.collect { received += it } }
+            viewModel.setSelection(setOf("p1"))
+
+            // The dialog restored after a process death carries the account it was shown for.
+            viewModel.trashPhotos(USER, listOf("p1"))
+            runCurrent()
+            session.value = ProtonAccountSessionState(readyAccount(other), other, initialized = true)
+            runCurrent()
+
+            assertEquals(listOf<GalleryMutationEvent>(GalleryMutationEvent.TrashFailed), received)
+            assertTrue("nothing is trashed under the other account", events.none { it.startsWith("trash:") })
+            assertEquals(setOf("p1"), viewModel.selectedStableIds)
+
+            // The same guard holds when the account is already known when the dialog answers.
+            reader.state.value = ProtonGalleryState(userId = other.id, hasLoaded = true)
+            backgroundScope.launch { viewModel.uiState.collect {} }
+            runCurrent()
+            viewModel.trashPhotos(USER, listOf("p1"))
+            runCurrent()
+            assertEquals(2, received.size)
+            assertEquals(GalleryMutationEvent.TrashFailed, received.last())
+            assertTrue(events.none { it.startsWith("trash:") })
         }
 
     @Test
@@ -605,6 +822,7 @@ class GalleryViewModelTest {
             accountSession = session,
             navigationStore = navigationStore,
             deletionExecutor = deletionExecutor,
+            telemetryWriter = telemetryWriter,
             savedStateHandle = savedState,
             clock = SchedulerClock(),
             dispatchers = TestDispatchers(),
@@ -787,6 +1005,22 @@ class GalleryViewModelTest {
             CompletableDeferred<Unit>().also(held::add).await()
             failure?.let { throw it }
             return result
+        }
+    }
+
+    private class FakeTelemetryWriter(
+        private val events: MutableList<String>,
+    ) : TelemetryPreferenceWriter {
+        var failure: Throwable? = null
+        val held = mutableListOf<CompletableDeferred<Unit>>()
+
+        override suspend fun setTelemetryEnabled(
+            userId: UserId,
+            enabled: Boolean,
+        ) {
+            events += "telemetry:${userId.id}:$enabled"
+            CompletableDeferred<Unit>().also(held::add).await()
+            failure?.let { throw it }
         }
     }
 

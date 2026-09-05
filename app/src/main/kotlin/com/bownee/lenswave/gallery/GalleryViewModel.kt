@@ -29,6 +29,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
@@ -36,20 +37,29 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import me.proton.core.account.domain.entity.Account
 import me.proton.core.account.domain.entity.isReady
 import me.proton.core.accountmanager.domain.AccountManager
 import me.proton.core.domain.entity.UserId
 import javax.inject.Inject
 
-/** What a photo mutation run by [GalleryViewModel] came to; the activity on screen reports it once. */
+/** What a mutation run by [GalleryViewModel] came to; the activity on screen reports it once. */
 internal sealed interface GalleryMutationEvent {
+    /** The outcome of a move to Proton Trash. */
+    sealed interface Trash : GalleryMutationEvent
+
     data class Trashed(
         val successfulCount: Int,
         val failedCount: Int,
-    ) : GalleryMutationEvent
+    ) : Trash
 
-    data object TrashFailed : GalleryMutationEvent
+    data object TrashFailed : Trash
+
+    /** Whether the telemetry preference from the privacy dialog reached Proton. */
+    data class TelemetryPreferenceSaved(
+        val saved: Boolean,
+    ) : GalleryMutationEvent
 }
 
 @HiltViewModel
@@ -61,6 +71,7 @@ class GalleryViewModel internal constructor(
     private val accountSession: StateFlow<ProtonAccountSessionState>,
     private val navigationStore: GalleryNavigationStore,
     private val deletionExecutor: PhotoDeletionExecutor,
+    private val telemetryWriter: TelemetryPreferenceWriter,
     private val savedStateHandle: SavedStateHandle,
     private val clock: LenswaveClock,
     private val dispatchers: LenswaveDispatchers,
@@ -75,6 +86,7 @@ class GalleryViewModel internal constructor(
         accountSessionManager: ProtonAccountSessionManager,
         navigationStore: GalleryNavigationStore,
         deletionExecutor: PhotoDeletionExecutor,
+        telemetryWriter: TelemetryPreferenceWriter,
         savedStateHandle: SavedStateHandle,
         clock: LenswaveClock,
         dispatchers: LenswaveDispatchers,
@@ -86,6 +98,7 @@ class GalleryViewModel internal constructor(
         accountSession = accountSessionManager.state,
         navigationStore = navigationStore,
         deletionExecutor = deletionExecutor,
+        telemetryWriter = telemetryWriter,
         savedStateHandle = savedStateHandle,
         clock = clock,
         dispatchers = dispatchers,
@@ -245,16 +258,37 @@ class GalleryViewModel internal constructor(
      * Moves the photos to Proton Trash. Runs in this scope, so the call is neither cancelled nor
      * left unreported when the activity is recreated while it is in flight; the outcome reaches
      * whichever activity collects [mutationEvents] next.
+     *
+     * The confirmation dialog survives a process death and may answer before the restored
+     * session has settled; the call then waits for the account (bounded, see
+     * [awaitSessionUserId]) rather than dropping a confirmed destructive action without a word.
+     * The session that settles may belong to another account than the one the dialog was shown
+     * for; [confirmedUserId] is that account, and a mismatch is a failure, not a trash. A second
+     * confirmation while one is in flight (possible during that wait) is refused and reported as
+     * failed, so the selection bar and the toast answer it rather than leaving it unheard.
      */
-    fun trashPhotos(nodeUids: List<String>) {
-        if (mutationInFlight || nodeUids.isEmpty()) return
-        val userId = currentUserId ?: return
+    fun trashPhotos(
+        confirmedUserId: UserId,
+        nodeUids: List<String>,
+    ) {
+        if (nodeUids.isEmpty()) return
+        if (mutationInFlight) {
+            mutableMutationEvents.trySend(GalleryMutationEvent.TrashFailed)
+            return
+        }
         mutationInFlight = true
         viewModelScope.launch {
             try {
-                val result = deletionExecutor.trashProton(userId, nodeUids)
-                setSelection(emptySet())
-                mutableMutationEvents.trySend(GalleryMutationEvent.Trashed(result.successfulCount, result.failedCount))
+                val userId = currentUserId ?: awaitSessionUserId()
+                if (userId != confirmedUserId) {
+                    mutableMutationEvents.trySend(GalleryMutationEvent.TrashFailed)
+                } else {
+                    val result = deletionExecutor.trashProton(userId, nodeUids)
+                    setSelection(emptySet())
+                    mutableMutationEvents.trySend(
+                        GalleryMutationEvent.Trashed(result.successfulCount, result.failedCount),
+                    )
+                }
             } catch (_: ProtonSessionChangedException) {
                 // A CancellationException subtype the session guard throws when the account changes
                 // mid-call: the photos were not trashed, and the selection bar must hear that.
@@ -266,6 +300,40 @@ class GalleryViewModel internal constructor(
             } finally {
                 mutationInFlight = false
             }
+        }
+    }
+
+    /**
+     * The user of the first initialised, settled account session, or null when none arrives
+     * within [SESSION_WAIT_MILLIS] or the session settles without an account.
+     */
+    private suspend fun awaitSessionUserId(): UserId? =
+        withTimeoutOrNull(SESSION_WAIT_MILLIS) {
+            accountSession.first { state -> state.initialized && !state.transitioning }
+        }?.activeUserId
+
+    /**
+     * The answer from the privacy dialog. Runs in this scope: the dialog is a fragment that
+     * survives a rotation, and its write must too, or a rotation right after the toggle loses
+     * it. The fragment manager also restores the dialog after a process death, where a Save may
+     * land before the session has settled; like [trashPhotos] the write then waits for the
+     * account (see [awaitSessionUserId]). None arriving, or the account having gone while the
+     * dialog was up, is reported as not saved.
+     */
+    fun saveTelemetryPreference(enabled: Boolean) {
+        viewModelScope.launch {
+            val userId = currentUserId ?: awaitSessionUserId()
+            val saved =
+                userId != null &&
+                    try {
+                        telemetryWriter.setTelemetryEnabled(userId, enabled)
+                        true
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (_: Throwable) {
+                        false
+                    }
+            mutableMutationEvents.trySend(GalleryMutationEvent.TelemetryPreferenceSaved(saved))
         }
     }
 
@@ -590,6 +658,7 @@ class GalleryViewModel internal constructor(
         const val STATE_SELECTION = "gallery.selection"
         const val MUTATION_EVENT_BUFFER = 16
         const val UI_STATE_STOP_TIMEOUT_MILLIS = 5_000L
+        const val SESSION_WAIT_MILLIS = 10_000L
 
         private fun accountStatus(state: ProtonAccountSessionState): ProtonAccountStatus =
             ProtonAccountStatus.resolve(

@@ -34,4 +34,15 @@ internal object PhotoDetailsLayoutPolicy {
         viewportHeight: Int,
         attachmentOffset: Int,
     ): Int = (surfaceHeight - viewportHeight - attachmentOffset).coerceAtLeast(0)
+
+    /**
+     * True when an open sheet cannot be settled yet because the scrolling surface or its viewport
+     * has no measured size: settling now would put the sheet at offset 0 and alpha 0, open but
+     * invisible. A closed sheet needs no layout to stay closed.
+     */
+    fun awaitsLayout(
+        shown: Boolean,
+        surfaceHeight: Int,
+        viewportHeight: Int,
+    ): Boolean = shown && (surfaceHeight <= 0 || viewportHeight <= 0)
 }

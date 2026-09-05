@@ -11,14 +11,27 @@ class PhotoDetailDecodePolicyTest {
     /** The fixed budget the policy used before it was sized from the viewport. */
     private val legacyBudget = 4_000_000L
 
-    /** A 1080 x 2400 portrait phone screen. */
-    private val phoneBudget = PhotoDetailDecodePolicy.budget(1_080, 2_400)
+    /** A 1080 x 2400 portrait phone screen showing a picture that may carry transparency. */
+    private val phoneBudget = PhotoDetailDecodePolicy.budget(1_080, 2_400, opaque = false)
 
     @Test
     fun `the budget is twice the view's pixels with a floor for small views`() {
         assertEquals(2L * 1_080 * 2_400, phoneBudget)
-        assertEquals(PhotoDetailDecodePolicy.MIN_DETAIL_PIXELS, PhotoDetailDecodePolicy.budget(200, 300))
-        assertEquals(PhotoDetailDecodePolicy.MIN_DETAIL_PIXELS, PhotoDetailDecodePolicy.budget(0, 0))
+        val floorPixels = PhotoDetailDecodePolicy.MIN_DETAIL_BYTES / 4
+        assertEquals(1_000_000L, floorPixels)
+        assertEquals(floorPixels, PhotoDetailDecodePolicy.budget(200, 300, opaque = false))
+        assertEquals(floorPixels, PhotoDetailDecodePolicy.budget(0, 0, opaque = false))
+    }
+
+    @Test
+    fun `an opaque photo's 16-bit tile carries twice the pixels for the same memory`() {
+        assertEquals(2 * phoneBudget, PhotoDetailDecodePolicy.budget(1_080, 2_400, opaque = true))
+        assertEquals(
+            PhotoDetailDecodePolicy.MIN_DETAIL_BYTES / 2,
+            PhotoDetailDecodePolicy.budget(200, 300, opaque = true),
+        )
+        assertEquals(2, PhotoDetailDecodePolicy.bytesPerPixel(opaque = true))
+        assertEquals(4, PhotoDetailDecodePolicy.bytesPerPixel(opaque = false))
     }
 
     @Test

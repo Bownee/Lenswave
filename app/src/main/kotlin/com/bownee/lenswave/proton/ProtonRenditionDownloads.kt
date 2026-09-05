@@ -84,9 +84,13 @@ internal class ProtonRenditionDownloads(
 
         suspend fun thumbnailPass(chunk: List<String>): ThumbnailBatchResult =
             downloadThumbnailPass(photosClient, userId, chunk, ThumbnailType.THUMBNAIL, onProgress)
-        downloadChunks(pending, downloadChunk = ::thumbnailPass).results.forEach { result ->
+        val batchPasses = downloadChunks(pending, downloadChunk = ::thumbnailPass).results
+        batchPasses.forEach { result ->
             successful += result.successfulNodeUids
             failures += result.failures
+        }
+        if (ThumbnailBatchStallPolicy.isStalled(batchPasses)) {
+            return stalledBatch(LenswaveOperation.THUMBNAIL_DOWNLOAD, successful, pending)
         }
         // A node the SDK left unanswered in a batch is usually just slow, and answers when
         // asked on its own; asking now keeps it away from the preview fallback, which would
@@ -209,9 +213,21 @@ internal class ProtonRenditionDownloads(
         // charger or a screen that may be gone before the batch is; the chunks not yet
         // started are dropped the moment it is.
         val mayStart = previewAdmission::previewsAllowed
-        downloadChunks(pending, mayStart = mayStart, downloadChunk = ::previewPass).results.forEach { result ->
+        val batch = downloadChunks(pending, mayStart = mayStart, downloadChunk = ::previewPass)
+        batch.results.forEach { result ->
             successful += result.successfulNodeUids
             failures += result.failures
+        }
+        if (ThumbnailBatchStallPolicy.isStalled(batch.results)) {
+            // Only the chunks that were asked stalled; a chunk the admission refused was never
+            // asked, and settling it as a network failure would walk it through the network
+            // retries and the backoff ladder to a drop without one request ever made.
+            return stalledBatch(
+                LenswaveOperation.PREVIEW_DOWNLOAD,
+                successful,
+                asked = pending.filterNot(batch.deferredNodeUids::contains),
+                deferred = batch.deferredNodeUids,
+            )
         }
         // Nodes the SDK skipped in a batch usually answer when asked on their own; asking now
         // keeps them out of the retry backoff.
@@ -296,6 +312,30 @@ internal class ProtonRenditionDownloads(
                 ChunkResults(results, deferred)
             }
         }
+    }
+
+    /**
+     * The SDK gave no answer for any chunk of the batch before the deadline. That is not eight
+     * slow nodes but a stalled SDK or connection: re-asking every node on its own and then trying
+     * the preview fallback cost two or three more minutes of foreground service per batch with
+     * nothing stored at the end. The nodes are settled like a connection failure instead, which
+     * takes no backoff step and is claimable again shortly, and the result tells the caller so it
+     * can end the run rather than ask the same SDK for the next batch at once.
+     */
+    private fun stalledBatch(
+        operation: LenswaveOperation,
+        successful: Set<String>,
+        asked: List<String>,
+        deferred: Set<String> = emptySet(),
+    ): ThumbnailBatchResult {
+        val failures = ThumbnailBatchStallPolicy.settleStalled(asked, successful)
+        reportState(operation, "stalled-${failures.size}-of-${asked.size}")
+        return ThumbnailBatchResult(
+            successful,
+            failures,
+            deferredNodeUids = deferred.filterNot(successful::contains).toSet(),
+            stalled = true,
+        )
     }
 
     /** What the chunks of one [downloadChunks] call came to, and the nodes whose chunk never started. */
@@ -461,7 +501,12 @@ internal class ProtonRenditionDownloads(
             reportState(operation, "unanswered-${unanswered.size}-of-${requested.size}-$reason")
             unanswered.forEach { nodeUid -> failures.record(nodeUid, ThumbnailFailureKind.UNANSWERED) }
         }
-        return ThumbnailBatchResult(successful, failures.filterKeys { nodeUid -> nodeUid !in successful })
+        // Not one answer, nor the flow closing, before the deadline: the pass never got going.
+        return ThumbnailBatchResult(
+            successful,
+            failures.filterKeys { nodeUid -> nodeUid !in successful },
+            stalled = !answered,
+        )
     }
 
     private fun MutableMap<String, ThumbnailFailureKind>.record(
@@ -479,12 +524,39 @@ internal data class ThumbnailBatchResult(
     /** Nodes whose preview rendition served as the thumbnail and was stored as a preview too. */
     val previewsStored: Set<String> = emptySet(),
     /**
-     * Nodes with no thumbnail on the server whose preview fallback never started because
-     * previews were not allowed. Neither a success nor a failure: they wait for a run that
-     * may fetch previews, and until then must not be claimed again and again.
+     * Nodes whose preview fetch never started because previews were not allowed: the preview
+     * fallback of a thumbnail Proton does not have, or the chunks of a stalled preview batch
+     * the admission refused. Neither a success nor a failure: they wait for a run that may
+     * fetch previews, and until then must not be claimed again and again.
      */
     val deferredNodeUids: Set<String> = emptySet(),
+    /**
+     * The SDK gave no answer at all before the deadline, for any node: a stalled SDK rather than
+     * slow nodes. Its nodes are in [failures] as [ThumbnailFailureKind.TRANSIENT_NETWORK]; the
+     * caller should end the run rather than ask the same SDK for the next batch right away.
+     */
+    val stalled: Boolean = false,
 )
+
+/**
+ * A batch whose every pass ended without a single SDK answer; see [ThumbnailBatchResult.stalled].
+ * One chunk answering while another stays silent is the ordinary case of slow nodes, which are
+ * re-asked on their own.
+ */
+internal object ThumbnailBatchStallPolicy {
+    fun isStalled(passes: List<ThumbnailBatchResult>): Boolean = passes.isNotEmpty() && passes.all { it.stalled }
+
+    /**
+     * The nodes of a stalled batch are not at fault, so they are settled as a connection failure:
+     * no backoff step, claimable again after [ProtonThumbnailQueue.NETWORK_RETRY_MILLIS], and
+     * bounded by the queue's own cap on consecutive network retries.
+     */
+    fun settleStalled(
+        pending: Collection<String>,
+        successful: Set<String>,
+    ): Map<String, ThumbnailFailureKind> =
+        pending.filterNot(successful::contains).associateWith { ThumbnailFailureKind.TRANSIENT_NETWORK }
+}
 
 internal object ProtonThumbnailDownloadPolicy {
     const val SDK_BATCH_SIZE = 8
