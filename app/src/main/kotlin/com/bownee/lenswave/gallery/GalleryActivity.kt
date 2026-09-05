@@ -623,17 +623,20 @@ class GalleryActivity :
         ViewCompat.requestApplyInsets(root)
     }
 
-    /** The handle travels between the pinned header and the navigation bar with the same gap at both ends. */
+    /** The handle travels between the pinned header and the navigation bar, with a larger gap below the header. */
     private fun updateFastScrollTrack() {
         list.setFastScrollEdgeInsets(
-            top = screen.headerHeight + fastScrollEdgeGap,
-            bottom =
-                safeBottom + fastScrollEdgeGap,
+            top = screen.headerHeight + fastScrollTopGap,
+            bottom = safeBottom + fastScrollBottomGap,
         )
     }
 
-    /** Resolved once: the header relayouts that call [updateFastScrollTrack] must not each hit the resources. */
-    private val fastScrollEdgeGap: Int by lazy(LazyThreadSafetyMode.NONE) {
-        resources.getDimensionPixelSize(R.dimen.gallery_fast_scroll_edge_margin)
+    // Resolved once: the header relayouts that call [updateFastScrollTrack] must not each hit the resources.
+    private val fastScrollTopGap: Int by lazy(LazyThreadSafetyMode.NONE) {
+        resources.getDimensionPixelSize(R.dimen.gallery_fast_scroll_top_margin)
+    }
+
+    private val fastScrollBottomGap: Int by lazy(LazyThreadSafetyMode.NONE) {
+        resources.getDimensionPixelSize(R.dimen.gallery_fast_scroll_bottom_margin)
     }
 }

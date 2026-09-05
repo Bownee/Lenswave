@@ -9,7 +9,6 @@ import android.view.View
 import androidx.core.content.res.ResourcesCompat
 import androidx.core.view.isEmpty
 import com.bownee.lenswave.R
-import com.bownee.lenswave.dp
 import kotlin.math.roundToInt
 
 /**
@@ -25,22 +24,16 @@ internal class GalleryFastScroller(
 ) {
     private val handleSize = context.resources.getDimensionPixelSize(R.dimen.gallery_fast_scroll_handle_size)
 
-    // Resolved once: both are read on every draw and touch, where a density lookup would be waste.
-    private val edgeMargin = context.dp(EDGE_MARGIN_DP)
-    private val touchExpansion = context.dp(TOUCH_EXPANSION_DP)
-    private val defaultDrawable =
+    // Resolved once: both are read on every draw and touch, where a resource lookup would be waste.
+    private val edgeMargin = context.resources.getDimensionPixelSize(R.dimen.gallery_fast_scroll_edge_inset)
+    private val touchExpansion = context.resources.getDimensionPixelSize(R.dimen.gallery_fast_scroll_touch_expansion)
+
+    /** One drawable whose fill follows the pressed state, so dragging only flips its state. */
+    private val handleDrawable =
         requireNotNull(
             ResourcesCompat.getDrawable(
                 context.resources,
-                R.drawable.gallery_fast_scroll_thumb_default,
-                context.theme,
-            ),
-        ).mutate()
-    private val pressedDrawable =
-        requireNotNull(
-            ResourcesCompat.getDrawable(
-                context.resources,
-                R.drawable.gallery_fast_scroll_thumb_pressed,
+                R.drawable.gallery_fast_scroll_thumb,
                 context.theme,
             ),
         ).mutate()
@@ -158,9 +151,9 @@ internal class GalleryFastScroller(
     fun draw(canvas: Canvas) {
         if (!isVisible) return
         updateHandleBounds()
-        val drawable = if (isDragging) pressedDrawable else defaultDrawable
-        drawable.bounds = handleBounds
-        drawable.draw(canvas)
+        handleDrawable.state = if (isDragging) PRESSED_STATE else NO_STATE
+        handleDrawable.bounds = handleBounds
+        handleDrawable.draw(canvas)
     }
 
     private fun end() {
@@ -247,8 +240,8 @@ internal class GalleryFastScroller(
     private fun isRtl(): Boolean = listView.layoutDirection == View.LAYOUT_DIRECTION_RTL
 
     private companion object {
-        const val EDGE_MARGIN_DP = 4
-        const val TOUCH_EXPANSION_DP = 10
         const val HIDE_DELAY_MILLIS = 1_400L
+        val PRESSED_STATE = intArrayOf(android.R.attr.state_pressed)
+        val NO_STATE = intArrayOf()
     }
 }
