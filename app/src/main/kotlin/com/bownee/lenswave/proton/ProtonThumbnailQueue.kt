@@ -264,7 +264,9 @@ internal class ProtonThumbnailQueue(
      * for days; one Proton has no such rendition for ([ThumbnailFailureKind.NOT_FOUND]) is
      * dropped at once, since retrying cannot help and every retry is a full SDK enumeration. A
      * dropped node stays out of the queue for [SUPPRESSION_MILLIS] however often the listings
-     * are reconciled; [retryNow] lifts that.
+     * are reconciled; [retryNow] lifts that. A node the network failed under
+     * ([ThumbnailFailureKind.TRANSIENT_NETWORK]) is not at fault: it waits [NETWORK_RETRY_MILLIS]
+     * and keeps its retry count, so a connection lost mid-batch costs no node a backoff step.
      */
     suspend fun settle(
         userId: String,
@@ -283,6 +285,10 @@ internal class ProtonThumbnailQueue(
             var dropped = 0
             failures.forEach { (nodeUid, kind) ->
                 val entry = entries[nodeUid] ?: return@forEach
+                if (kind == ThumbnailFailureKind.TRANSIENT_NETWORK) {
+                    entries[nodeUid] = entry.copy(retryAtMillis = now + NETWORK_RETRY_MILLIS)
+                    return@forEach
+                }
                 val retryCount = entry.retryCount + 1
                 if (kind == ThumbnailFailureKind.NOT_FOUND || retryCount >= MAX_RETRY_COUNT) {
                     entries.remove(nodeUid)
@@ -496,6 +502,9 @@ internal class ProtonThumbnailQueue(
 
         /** How long a dropped node stays out of the queue whatever the listings say. */
         const val SUPPRESSION_MILLIS = 7L * 24L * 60L * 60L * 1_000L
+
+        /** The pause after a connection failure; long enough for the network to settle, no more. */
+        const val NETWORK_RETRY_MILLIS = 10_000L
         private const val BASE_RETRY_MILLIS = 30_000L
         private const val MAX_RETRY_MILLIS = 15L * 60L * 1_000L
         private const val MAX_RETRY_SHIFT = 5

@@ -6,13 +6,61 @@ import me.proton.drive.sdk.entity.NodeUid
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import java.io.IOException
+import java.net.ConnectException
 import java.net.SocketTimeoutException
+import java.net.UnknownHostException
+import javax.net.ssl.SSLHandshakeException
 
 class ThumbnailFailureClassifierTest {
-    @Test fun timeoutIsAnOrdinaryRetryableFailure() {
+    @Test fun connectionFailuresAreTransientNetworkFailures() {
+        listOf(
+            SocketTimeoutException(),
+            UnknownHostException("api.proton.me"),
+            ConnectException(),
+            SSLHandshakeException("reset"),
+            IOException(),
+        ).forEach { error ->
+            assertEquals(
+                error.toString(),
+                ThumbnailFailureKind.TRANSIENT_NETWORK,
+                ThumbnailFailureClassifier.classify(error),
+            )
+        }
+    }
+
+    @Test fun aConnectionFailureIsRecognisedThroughWrappers() {
+        assertEquals(
+            ThumbnailFailureKind.TRANSIENT_NETWORK,
+            ThumbnailFailureClassifier.classify(RuntimeException("wrapped", UnknownHostException("host"))),
+        )
+        assertEquals(
+            ThumbnailFailureKind.TRANSIENT_NETWORK,
+            ThumbnailFailureClassifier.classify(ProtonDriveSdkException("failure", SocketTimeoutException(), null)),
+        )
+        // The wording still decides first: a missing rendition wrapped in an IO failure is missing.
+        assertEquals(
+            ThumbnailFailureKind.NOT_FOUND,
+            ThumbnailFailureClassifier.classify(ProtonDriveSdkException("no thumbnail", IOException(), null)),
+        )
+    }
+
+    @Test fun aNetworkDomainErrorWithoutAStatusCodeIsTransientAndWithOneIsNot() {
+        assertEquals(
+            ThumbnailFailureKind.TRANSIENT_NETWORK,
+            ThumbnailFailureClassifier.classify(sdk(domain = ProtonSdkError.ErrorDomain.Network)),
+        )
         assertEquals(
             ThumbnailFailureKind.OTHER,
-            ThumbnailFailureClassifier.classify(SocketTimeoutException()),
+            ThumbnailFailureClassifier.classify(sdk(domain = ProtonSdkError.ErrorDomain.Network, primaryCode = 503L)),
+        )
+        assertEquals(
+            ThumbnailFailureKind.TRANSIENT_NETWORK,
+            ThumbnailFailureClassifier.classify(
+                sdk(
+                    domain = ProtonSdkError.ErrorDomain.BusinessLogic,
+                    innerError = sdk(domain = ProtonSdkError.ErrorDomain.Network).error,
+                ),
+            ),
         )
     }
 
@@ -24,13 +72,6 @@ class ThumbnailFailureClassifierTest {
         assertEquals(
             ThumbnailFailureKind.NOT_FOUND,
             ThumbnailFailureClassifier.classify(NotFoundException()),
-        )
-    }
-
-    @Test fun ioFailureIsAnOrdinaryRetryableFailure() {
-        assertEquals(
-            ThumbnailFailureKind.OTHER,
-            ThumbnailFailureClassifier.classify(IOException()),
         )
     }
 
@@ -65,10 +106,6 @@ class ThumbnailFailureClassifierTest {
         assertEquals(
             ThumbnailFailureKind.OTHER,
             ThumbnailFailureClassifier.classify(sdk(primaryCode = 401L)),
-        )
-        assertEquals(
-            ThumbnailFailureKind.OTHER,
-            ThumbnailFailureClassifier.classify(sdk(domain = ProtonSdkError.ErrorDomain.Network)),
         )
         assertEquals(
             ThumbnailFailureKind.NOT_FOUND,

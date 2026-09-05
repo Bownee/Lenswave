@@ -87,8 +87,18 @@ internal class ProtonRenditionDownloads
                 result.successfulNodeUids.forEach(failures::remove)
                 failures += result.failures
             }
-            val missing = pending.filterNot(successful::contains)
-            if (missing.isEmpty()) return ThumbnailBatchResult(successful, emptyMap())
+            // A node the connection failed under is not missing its thumbnail; a preview asked
+            // over the same dead network would only cost another deadline. It is reported as
+            // it is and retried shortly.
+            val missing =
+                pending.filterNot { nodeUid ->
+                    nodeUid in successful || failures[nodeUid] == ThumbnailFailureKind.TRANSIENT_NETWORK
+                }
+            if (missing.isEmpty()) {
+                val networkFailures = failures.filterKeys { nodeUid -> nodeUid !in successful }
+                if (networkFailures.isNotEmpty()) onProgress(ThumbnailBatchResult(emptySet(), networkFailures))
+                return ThumbnailBatchResult(successful, networkFailures)
+            }
 
             val previewsStored = mutableSetOf<String>()
             // The fallback fetches full previews, so it is admitted like the preview queue: on the

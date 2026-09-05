@@ -57,6 +57,28 @@ class ThumbnailFallbackFailurePolicyTest {
     }
 
     @Test
+    fun aConnectionLostUnderEitherPassLeavesTheNodeUncharged() {
+        assertEquals(
+            ThumbnailFailureKind.TRANSIENT_NETWORK,
+            ThumbnailFallbackFailurePolicy.settle(
+                ThumbnailFailureKind.UNANSWERED,
+                ThumbnailFailureKind.TRANSIENT_NETWORK,
+            ),
+        )
+        assertEquals(
+            ThumbnailFailureKind.TRANSIENT_NETWORK,
+            ThumbnailFallbackFailurePolicy.settle(ThumbnailFailureKind.TRANSIENT_NETWORK, ThumbnailFailureKind.OTHER),
+        )
+        assertEquals(
+            ThumbnailFailureKind.TRANSIENT_NETWORK,
+            ThumbnailFallbackFailurePolicy.settle(
+                ThumbnailFailureKind.TRANSIENT_NETWORK,
+                ThumbnailFailureKind.NOT_FOUND,
+            ),
+        )
+    }
+
+    @Test
     fun deferredNodesAreSettledNeitherAsFailuresNorAsSuccesses() {
         val failures =
             mapOf(

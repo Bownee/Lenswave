@@ -9,6 +9,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.net.UnknownHostException
 
 class ProtonRenditionSyncTest {
     private val clock = FakeClock()
@@ -217,6 +218,23 @@ class ProtonRenditionSyncTest {
             assertEquals(2, thumbnails.pendingCount(USER.id))
             assertTrue(thumbnails.claimReady(USER.id, limit = 2).isEmpty())
             clock.value += 30_000L
+            assertEquals(2, thumbnails.claimReady(USER.id, limit = 2).size)
+        }
+
+    @Test
+    fun `a connection lost under the batch costs no node a backoff step`() =
+        test { sync ->
+            thumbnails.replaceSource(USER.id, ProtonSyncKeys.QueueSource.TIMELINE, candidates("a", "b"))
+            source.thumbnailFailure = UnknownHostException("api.proton.me")
+
+            val step = sync.downloadNextBatch(USER, allowPreviews = true) {}
+            thumbnails.flush(USER.id)
+
+            assertEquals(ProtonThumbnailQueueStep.Processed, step)
+            assertEquals(2, thumbnails.pendingCount(USER.id))
+            assertTrue(store.readQueue(USER.id, ProtonQueueName.THUMBNAILS).all { entry -> entry.retryCount == 0 })
+            assertTrue(thumbnails.claimReady(USER.id, limit = 2).isEmpty())
+            clock.value += ProtonThumbnailQueue.NETWORK_RETRY_MILLIS
             assertEquals(2, thumbnails.claimReady(USER.id, limit = 2).size)
         }
 

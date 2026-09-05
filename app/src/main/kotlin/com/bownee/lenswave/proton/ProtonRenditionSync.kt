@@ -205,8 +205,9 @@ internal class ProtonRenditionSync(
             // would throw instead and leave the claims behind for the rest of the process.
             withContext(NonCancellable) { thumbnailQueue.release(userId.id, nodeUids) }
             throw error
-        } catch (_: Throwable) {
-            thumbnailQueue.settle(userId.id, emptySet(), nodeUids.toSet())
+        } catch (error: Throwable) {
+            // A connection lost under the batch is not the nodes' fault; see the classifier.
+            thumbnailQueue.settle(userId.id, emptySet(), nodeUids.associateWith { classifyBatchFailure(error) })
             onProgress(progress(userId))
         } finally {
             // Whatever was stored is shown, however the batch ended.
@@ -240,14 +241,23 @@ internal class ProtonRenditionSync(
         } catch (error: CancellationException) {
             withContext(NonCancellable) { previewQueue.release(userId.id, nodeUids) }
             throw error
-        } catch (_: Throwable) {
-            previewQueue.settle(userId.id, emptySet(), nodeUids.toSet())
+        } catch (error: Throwable) {
+            previewQueue.settle(userId.id, emptySet(), nodeUids.associateWith { classifyBatchFailure(error) })
             onProgress(progress(userId))
         } finally {
             withContext(NonCancellable) { marks.finish() }
         }
         return ProtonThumbnailQueueStep.Processed
     }
+
+    /**
+     * What a batch that threw as a whole means for each of its nodes. A missing rendition is a
+     * per-node answer and never the whole batch's, so it is not taken from here: dropping every
+     * node of a batch on one exception would be wrong however it was worded.
+     */
+    private fun classifyBatchFailure(error: Throwable): ThumbnailFailureKind =
+        ThumbnailFailureClassifier.classify(error).takeIf { kind -> kind == ThumbnailFailureKind.TRANSIENT_NETWORK }
+            ?: ThumbnailFailureKind.OTHER
 
     private suspend fun settlePreviews(
         userId: UserId,

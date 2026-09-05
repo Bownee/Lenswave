@@ -541,6 +541,52 @@ class ProtonThumbnailQueueTest {
         }
 
     @Test
+    fun aConnectionFailureCostsNoRetryStepAndPausesBriefly() =
+        runTest {
+            val store = FakeStore()
+            val clock = FakeClock()
+            val queue = queue(store, clock)
+            queue.replaceSource(USER_ID, "timeline", candidates("offline", "slow"))
+            // Two ordinary failures first, so the retry count and its backoff are visible.
+            repeat(2) {
+                queue.claimReady(USER_ID, limit = 2)
+                queue.settle(USER_ID, emptySet(), setOf("offline", "slow"))
+                clock.value += 60L * 60L * 1_000L
+            }
+            queue.claimReady(USER_ID, limit = 2)
+
+            queue.settle(
+                USER_ID,
+                emptySet(),
+                mapOf("offline" to ThumbnailFailureKind.TRANSIENT_NETWORK, "slow" to ThumbnailFailureKind.OTHER),
+            )
+            queue.flush(USER_ID)
+
+            assertEquals(2, entry(store, "offline").retryCount)
+            assertEquals(3, entry(store, "slow").retryCount)
+            assertEquals(clock.value + ProtonThumbnailQueue.NETWORK_RETRY_MILLIS, entry(store, "offline").retryAtMillis)
+            assertEquals(ProtonThumbnailQueue.NETWORK_RETRY_MILLIS, queue.retryDelayMillis(USER_ID))
+            assertTrue(queue.claimReady(USER_ID, limit = 2).isEmpty())
+            clock.value += ProtonThumbnailQueue.NETWORK_RETRY_MILLIS
+            assertEquals(listOf("offline"), queue.claimReady(USER_ID, limit = 2).map { it.nodeUid })
+        }
+
+    @Test
+    fun connectionFailuresNeverDropAnEntry() =
+        runTest {
+            val clock = FakeClock()
+            val queue = queue(FakeStore(), clock)
+            queue.replaceSource(USER_ID, "timeline", candidates("offline"))
+            repeat(ProtonThumbnailQueue.MAX_RETRY_COUNT * 2) {
+                assertEquals("offline", queue.claimReady(USER_ID, limit = 1).single().nodeUid)
+                queue.settle(USER_ID, emptySet(), mapOf("offline" to ThumbnailFailureKind.TRANSIENT_NETWORK))
+                clock.value += ProtonThumbnailQueue.NETWORK_RETRY_MILLIS
+            }
+
+            assertEquals(1, queue.pendingCount(USER_ID))
+        }
+
+    @Test
     fun anEntryIsDroppedAfterTheLastAllowedRetry() =
         runTest {
             val store = FakeStore()

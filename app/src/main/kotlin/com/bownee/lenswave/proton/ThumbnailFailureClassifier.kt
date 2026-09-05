@@ -2,10 +2,13 @@ package com.bownee.lenswave.proton
 
 import me.proton.drive.sdk.ProtonDriveSdkException
 import me.proton.drive.sdk.ProtonSdkError
+import java.io.IOException
 
 /**
- * Only three failures change what happens next: a missing rendition gets the thumbnail as its
- * preview, an unanswered node is asked again on its own, and everything else backs off.
+ * Only four failures change what happens next: a missing rendition gets the thumbnail as its
+ * preview, an unanswered node is asked again on its own, a node the network failed under is
+ * retried shortly without being charged, and everything else backs off. A node that met several
+ * failures in one batch keeps the one with the highest [priority].
  */
 internal enum class ThumbnailFailureKind(
     val priority: Int,
@@ -15,8 +18,15 @@ internal enum class ThumbnailFailureKind(
     /** The SDK gave no answer for the node before the pass ended; asked again on its own first. */
     UNANSWERED(1),
 
+    /**
+     * The connection failed under the pass (no route, a reset, a socket timeout): the node is
+     * not at fault and takes no backoff step, only a short pause. Outranks [UNANSWERED] because
+     * re-asking a node on its own over a dead network costs a whole deadline for nothing.
+     */
+    TRANSIENT_NETWORK(2),
+
     /** Proton has no such rendition for the photo; retrying cannot help. */
-    NOT_FOUND(2),
+    NOT_FOUND(3),
 }
 
 /**
@@ -54,17 +64,30 @@ internal object ThumbnailFailureClassifier {
             error.error?.let { sdkError -> return classify(sdkError) }
             // Without a structured error the message is all the SDK gives, for example
             // "File thumbnail failure: This item has no image preview".
-            return classifyDescription(error.message.orEmpty().lowercase())
+            val byDescription = classifyDescription(error.message.orEmpty().lowercase())
+            if (byDescription != ThumbnailFailureKind.OTHER) return byDescription
+            return if (isNetworkFailure(error.cause)) ThumbnailFailureKind.TRANSIENT_NETWORK else byDescription
         }
         val type = error::class.java.simpleName.lowercase()
         return if ("notfound" in type ||
             "not_found" in type
         ) {
             ThumbnailFailureKind.NOT_FOUND
+        } else if (isNetworkFailure(error)) {
+            ThumbnailFailureKind.TRANSIENT_NETWORK
         } else {
             ThumbnailFailureKind.OTHER
         }
     }
+
+    /**
+     * Every failure of the connection itself is an [IOException]: no route or host
+     * ([java.net.UnknownHostException], [java.net.ConnectException]), a reset, a socket timeout,
+     * a TLS handshake that never completed. The cause chain is walked because the SDK and the
+     * HTTP client wrap what the socket threw.
+     */
+    private fun isNetworkFailure(error: Throwable?): Boolean =
+        generateSequence(error, Throwable::cause).take(MAX_CAUSE_DEPTH).any { cause -> cause is IOException }
 
     /**
      * SDK failures all arrive as one exception class, so a missing rendition has to be recognised
@@ -86,7 +109,18 @@ internal object ThumbnailFailureClassifier {
         }
         val description = "${sdkError.type.orEmpty()} ${sdkError.message.orEmpty()}".lowercase()
         if (classifyDescription(description) == ThumbnailFailureKind.NOT_FOUND) return ThumbnailFailureKind.NOT_FOUND
-        return sdkError.innerError?.let(::classify) ?: ThumbnailFailureKind.OTHER
+        sdkError.innerError
+            ?.let(::classify)
+            ?.takeUnless { kind ->
+                kind == ThumbnailFailureKind.OTHER
+            }?.let { return it }
+        // A network-domain error without a status code never reached the server: the
+        // connection failed. One with a code is the server's answer (a 5xx, a 429) and backs off.
+        return if (sdkError.domain == ProtonSdkError.ErrorDomain.Network && sdkError.primaryCode == null) {
+            ThumbnailFailureKind.TRANSIENT_NETWORK
+        } else {
+            ThumbnailFailureKind.OTHER
+        }
     }
 
     private fun classifyDescription(description: String): ThumbnailFailureKind =
@@ -101,6 +135,9 @@ internal object ThumbnailFailureClassifier {
         listOf("no image preview", "no preview", "no thumbnail", "not found", "notfound", "does not exist")
 
     private const val HTTP_NOT_FOUND = 404L
+
+    /** Cause chains are short; the bound only guards against a cycle. */
+    private const val MAX_CAUSE_DEPTH = 8
 
     /** Proton API response code for "the requested resource does not exist". */
     private const val API_CODE_NOT_EXIST = 2501L
