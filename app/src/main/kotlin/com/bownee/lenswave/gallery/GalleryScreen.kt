@@ -201,21 +201,37 @@ internal class GalleryScreen(
         stickyDateController.dispose()
     }
 
+    /** The position on screen, with the span and first visible photo a restore into another span maps through. */
     fun captureScrollPosition(): GalleryScrollPosition? {
         val firstVisibleChild = list.getChildAt(0) ?: return null
-        return GalleryScrollPosition(list.firstVisiblePosition, firstVisibleChild.top)
+        val firstVisiblePosition = list.firstVisiblePosition
+        return GalleryScrollPosition(
+            firstVisiblePosition = firstVisiblePosition,
+            topOffset = firstVisibleChild.top,
+            photoColumns = adapter.photoColumns,
+            firstVisibleAssetIndex =
+                GallerySpanPolicy.firstAssetIndexAt(adapter.currentRows, firstVisiblePosition - list.headerViewsCount),
+        )
     }
 
+    /** Scrolls to [position], remapped when the rows are now grouped with another span (see [GallerySpanPolicy]). */
     fun restoreScrollPosition(
         position: GalleryScrollPosition,
         isCurrentDestination: () -> Boolean,
     ) {
         list.post {
             if (!isCurrentDestination()) return@post
+            val target =
+                GallerySpanPolicy.restoredPosition(
+                    position,
+                    adapter.currentRows,
+                    adapter.photoColumns,
+                    list.headerViewsCount,
+                )
             val maximumPosition = (list.count - 1).coerceAtLeast(0)
             list.setSelectionFromTop(
-                position.firstVisiblePosition.coerceIn(0, maximumPosition),
-                position.topOffset,
+                target.firstVisiblePosition.coerceIn(0, maximumPosition),
+                target.topOffset,
             )
             list.post {
                 if (!isCurrentDestination()) return@post

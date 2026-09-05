@@ -50,11 +50,16 @@ data class GalleryAlbumTile(
 class GalleryRowSet(
     val rows: List<GalleryRow>,
     val dateLabels: List<String?>,
+    /** The span the photo rows were chunked with (see [GallerySpanPolicy]); the adapter builds its cells to it. */
+    val photoColumns: Int = GallerySpanPolicy.MIN_COLUMNS,
 ) {
     companion object {
         val EMPTY = GalleryRowSet(emptyList(), emptyList())
 
-        fun of(rows: List<GalleryRow>) = GalleryRowSet(rows, GalleryGrouping.dateLabels(rows))
+        fun of(
+            rows: List<GalleryRow>,
+            photoColumns: Int = GallerySpanPolicy.MIN_COLUMNS,
+        ) = GalleryRowSet(rows, GalleryGrouping.dateLabels(rows), photoColumns)
     }
 }
 
@@ -90,7 +95,7 @@ object GalleryGrouping {
         photos: List<GalleryAsset>,
         zoneId: ZoneId = ZoneId.systemDefault(),
         locale: Locale = Locale.getDefault(),
-        columns: Int = 3,
+        columns: Int = GallerySpanPolicy.MIN_COLUMNS,
         unknownDateLabel: String,
         dayLabels: DayLabels = DayLabels(locale),
     ): List<GalleryRow> {
