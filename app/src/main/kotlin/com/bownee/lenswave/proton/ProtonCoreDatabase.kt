@@ -3,6 +3,7 @@ package com.bownee.lenswave.proton
 import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
+import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
 import com.bownee.lenswave.storage.DatabasePassphraseStore
 import me.proton.core.account.data.db.AccountConverters
@@ -159,14 +160,25 @@ abstract class ProtonCoreDatabase :
             // A passphrase that replaced an unreadable one cannot open the existing database;
             // the migration is told so it probes again and discards that database.
             val passphrase = passphraseStore.getOrCreate()
-            ProtonDatabaseKeyMigration.rekeyLegacyDatabase(
-                context.getDatabasePath(name),
-                passphrase.bytes.copyOf(),
-                passphraseReplaced = passphrase.replacedUnreadable,
-            )
+            val kdfIterations =
+                ProtonDatabaseKeyMigration.prepare(
+                    context.getDatabasePath(name),
+                    passphrase.bytes.copyOf(),
+                    passphraseReplaced = passphrase.replacedUnreadable,
+                )
             return Room
                 .databaseBuilder(context, ProtonCoreDatabase::class.java, name)
-                .openHelperFactory(SupportOpenHelperFactory(passphrase.bytes))
+                .openHelperFactory(
+                    SupportOpenHelperFactory(
+                        passphrase.bytes,
+                        ProtonDatabaseKeyMigration.kdfHook(kdfIterations),
+                        false,
+                    ),
+                )
+                // One connection: SQLCipher derives the key again for every connection the pool
+                // opens, and with write-ahead logging the account flows contending at launch made
+                // it open three, each a full derivation in series before the account was known.
+                .setJournalMode(RoomDatabase.JournalMode.TRUNCATE)
                 .build()
         }
 

@@ -19,6 +19,11 @@ All notable changes to Lenswave. The format follows [Keep a Changelog](https://k
   you are swiping.
 
 ### Fixed
+- Opening the app no longer shows "Loading metadata" for over a second before the cached
+  photos appear. The session database was deriving its key three times at launch, once per
+  connection SQLCipher opened, at 256,000 PBKDF2 rounds each; it now uses one connection and
+  1,000 rounds (the passphrase is already 32 random bytes). Existing databases are re-encrypted
+  once on first launch.
 - The first playback of a video that was not cached yet failed with "Could not play this video";
   only the retry, served from the cache, worked. A length check mistook "length not known yet"
   for a negative length.
