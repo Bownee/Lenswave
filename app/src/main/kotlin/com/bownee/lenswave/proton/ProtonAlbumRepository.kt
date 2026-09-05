@@ -53,7 +53,6 @@ internal class ProtonAlbumRepository
         private val albumPhotoIndex = ProtonNodeUidIndex(ProtonGalleryPhoto::nodeUid)
         private val mutableAlbumsState = MutableStateFlow(ProtonAlbumsState())
         private val mutableAlbumPhotosState = MutableStateFlow(ProtonAlbumPhotosState())
-
         val albumsState: StateFlow<ProtonAlbumsState> = mutableAlbumsState.asStateFlow()
         val albumPhotosState: StateFlow<ProtonAlbumPhotosState> = mutableAlbumPhotosState.asStateFlow()
 
@@ -261,6 +260,15 @@ internal class ProtonAlbumRepository
             nodeUids: Set<String>,
         ) {
             markCoverThumbnails(userId, nodeUids, available = true)
+        }
+
+        /** The capture time of [nodeUid] in the album on screen, or null when that album does not show it. */
+        internal fun publishedCaptureTime(
+            userId: UserId,
+            nodeUid: String,
+        ): Long? {
+            val state = mutableAlbumPhotosState.value.takeIf { it.userId == userId.id } ?: return null
+            return albumPhotoIndex.find(state.photos, nodeUid)?.captureTimeEpochSeconds
         }
 
         internal fun markCoverThumbnailsUnavailable(

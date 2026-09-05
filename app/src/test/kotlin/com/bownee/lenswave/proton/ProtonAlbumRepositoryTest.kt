@@ -229,6 +229,17 @@ class ProtonAlbumRepositoryTest {
         }
 
     @Test
+    fun `the capture time of a photo in the open album is known, one in a closed album is not`() =
+        runTest {
+            cache.albumPhotos[USER.id to "al1"] = listOf(photo("x", 2L))
+            repository.loadCachedAlbum(USER, ProtonAlbumReference("al1", "Album"))
+
+            assertEquals(2L, repository.publishedCaptureTime(USER, "x"))
+            assertEquals(null, repository.publishedCaptureTime(USER, "y"))
+            assertEquals(null, repository.publishedCaptureTime(UserId("other"), "x"))
+        }
+
+    @Test
     fun `a sync writes the album listing before it deletes the indexes of vanished albums`() =
         runTest {
             cache.albums[USER.id] = listOf(album("al1", photoCount = 2L))

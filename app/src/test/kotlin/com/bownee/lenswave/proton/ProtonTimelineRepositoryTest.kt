@@ -177,22 +177,28 @@ class ProtonTimelineRepositoryTest {
             cache.thumbnails += listOf("v~c", "v~album")
             repository.loadCached(USER)
 
-            repository.setFavorite(USER, setOf("v~a", "v~c", "v~album"), favorite = true)
+            repository.setFavorite(USER, setOf("v~a", "v~c", "v~album", "v~unknown"), favorite = true) { nodeUid ->
+                if (nodeUid == "v~album") 250L else null
+            }
 
             val favorites =
                 repository.state.value.tags
                     .getValue(ProtonMediaTag.FAVORITES)
                     .photos
-            // The album-only photo has no capture time here and sorts last; c keeps its stored thumbnail.
-            assertEquals(listOf("v~c", "v~b", "v~a", "v~album"), favorites.map(ProtonGalleryPhoto::nodeUid))
-            assertEquals(listOf(true, false, false, true), favorites.map(ProtonGalleryPhoto::hasThumbnail))
-            assertEquals(listOf("v~album"), cache.stats)
+            // The album-only photo takes the album's capture time and lands between c and b; the
+            // photo nobody knows has none and sorts last; c keeps its stored thumbnail.
             assertEquals(
-                listOf("v~c", "v~b", "v~a", "v~album"),
+                listOf("v~c", "v~album", "v~b", "v~a", "v~unknown"),
+                favorites.map(ProtonGalleryPhoto::nodeUid),
+            )
+            assertEquals(listOf(true, true, false, false, false), favorites.map(ProtonGalleryPhoto::hasThumbnail))
+            assertEquals(listOf("v~album", "v~unknown"), cache.stats)
+            assertEquals(
+                listOf("v~c", "v~album", "v~b", "v~a", "v~unknown"),
                 cache.tags.getValue(USER.id to ProtonMediaTag.FAVORITES).map(ProtonGalleryPhoto::nodeUid),
             )
 
-            repository.setFavorite(USER, setOf("v~b", "v~album"), favorite = false)
+            repository.setFavorite(USER, setOf("v~b", "v~album", "v~unknown"), favorite = false)
 
             assertEquals(
                 listOf("v~c", "v~a"),

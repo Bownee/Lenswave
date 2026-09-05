@@ -422,6 +422,7 @@ internal class ProtonTimelineRepository
             userId: UserId,
             nodeUids: Set<String>,
             favorite: Boolean,
+            captureTimeOf: (nodeUid: String) -> Long? = { null },
         ) {
             if (nodeUids.isEmpty()) return
             tagMutexes.getValue(ProtonMediaTag.FAVORITES).withLock {
@@ -430,7 +431,8 @@ internal class ProtonTimelineRepository
                     // answers from its uid index, and only a photo it does not know (favourited
                     // from an album, say) costs a file stat, so a retried update never touches
                     // the disk twice.
-                    val additions = if (favorite) favoriteEntries(userId, nodeUids) ?: return else emptyList()
+                    val additions =
+                        if (favorite) favoriteEntries(userId, nodeUids, captureTimeOf) ?: return else emptyList()
                     val next =
                         mutableState.updateAndGet { state ->
                             if (state.userId != userId.id) return@updateAndGet state
@@ -459,16 +461,23 @@ internal class ProtonTimelineRepository
             }
         }
 
-        /** The favourites entries for [nodeUids], or null when the published state is not [userId]'s. */
+        /**
+         * The favourites entries for [nodeUids], or null when the published state is not
+         * [userId]'s. A photo the timeline does not list takes its capture time from
+         * [captureTimeOf] (the album on screen, typically); one nobody knows keeps capture time
+         * zero, which sorts it last, and it leaves the tab again when the tag next syncs against
+         * the timeline.
+         */
         private fun favoriteEntries(
             userId: UserId,
             nodeUids: Set<String>,
+            captureTimeOf: (nodeUid: String) -> Long?,
         ): List<ProtonGalleryPhoto>? {
             val state = mutableState.value.takeIf { it.userId == userId.id } ?: return null
             return nodeUids.map { nodeUid ->
                 timelineIndex.find(state.photos, nodeUid) ?: ProtonGalleryPhoto(
                     nodeUid = nodeUid,
-                    captureTimeEpochSeconds = 0L,
+                    captureTimeEpochSeconds = captureTimeOf(nodeUid) ?: 0L,
                     hasThumbnail = cache.thumbnailExists(userId.id, nodeUid),
                 )
             }

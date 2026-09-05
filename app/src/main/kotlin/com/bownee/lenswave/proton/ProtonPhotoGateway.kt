@@ -349,7 +349,11 @@ class ProtonPhotoGateway internal constructor(
                     results
                         .filterIsInstance<NodeResultPair.Success>()
                         .mapTo(mutableSetOf()) { result -> result.nodeUid.value }
-                timeline.setFavorite(userId, successful, favorite)
+                // A photo favourited from an album is not in the timeline; the album on screen
+                // knows when it was taken, so it lands where it belongs in the Favorites tab.
+                timeline.setFavorite(userId, successful, favorite) { nodeUid ->
+                    albums.publishedCaptureTime(userId, nodeUid)
+                }
                 ProtonFavoriteResult(
                     updatedCount = successful.size,
                     failedCount = results.count { it is NodeResultPair.Failure },
