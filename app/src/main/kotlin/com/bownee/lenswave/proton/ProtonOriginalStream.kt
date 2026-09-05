@@ -5,6 +5,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
 import java.io.IOException
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
@@ -38,11 +39,21 @@ class ProtonOriginalStream(
     private var failure: Throwable? = null
     private var downloadComplete = false
 
+    private var blockedReaders = 0
+    private val mutableWaitingForBytes = MutableStateFlow(false)
+
     @Volatile
     var file: File = file
         private set
 
     val progress: StateFlow<ProtonOriginalDownloadProgress> = mutableProgress.asStateFlow()
+
+    /**
+     * True while a reader is blocked at a position the file has not reached yet: the player
+     * seeked past the downloaded prefix, or ran out of bytes mid-playback. The viewer shows the
+     * download progress again while this is set and hides it once the reader is served.
+     */
+    val waitingForBytes: StateFlow<Boolean> = mutableWaitingForBytes.asStateFlow()
 
     fun bytesWritten(byteCount: Int) =
         lock.withLock {
@@ -97,16 +108,38 @@ class ProtonOriginalStream(
     @Throws(IOException::class)
     fun awaitReadable(position: Long): ProtonOriginalReadState =
         lock.withLock {
-            try {
-                while (availableBytes <= position && !downloadComplete && failure == null) {
-                    changed.await()
+            if (availableBytes <= position && !downloadComplete && failure == null) {
+                blockedReaders++
+                mutableWaitingForBytes.value = true
+                try {
+                    while (availableBytes <= position && !downloadComplete && failure == null) {
+                        changed.await()
+                    }
+                } catch (error: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    throw IOException("Interrupted while waiting for Proton media", error)
+                } finally {
+                    if (--blockedReaders == 0) mutableWaitingForBytes.value = false
                 }
+            }
+            failure?.let { error -> throw IOException("Proton media download failed", error) }
+            ProtonOriginalReadState(availableBytes, downloadComplete)
+        }
+
+    /**
+     * Waits until the stream changes or [timeoutMillis] pass, for a reader whose file lags what
+     * the stream reports: a bounded pause instead of a spin.
+     */
+    @Throws(IOException::class)
+    fun awaitChange(timeoutMillis: Long) =
+        lock.withLock {
+            if (downloadComplete || failure != null) return@withLock
+            try {
+                changed.await(timeoutMillis, TimeUnit.MILLISECONDS)
             } catch (error: InterruptedException) {
                 Thread.currentThread().interrupt()
                 throw IOException("Interrupted while waiting for Proton media", error)
             }
-            failure?.let { error -> throw IOException("Proton media download failed", error) }
-            ProtonOriginalReadState(availableBytes, downloadComplete)
         }
 
     /** Waits until every byte is on disk, then returns the final [file]. */

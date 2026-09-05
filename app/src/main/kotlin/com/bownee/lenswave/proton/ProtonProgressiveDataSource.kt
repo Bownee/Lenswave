@@ -61,7 +61,10 @@ internal class ProtonProgressiveDataSource(
             val state = stream.awaitReadable(readPosition)
             val available = state.availableBytes - readPosition
             if (available <= 0L && state.complete) return C.RESULT_END_OF_INPUT
-            if (available <= 0L) continue
+            if (available <= 0L) {
+                stream.awaitChange(READ_RETRY_WAIT_MILLIS)
+                continue
+            }
             val requested =
                 min(length.toLong(), available)
                     .let { availableLength ->
@@ -75,6 +78,9 @@ internal class ProtonProgressiveDataSource(
             val read = source.read(buffer, offset, requested)
             if (read < 0) {
                 if (state.complete) return C.RESULT_END_OF_INPUT
+                // The stream reported bytes the file does not show yet; a bounded wait on the
+                // stream's condition instead of a spin until the writer catches up.
+                stream.awaitChange(READ_RETRY_WAIT_MILLIS)
                 continue
             }
             readPosition += read
@@ -123,5 +129,6 @@ internal class ProtonProgressiveDataSource(
 
     private companion object {
         const val STATE_OPEN_BEYOND_END = "open-beyond-end"
+        const val READ_RETRY_WAIT_MILLIS = 20L
     }
 }
