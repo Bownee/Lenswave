@@ -300,6 +300,72 @@ class GalleryViewModelTest {
         }
 
     @Test
+    fun `a trash confirmed before the restored session has settled runs once the account arrives`() =
+        runTest(dispatcher) {
+            reader.state.value = loadedTimeline("p1")
+            reader.albumsState.value = ProtonAlbumsState(userId = USER.id, hasLoaded = true)
+            val viewModel = viewModel()
+            backgroundScope.launch { viewModel.uiState.collect {} }
+            val received = mutableListOf<GalleryMutationEvent>()
+            backgroundScope.launch { viewModel.mutationEvents.collect { received += it } }
+            runCurrent()
+
+            // The confirmation dialog restored by the fragment manager answers before the session flow does.
+            viewModel.trashPhotos(listOf("p1"))
+            runCurrent()
+            assertTrue("nothing is trashed without an account", events.none { it.startsWith("trash:") })
+            assertTrue(received.isEmpty())
+
+            session.value =
+                ProtonAccountSessionState(readyAccount(USER), USER, initialized = true, transitioning = true)
+            runCurrent()
+            assertTrue("a transitioning session is not an account yet", events.none { it.startsWith("trash:") })
+
+            session.value = ProtonAccountSessionState(readyAccount(USER), USER, initialized = true)
+            runCurrent()
+            assertEquals(listOf("trash:u:p1"), events.filter { it.startsWith("trash:") })
+            deletionExecutor.held.single().complete(Unit)
+            runCurrent()
+
+            assertEquals(
+                listOf<GalleryMutationEvent>(GalleryMutationEvent.Trashed(successfulCount = 1, failedCount = 0)),
+                received,
+            )
+        }
+
+    @Test
+    fun `a trash confirmed while no session ever arrives is reported as failed`() =
+        runTest(dispatcher) {
+            val viewModel = viewModel()
+            val received = mutableListOf<GalleryMutationEvent>()
+            backgroundScope.launch { viewModel.mutationEvents.collect { received += it } }
+            viewModel.setSelection(setOf("p1"))
+
+            viewModel.trashPhotos(listOf("p1"))
+            advanceTimeBy(9_999L)
+            runCurrent()
+            assertTrue(received.isEmpty())
+
+            advanceTimeBy(2L)
+            runCurrent()
+
+            assertEquals(listOf<GalleryMutationEvent>(GalleryMutationEvent.TrashFailed), received)
+            assertTrue(events.none { it.startsWith("trash:") })
+            assertEquals(
+                "the photos were not trashed, so the selection stands",
+                setOf("p1"),
+                viewModel.selectedStableIds,
+            )
+
+            // A session that settles without an account fails the same way, and the guard is free again.
+            session.value = ProtonAccountSessionState(initialized = true)
+            viewModel.trashPhotos(listOf("p1"))
+            runCurrent()
+            assertEquals(2, received.size)
+            assertEquals(GalleryMutationEvent.TrashFailed, received.last())
+        }
+
+    @Test
     fun `a manual refresh stays refreshing until the latest manual refresh has finished`() =
         runTest(dispatcher) {
             val viewModel = connectedViewModel()

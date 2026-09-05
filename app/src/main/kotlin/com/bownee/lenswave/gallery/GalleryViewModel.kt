@@ -29,6 +29,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
@@ -36,6 +37,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import me.proton.core.account.domain.entity.Account
 import me.proton.core.account.domain.entity.isReady
 import me.proton.core.accountmanager.domain.AccountManager
@@ -245,16 +247,26 @@ class GalleryViewModel internal constructor(
      * Moves the photos to Proton Trash. Runs in this scope, so the call is neither cancelled nor
      * left unreported when the activity is recreated while it is in flight; the outcome reaches
      * whichever activity collects [mutationEvents] next.
+     *
+     * The confirmation dialog survives a process death and may answer before the restored
+     * session has settled; the call then waits for the account (bounded, see
+     * [awaitSessionUserId]) rather than dropping a confirmed destructive action without a word.
      */
     fun trashPhotos(nodeUids: List<String>) {
         if (mutationInFlight || nodeUids.isEmpty()) return
-        val userId = currentUserId ?: return
         mutationInFlight = true
         viewModelScope.launch {
             try {
-                val result = deletionExecutor.trashProton(userId, nodeUids)
-                setSelection(emptySet())
-                mutableMutationEvents.trySend(GalleryMutationEvent.Trashed(result.successfulCount, result.failedCount))
+                val userId = currentUserId ?: awaitSessionUserId()
+                if (userId == null) {
+                    mutableMutationEvents.trySend(GalleryMutationEvent.TrashFailed)
+                } else {
+                    val result = deletionExecutor.trashProton(userId, nodeUids)
+                    setSelection(emptySet())
+                    mutableMutationEvents.trySend(
+                        GalleryMutationEvent.Trashed(result.successfulCount, result.failedCount),
+                    )
+                }
             } catch (_: ProtonSessionChangedException) {
                 // A CancellationException subtype the session guard throws when the account changes
                 // mid-call: the photos were not trashed, and the selection bar must hear that.
@@ -268,6 +280,15 @@ class GalleryViewModel internal constructor(
             }
         }
     }
+
+    /**
+     * The user of the first initialised, settled account session, or null when none arrives
+     * within [SESSION_WAIT_MILLIS] or the session settles without an account.
+     */
+    private suspend fun awaitSessionUserId(): UserId? =
+        withTimeoutOrNull(SESSION_WAIT_MILLIS) {
+            accountSession.first { state -> state.initialized && !state.transitioning }
+        }?.activeUserId
 
     fun requestRefresh(manual: Boolean = true) {
         val selectedDestination = destination
@@ -590,6 +611,7 @@ class GalleryViewModel internal constructor(
         const val STATE_SELECTION = "gallery.selection"
         const val MUTATION_EVENT_BUFFER = 16
         const val UI_STATE_STOP_TIMEOUT_MILLIS = 5_000L
+        const val SESSION_WAIT_MILLIS = 10_000L
 
         private fun accountStatus(state: ProtonAccountSessionState): ProtonAccountStatus =
             ProtonAccountStatus.resolve(
