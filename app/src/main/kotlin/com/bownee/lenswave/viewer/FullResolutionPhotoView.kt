@@ -181,12 +181,19 @@ class FullResolutionPhotoView
             val baseBudget = PhotoBaseDecodePolicy.budget(width, height, metrics.widthPixels, metrics.heightPixels)
             loadFuture =
                 decoderExecutor.submit {
+                    // A load or clear that came in while this task queued has already retired
+                    // it; opening the file for a picture nobody will see is not worth the read.
+                    if (loadGeneration != generation.get()) return@submit
                     runCatching {
                         var openedDescriptor: ParcelFileDescriptor? = null
                         var openedDecoder: BitmapRegionDecoder? = null
                         var openedBitmap: Bitmap? = null
                         try {
                             openedDescriptor = requireNotNull(context.contentResolver.openFileDescriptor(uri, "r"))
+                            // Re-checked after each slow step: a stale load stops before the
+                            // decoder is built and again before the full-frame decode, the two
+                            // costs that dwarf the open. The finally below releases what was opened.
+                            if (loadGeneration != generation.get()) return@runCatching null
                             val mime = sniffMimeType(openedDescriptor)
                             // HEIF decoders rotate from the container themselves; only formats
                             // returned as stored need the EXIF tag applied on top.
@@ -200,6 +207,7 @@ class FullResolutionPhotoView
                             // sheet to read the file itself.
                             val exifSnapshot = runCatching { ExifSnapshot.from(exif, exifOrientationValue) }.getOrNull()
                             openedDecoder = requireNotNull(createRegionDecoder(openedDescriptor))
+                            if (loadGeneration != generation.get()) return@runCatching null
                             val sample =
                                 PhotoBaseDecodePolicy.sampleSize(
                                     openedDecoder.width,
@@ -242,6 +250,8 @@ class FullResolutionPhotoView
                             openedDescriptor?.close()
                         }
                     }.onSuccess { loaded ->
+                        // Null is a stale load that stopped early; there is nothing to post.
+                        if (loaded == null) return@onSuccess
                         mainHandler.post {
                             if (loadGeneration != generation.get()) {
                                 loaded.close()
@@ -323,6 +333,9 @@ class FullResolutionPhotoView
             generation.incrementAndGet()
             zoomAnimator?.cancel()
             zoomAnimator = null
+            // Not interrupted (see load); a queued base decode is dropped, a running one is
+            // discarded by its generation checks.
+            loadFuture?.cancel(false)
             detailFuture?.cancel(false)
             recycleDetail()
             if (!basePlaceholder) baseBitmap?.recycle()
