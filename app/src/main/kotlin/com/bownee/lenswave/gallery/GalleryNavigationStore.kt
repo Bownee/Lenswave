@@ -91,7 +91,11 @@ internal object GalleryPreferenceWarmUp {
         context.getSharedPreferences(GalleryNotificationPermissionPrompter.PREFERENCES_NAME, Context.MODE_PRIVATE).all
         context.getSharedPreferences(ViewerPrivacySettings.PREFERENCES_NAME, Context.MODE_PRIVATE).all
         // The pause flag is read by every thumbnail run request, the first of them from the gallery's resume.
-        context.getSharedPreferences(SharedPreferencesProtonThumbnailPauseStore.PREFERENCES_NAME, Context.MODE_PRIVATE).all
+        context
+            .getSharedPreferences(
+                SharedPreferencesProtonThumbnailPauseStore.PREFERENCES_NAME,
+                Context.MODE_PRIVATE,
+            ).all
     }
 }
 
