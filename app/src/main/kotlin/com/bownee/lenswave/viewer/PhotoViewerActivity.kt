@@ -560,6 +560,8 @@ class PhotoViewerActivity :
 
                         override fun clearThumbnailPreview() = this@PhotoViewerActivity.clearThumbnailPreview()
 
+                        override fun reloadMedia() = loadPhoto()
+
                         override fun handleLoadFailure(
                             error: Throwable,
                             fallbackMessage: String,

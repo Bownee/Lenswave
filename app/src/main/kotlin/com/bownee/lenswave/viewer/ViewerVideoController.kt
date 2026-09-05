@@ -59,6 +59,9 @@ internal class ViewerVideoController(
 
         fun clearThumbnailPreview()
 
+        /** Loads the current media from scratch; for a complete original whose plaintext copy is gone. */
+        fun reloadMedia()
+
         fun handleLoadFailure(
             error: Throwable,
             fallbackMessage: String,
@@ -98,6 +101,15 @@ internal class ViewerVideoController(
 
     /** The media the player was last asked to show; null once [stop] has cleared it. */
     private var activeStableId: String? = null
+
+    /** True while every byte of the current media is on disk: a cached original, or a download that completed. */
+    private var streamComplete = false
+
+    /**
+     * The media a vanished copy was reloaded for, so it is reloaded once; cleared when a
+     * different media is shown (see [ViewerVideoReloadPolicy]).
+     */
+    private var reloadedStableId: String? = null
 
     /**
      * Counts every [show]; the current value tags the media item so an event the player queued for
@@ -153,6 +165,13 @@ internal class ViewerVideoController(
                 // A stale error: prepare() for a newer item has already cleared it from the player.
                 val activePlayer = player ?: return
                 if (!isCurrentShow(activePlayer) || activePlayer.playerError !== error) return
+                // A complete original whose plaintext copy the TTL sweep took during a long
+                // pause: loading again decrypts a fresh copy, once.
+                if (ViewerVideoReloadPolicy.reloads(error, streamComplete, reloadedStableId == requestedStableId)) {
+                    reloadedStableId = requestedStableId
+                    host.reloadMedia()
+                    return
+                }
                 host.handleLoadFailure(error, context.getString(R.string.could_not_play_video))
             }
         }
@@ -185,6 +204,7 @@ internal class ViewerVideoController(
                 stream.progress.collect { downloadProgress ->
                     if (host.currentStableId != requestedStableId) return@collect
                     latestProgress = downloadProgress
+                    streamComplete = downloadProgress.complete
                     refreshProgressPanel(requestedStableId)
                     if (!ViewerVideoProgressPolicy.keepObserving(downloadProgress.complete)) {
                         progressJob = null
@@ -270,6 +290,7 @@ internal class ViewerVideoController(
         latestProgress = null
         buffering = false
         waitingForBytes = false
+        streamComplete = false
         activeStableId = null
         pausedWhilePlaying = false
         player?.let { active ->
@@ -307,6 +328,9 @@ internal class ViewerVideoController(
         playerView.alpha = 0f
         val activePlayer = ensurePlayer()
         activeStableId = requestedStableId
+        // A file on disk is complete from the start; a progressive stream reports it later.
+        streamComplete = dataSourceFactory == null
+        if (reloadedStableId != requestedStableId) reloadedStableId = null
         showGeneration++
         val mediaItem =
             MediaItem
