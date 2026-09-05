@@ -290,6 +290,38 @@ class ProtonPhotoGatewayTest {
         }
 
     @Test
+    fun `a preview that never decodes is queued again a bounded number of times and then left alone`() =
+        testScope.runTest {
+            val gateway = gateway()
+            gateway.activate(USER_A)
+            runCurrent()
+
+            repeat(ProtonRenditionInvalidationLimiter.MAX_REQUEUES) {
+                events.clear()
+                assertNull(gateway.loadPreview(USER_A, "a1", targetLongEdge = 1_000))
+                assertEquals(listOf("removePreview:a1"), events.toList())
+                assertEquals(setOf(TIMELINE_PREVIEWS), previewQueue.pendingByNode()["a1"])
+                // The worker downloads the same bytes again and stores them.
+                previewQueue.settle(USER_A.id, setOf("a1"), emptyMap())
+                cache.previews += "a1"
+                timeline.markPreviewsAvailable(USER_A, setOf("a1"))
+            }
+            events.clear()
+
+            assertNull(gateway.loadPreview(USER_A, "a1", targetLongEdge = 1_000))
+
+            // The stored preview stays, so no listing shows it as missing and nothing queues it.
+            assertTrue("past the bound nothing is invalidated: $events", events.isEmpty())
+            assertTrue(cache.previews.contains("a1"))
+            assertTrue(
+                timeline.state.value.photos
+                    .single { it.nodeUid == "a1" }
+                    .hasPreview,
+            )
+            assertNull(previewQueue.pendingByNode()["a1"])
+        }
+
+    @Test
     fun `a photo without a stored preview is not invalidated when its preview load misses`() =
         testScope.runTest {
             val gateway = gateway()
