@@ -116,6 +116,9 @@ internal class ProtonOriginalStore
                 file.setLastModified(clock.nowMillis())
                 return materialized
             }
+            // Read before the decrypt: an oversized legacy original is deleted by the decrypt
+            // itself, and its length is gone by the time the tracked total is adjusted below.
+            val encryptedBytes = file.length()
             return try {
                 materialized.delete()
                 secureFiles.decryptFile(scope(userId), file, materialized, onStarted, onBytesWritten, shouldContinue)
@@ -131,7 +134,7 @@ internal class ProtonOriginalStore
                 // Only a provably bad original is dropped; a Keystore or I/O hiccup keeps the
                 // encrypted file, and the next open decrypts it again.
                 if (ProtonSnapshotCorruptionPolicy.isCorrupt(error)) {
-                    deleteTracked(userId, file)
+                    deleteTracked(userId, file, encryptedBytes)
                 } else {
                     transientReadFailures.report(error)
                 }
@@ -311,13 +314,17 @@ internal class ProtonOriginalStore
                 ?.sumOf { file -> if (file.isFile) file.length() else 0L }
                 ?: 0L
 
-        /** Deletes one original and keeps the tracked total in step; a miss costs nothing. */
+        /**
+         * Deletes one original and keeps the tracked total in step; a miss costs nothing. [size]
+         * is the length the file had when it was counted, for a caller whose file may already be
+         * gone: the total comes down by it whether this call or an earlier one removed the file.
+         */
         private fun deleteTracked(
             userId: String,
             file: File,
+            size: Long = file.length(),
         ) {
-            val size = file.length()
-            if (file.delete() && size > 0L) {
+            if ((file.delete() || !file.exists()) && size > 0L) {
                 trackedBytes.computeIfPresent(userId) { _, total -> (total - size).coerceAtLeast(0L) }
             }
         }
