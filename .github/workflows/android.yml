@@ -84,13 +84,16 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
+            ${{ steps.sdk.outputs.root }}/emulator
             ${{ steps.sdk.outputs.root }}/platforms/android-29
             ${{ steps.sdk.outputs.root }}/system-images/android-29/default/x86_64
-          key: emulator-packages-api29-default-x86_64-v1
+          # The runner image ships no emulator package; caching it pins the version between runs.
+          # Bump the suffix to pick up a newer emulator.
+          key: emulator-packages-api29-default-x86_64-v2
 
       # The emulator is started here, before the APK build, so its boot overlaps the Gradle work
-      # instead of following it. The AVD is created fresh each run: the runner image ships a
-      # current emulator, and a cached snapshot from an older one never loaded anyway.
+      # instead of following it. The AVD is created fresh each run: a cached snapshot never
+      # survived the emulator updates the previous runner action performed, and boot is ~25 s.
       - name: Start the API 29 emulator
         shell: bash
         run: |
@@ -99,7 +102,7 @@ jobs:
           set +o pipefail
           yes | "$tools/sdkmanager" --licenses >/dev/null 2>&1 || true
           # A no-op when the cache restored the packages above.
-          yes | "$tools/sdkmanager" "platforms;android-29" "system-images;android-29;default;x86_64" >/dev/null
+          yes | "$tools/sdkmanager" emulator "platforms;android-29" "system-images;android-29;default;x86_64" >/dev/null
           set -o pipefail
           echo no | "$tools/avdmanager" create avd --force --name test \
             --package "system-images;android-29;default;x86_64" --device pixel_2 >/dev/null
