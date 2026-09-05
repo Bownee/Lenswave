@@ -20,6 +20,13 @@ class ProtonThumbnailWorkerInstrumentedTest {
         assertFalse(request.workSpec.constraints.requiresCharging())
         assertEquals(0L, request.workSpec.initialDelay)
         assertTrue(request.workSpec.backoffDelayDuration >= 10_000L)
+        assertFalse(request.workSpec.input.getBoolean(ProtonThumbnailWorker.KEY_REPLACES_CHARGING_RUN, true))
+    }
+
+    @Test fun theReplacementOfAChargingRunSaysSo() {
+        val request = ProtonThumbnailWorker.request(UserId("user"), replacesChargingRun = true)
+        assertTrue(request.workSpec.input.getBoolean(ProtonThumbnailWorker.KEY_REPLACES_CHARGING_RUN, false))
+        assertFalse(request.workSpec.constraints.requiresCharging())
     }
 
     @Test fun followUpRequestCarriesTheChargerAndTheBackoff() {

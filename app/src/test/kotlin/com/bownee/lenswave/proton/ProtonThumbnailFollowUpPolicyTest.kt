@@ -1,6 +1,7 @@
 package com.bownee.lenswave.proton
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -113,6 +114,38 @@ class ProtonThumbnailFollowUpPolicyTest {
     }
 
     @Test
+    fun `a run that replaced the charging follow-up and never reached the queues gives it back`() {
+        val restored =
+            ProtonThumbnailFollowUp(
+                requiresCharging = true,
+                initialDelayMillis = ProtonThumbnailFollowUpPolicy.RESTORED_CHARGING_RUN_DELAY_MILLIS,
+            )
+
+        assertEquals(restored, followUp(ProtonThumbnailWorkOutcome.SESSION_UNAVAILABLE, replacedChargingRun = true))
+        assertEquals(restored, followUp(ProtonThumbnailWorkOutcome.ALREADY_RUNNING, replacedChargingRun = true))
+        // The restored request is not itself a replacement, so a second such end restores nothing.
+        assertFalse(restored.replacesChargingRun)
+        // The user said stop: nothing is queued, whatever the run replaced.
+        assertNull(followUp(ProtonThumbnailWorkOutcome.PAUSED, replacedChargingRun = true))
+        // The foreground budget holds the restored request back like any other.
+        val budget = 60L * 60L * 1_000L
+        assertEquals(
+            restored.copy(initialDelayMillis = budget),
+            followUp(
+                ProtonThumbnailWorkOutcome.SESSION_UNAVAILABLE,
+                replacedChargingRun = true,
+                foregroundBudgetDelayMillis = budget,
+            ),
+        )
+        // A run that reached the queues decides on what it found there, not on what it replaced.
+        assertEquals(
+            ProtonThumbnailFollowUp(requiresCharging = true),
+            followUp(ProtonThumbnailWorkOutcome.COMPLETE, previewsDeferred = true, replacedChargingRun = true),
+        )
+        assertNull(followUp(ProtonThumbnailWorkOutcome.COMPLETE, replacedChargingRun = true))
+    }
+
+    @Test
     fun `a refused foreground promotion is followed up after a long pause`() {
         assertEquals(
             ProtonThumbnailFollowUp(
@@ -187,6 +220,7 @@ class ProtonThumbnailFollowUpPolicyTest {
         retryAfterMillis: Long? = null,
         networkWaitAttempt: Int = 0,
         foregroundBudgetDelayMillis: Long = 0L,
+        replacedChargingRun: Boolean = false,
     ) = ProtonThumbnailFollowUpPolicy.followUp(
         outcome,
         workRemaining,
@@ -194,5 +228,6 @@ class ProtonThumbnailFollowUpPolicyTest {
         retryAfterMillis,
         networkWaitAttempt,
         foregroundBudgetDelayMillis,
+        replacedChargingRun,
     )
 }

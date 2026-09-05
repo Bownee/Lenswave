@@ -66,6 +66,21 @@ internal object ProtonBackgroundBatchPolicy {
     fun hasStaleClaims(idle: ProtonThumbnailQueueStep.Idle): Boolean = idle.hasPending && idle.retryAfterMillis == 0L
 
     /**
+     * The step after a batch the SDK never answered ([ThumbnailBatchResult.stalled]). Its nodes
+     * were settled as connection failures and are claimable again in
+     * [ProtonThumbnailQueue.NETWORK_RETRY_MILLIS]; other entries may be ready right now, but
+     * asking a stalled SDK for them would cost another deadline each with nothing stored, so the
+     * retry is reported as at least that long. That is longer than [MAX_IDLE_WAIT_MILLIS], so the
+     * run ends waiting for the retry and the follow-up carries the wait, with nothing held awake.
+     */
+    fun afterStalledBatch(idle: ProtonThumbnailQueueStep.Idle): ProtonThumbnailQueueStep.Idle =
+        if (idle.hasPending) {
+            idle.copy(retryAfterMillis = maxOf(idle.retryAfterMillis ?: 0L, ProtonThumbnailQueue.NETWORK_RETRY_MILLIS))
+        } else {
+            idle
+        }
+
+    /**
      * The longest an idle run sleeps in place. A run is a foreground service holding a wakelock,
      * so a sleep of minutes (the earlier cap) kept the phone awake for nothing, and a failing
      * tail of retries kept it awake for as long as the run limit allowed. A retry due within a
