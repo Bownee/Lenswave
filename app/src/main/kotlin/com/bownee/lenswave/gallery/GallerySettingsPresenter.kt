@@ -55,7 +55,8 @@ internal class GallerySettingsPresenter(
                         } else {
                             activity.getString(entry.item.titleRes)
                         }
-                    menu.add(Menu.NONE, entry.item.ordinal, order, title).apply {
+                    // Ids start at 1: the first ordinal would be Menu.NONE, which the menu does not treat as an item id.
+                    menu.add(Menu.NONE, entry.item.ordinal + 1, order, title).apply {
                         isEnabled = entry.enabled
                         entry.checked?.let { checked ->
                             isCheckable = true
@@ -64,7 +65,7 @@ internal class GallerySettingsPresenter(
                     }
                 }
                 setOnMenuItemClickListener { item ->
-                    when (Item.entries.getOrNull(item.itemId)) {
+                    when (Item.entries.getOrNull(item.itemId - 1)) {
                         Item.CONNECT_PROTON -> {
                             onConnectProton()
                         }
