@@ -144,8 +144,8 @@ internal class ProtonThumbnailStore
 
         /**
          * Deletes a stored file that failed to decrypt or decode, unless a write replaced it
-         * meanwhile: the file on disk is then no longer the one that was [observed] before the
-         * read, or the write published its bitmap under the shard lock right after committing.
+         * meanwhile (the file on disk is then no longer the one that was [observed] before the
+         * read) or a concurrent load has since cached a bitmap of it.
          */
         private fun discardUnreadable(
             key: ThumbnailKey,
@@ -164,19 +164,17 @@ internal class ProtonThumbnailStore
          * (see the instrumented test on truncated thumbnails). The decode happens outside the
          * shard lock, and the bytes are stored as delivered unless they need downsampling, so a
          * normal 480 px thumbnail is never re-encoded; the lock covers only the commit and the
-         * cache put.
+         * eviction of the bitmap it replaces.
          *
-         * The validation bitmap goes into the process-wide memory cache only when
-         * [publishToMemory] asks for it: a background backfill writes thousands of thumbnails the
-         * grid is not looking at, and each one it published evicted a bitmap the grid was. Without
-         * publishing, the bitmap is recycled once the file is committed and the next bind decodes
-         * it from disk like any other stored thumbnail.
+         * The validation bitmap never enters the process-wide memory cache: a background
+         * backfill writes thousands of thumbnails the grid is not looking at, and each one it
+         * published evicted a bitmap the grid was. It is recycled once the file is committed and
+         * the next bind decodes it from disk like any other stored thumbnail.
          */
         fun write(
             userId: String,
             nodeUid: String,
             bytes: ByteArray,
-            publishToMemory: Boolean = false,
         ) {
             val decoded =
                 ProtonThumbnailCodec.decodeForStore(bytes)
@@ -191,17 +189,11 @@ internal class ProtonThumbnailStore
                     target.parentFile?.mkdirs()
                     secureFiles.write(scope(userId), target, stored, "Could not commit thumbnail cache file")
                     if (!existed) adjustCount(userId, 1)
-                    if (publishToMemory) {
-                        bitmaps.put(key, CachedBitmap(bitmap, StoredFile.of(target)))
-                    } else {
-                        // A stale bitmap of the file this write replaced must not outlive it.
-                        bitmaps.remove(key)
-                        bitmap.recycle()
-                    }
+                    // A stale bitmap of the file this write replaced must not outlive it.
+                    bitmaps.remove(key)
                 }
-            } catch (error: Throwable) {
+            } finally {
                 bitmap.recycle()
-                throw error
             }
         }
 
