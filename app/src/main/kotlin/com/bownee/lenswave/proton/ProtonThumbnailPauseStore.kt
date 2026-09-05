@@ -74,9 +74,10 @@ internal class SharedPreferencesProtonThumbnailPauseStore(
 
     private fun key(userId: UserId): String = "$KEY_PAUSED_PREFIX${AtomicFileStore.safeName(userId.id)}"
 
-    private companion object {
-        const val PREFERENCES_NAME = "thumbnail-downloads"
-        const val KEY_PAUSED_PREFIX = "paused-"
+    companion object {
+        /** One small file for everything the worker remembers; the foreground budget shares it. */
+        internal const val PREFERENCES_NAME = "thumbnail-downloads"
+        private const val KEY_PAUSED_PREFIX = "paused-"
     }
 }
 
