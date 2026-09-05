@@ -110,6 +110,7 @@ class GalleryActivity :
 
     // The panel starts hidden, which is what a null empty state renders, so the first render can skip it.
     private var renderedEmptyState: GalleryEmptyState? = null
+    private var renderedListingRefused = false
 
     // Day headers depend on the device zone; a zone or clock change bumps this so the rows are regrouped.
     private val groupingGeneration = MutableStateFlow(0)
@@ -367,6 +368,10 @@ class GalleryActivity :
             restorePendingSelection(state)
         }
         renderEmptyState(state.emptyState)
+        if (renderedListingRefused != state.listingRefused) {
+            renderedListingRefused = state.listingRefused
+            screen.renderListingRefused(state.listingRefused)
+        }
         updateNavigationControls()
     }
 

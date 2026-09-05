@@ -117,6 +117,104 @@ class GalleryUiStateFactoryTest {
     }
 
     @Test
+    fun `a failed refresh over cached photos raises the listing-refused flag instead of a panel`() {
+        val photo = ProtonGalleryPhoto(nodeUid = "p1", captureTimeEpochSeconds = 1L, hasThumbnail = true)
+        val state =
+            factory.create(
+                GalleryUiInputs(
+                    destination = GalleryDestination.Timeline,
+                    protonAccountStatus = ProtonAccountStatus.CONNECTED,
+                    protonGallery = ProtonGalleryState(photos = listOf(photo), hasLoaded = true, refreshFailed = true),
+                ),
+            )
+
+        assertTrue(state.listingRefused)
+        assertNull(state.emptyState)
+        assertEquals(1, state.visibleAssets.size)
+    }
+
+    @Test
+    fun `the listing-refused flag is off without a failure, without content, and for a skeleton`() {
+        val photo = ProtonGalleryPhoto(nodeUid = "p1", captureTimeEpochSeconds = 1L, hasThumbnail = true)
+        val loaded =
+            GalleryUiInputs(
+                destination = GalleryDestination.Timeline,
+                protonAccountStatus = ProtonAccountStatus.CONNECTED,
+                protonGallery = ProtonGalleryState(photos = listOf(photo), hasLoaded = true),
+            )
+        assertFalse(factory.create(loaded).listingRefused)
+
+        val failedAndEmpty =
+            loaded.copy(protonGallery = ProtonGalleryState(hasLoaded = true, refreshFailed = true))
+        assertFalse("the empty-state panel already reports this case", factory.create(failedAndEmpty).listingRefused)
+
+        val failedWithPhotos =
+            loaded.copy(
+                protonGallery = ProtonGalleryState(photos = listOf(photo), hasLoaded = true, refreshFailed = true),
+            )
+        assertFalse(factory.skeleton(failedWithPhotos).listingRefused)
+    }
+
+    @Test
+    fun `the listing-refused flag follows the section of the page on screen`() {
+        val photo = ProtonGalleryPhoto(nodeUid = "p1", captureTimeEpochSeconds = 1L, hasThumbnail = true)
+        val tagState =
+            factory.create(
+                GalleryUiInputs(
+                    destination = GalleryDestination.Tag(ProtonMediaTag.SELFIES),
+                    protonAccountStatus = ProtonAccountStatus.CONNECTED,
+                    protonGallery =
+                        ProtonGalleryState(
+                            hasLoaded = true,
+                            tags =
+                                mapOf(
+                                    ProtonMediaTag.SELFIES to
+                                        ProtonTagState(photos = listOf(photo), hasLoaded = true, refreshFailed = true),
+                                ),
+                        ),
+                ),
+            )
+        assertTrue(tagState.listingRefused)
+
+        val album =
+            ProtonAlbum(
+                nodeUid = "a1",
+                name = "Album",
+                photoCount = 1L,
+                coverPhotoNodeUid = null,
+                createdAtEpochSeconds = 0L,
+                lastActivityEpochSeconds = 0L,
+                hasCoverThumbnail = false,
+                isShared = false,
+            )
+        val libraryState =
+            factory.create(
+                GalleryUiInputs(
+                    destination = GalleryDestination.Library,
+                    protonAccountStatus = ProtonAccountStatus.CONNECTED,
+                    protonAlbums = ProtonAlbumsState(albums = listOf(album), hasLoaded = true, refreshFailed = true),
+                ),
+            )
+        assertTrue(libraryState.listingRefused)
+
+        val albumState =
+            factory.create(
+                GalleryUiInputs(
+                    destination = GalleryDestination.AlbumPhotos(ProtonAlbumReference("a1", "Album")),
+                    protonAccountStatus = ProtonAccountStatus.CONNECTED,
+                    protonAlbumPhotos =
+                        ProtonAlbumPhotosState(
+                            albumUid = "a1",
+                            photos = listOf(photo),
+                            hasLoaded = true,
+                            refreshFailed = true,
+                        ),
+                ),
+            )
+        assertTrue(albumState.listingRefused)
+    }
+
+    @Test
     fun `timeline shows a failure panel when the refresh failed`() {
         val state =
             factory.create(

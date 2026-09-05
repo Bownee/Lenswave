@@ -93,7 +93,7 @@ internal class GalleryUiStateFactory(
                     )
                 }
             }
-        return base(inputs, content, emptyState)
+        return base(inputs, content, emptyState, listingRefused(inputs.protonGallery.refreshFailed, content))
     }
 
     private fun tag(
@@ -128,7 +128,7 @@ internal class GalleryUiStateFactory(
                     )
                 }
             }
-        return base(inputs, content, emptyState)
+        return base(inputs, content, emptyState, listingRefused(state.refreshFailed, content))
     }
 
     private fun library(inputs: GalleryUiInputs): GalleryUiState {
@@ -166,7 +166,12 @@ internal class GalleryUiStateFactory(
                     )
                 }
             }
-        return base(inputs = inputs, content = content, emptyState = emptyState)
+        return base(
+            inputs = inputs,
+            content = content,
+            emptyState = emptyState,
+            listingRefused = albums.refreshFailed && albums.albums.isNotEmpty(),
+        )
     }
 
     private fun librarySections(
@@ -246,8 +251,17 @@ internal class GalleryUiStateFactory(
                     )
                 }
             }
-        return base(inputs, content, emptyState)
+        return base(inputs, content, emptyState, listingRefused(albumState.refreshFailed, content))
     }
+
+    /**
+     * Until the data layer publishes a refused listing of its own, the case the empty-state panel
+     * cannot show stands in for it: the refresh failed while cached photos are on screen.
+     */
+    private fun listingRefused(
+        refreshFailed: Boolean,
+        content: GalleryContent.Photos,
+    ): Boolean = refreshFailed && content.assets.isNotEmpty()
 
     private fun protonUnavailable(inputs: GalleryUiInputs): GalleryUiState? =
         when (inputs.protonAccountStatus) {
@@ -304,6 +318,7 @@ internal class GalleryUiStateFactory(
         inputs: GalleryUiInputs,
         content: GalleryContent = NO_PHOTOS,
         emptyState: GalleryEmptyState? = null,
+        listingRefused: Boolean = false,
     ) = GalleryUiState(
         destination = inputs.destination,
         title = title(inputs.destination),
@@ -312,6 +327,7 @@ internal class GalleryUiStateFactory(
         currentUserId = inputs.currentUserId,
         isProtonConnected = inputs.currentUserId != null,
         isRefreshing = inputs.isRefreshing,
+        listingRefused = listingRefused,
     )
 
     private fun title(destination: GalleryDestination): String =

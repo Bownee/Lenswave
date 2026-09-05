@@ -205,6 +205,59 @@ object UiStyle {
             background = rippled(rounded(context, if (destructive) dangerSoft else surfaceRaised, 22), tint)
         }
 
+    /**
+     * A compact notice with one text action and a close button; the caller shows and hides it.
+     * [onDismiss] runs after the banner has hidden itself.
+     */
+    fun banner(
+        context: Context,
+        message: String,
+        actionLabel: String,
+        dismissDescription: String,
+        onAction: () -> Unit,
+        onDismiss: () -> Unit,
+    ): LinearLayout {
+        val text = label(context, message, sizeSp = 13f).apply { setLineSpacing(0f, 1.1f) }
+        val action =
+            label(context, actionLabel, sizeSp = 14f, color = accent, medium = true).apply {
+                setPadding(context.dp(10), context.dp(6), context.dp(10), context.dp(6))
+                background = rippled(rounded(context, Color.TRANSPARENT, 10), accent)
+                setOnClickListener { onAction() }
+            }
+        val close =
+            iconButton(
+                context,
+                R.drawable.ic_close,
+                dismissDescription,
+                fill = Color.TRANSPARENT,
+                tint = muted,
+                sizeDp = 32,
+                iconDp = 16,
+            )
+        return LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(context.dp(14), context.dp(6), context.dp(6), context.dp(6))
+            background = rounded(context, surfaceRaised, 14, border)
+            addView(text, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(
+                action,
+                LinearLayout
+                    .LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ).apply {
+                        marginStart = context.dp(8)
+                    },
+            )
+            addView(close, LinearLayout.LayoutParams(context.dp(32), context.dp(32)))
+            close.setOnClickListener {
+                visibility = View.GONE
+                onDismiss()
+            }
+        }
+    }
+
     /** Shows the filled or outlined heart and the matching accessibility label. */
     fun applyFavoriteIcon(
         view: ImageView,

@@ -66,6 +66,10 @@ internal class GalleryScreen(
     private val emptyTitle: TextView
     private val emptyMessage: TextView
     private val emptyAction: Button
+    private val listingRefusedBanner: LinearLayout
+
+    /** The user closed the banner; it stays closed until the flag clears and is raised again. */
+    private var listingRefusedDismissed = false
     private val refreshLayout: GalleryRefreshLayout
     private val stickyDate: TextView
     private val stickyDateController: GalleryStickyDateController
@@ -110,6 +114,7 @@ internal class GalleryScreen(
         emptyTitle = listHeader.empty.title
         emptyMessage = listHeader.empty.message
         emptyAction = listHeader.empty.action
+        listingRefusedBanner = listHeader.listingRefusedBanner
 
         galleryFooter =
             View(activity).apply {
@@ -272,6 +277,13 @@ internal class GalleryScreen(
 
     fun showContent() {
         emptyPanel.visibility = View.GONE
+    }
+
+    /** Mirrors [GalleryUiState.listingRefused]; a dismissed banner stays down until the flag clears and returns. */
+    fun renderListingRefused(refused: Boolean) {
+        if (!refused) listingRefusedDismissed = false
+        val show = refused && !listingRefusedDismissed
+        listingRefusedBanner.visibility = if (show) View.VISIBLE else View.GONE
     }
 
     fun showEmptyState(
@@ -489,6 +501,25 @@ internal class GalleryScreen(
                 orientation = LinearLayout.VERTICAL
                 setPadding(0, activity.dp(2), 0, activity.dp(6))
             }
+        val banner =
+            UiStyle
+                .banner(
+                    activity,
+                    message = activity.getString(R.string.listing_refused_message),
+                    actionLabel = activity.getString(R.string.refresh),
+                    dismissDescription = activity.getString(R.string.dismiss),
+                    onAction = actions.onRefresh,
+                    onDismiss = { listingRefusedDismissed = true },
+                ).apply { visibility = View.GONE }
+        container.addView(
+            banner,
+            UiStyle.matchWrap().apply {
+                marginStart = activity.dp(16)
+                marginEnd = activity.dp(16)
+                topMargin = activity.dp(4)
+                bottomMargin = activity.dp(4)
+            },
+        )
         val empty = buildEmptyPanel()
         container.addView(
             empty.container,
@@ -499,7 +530,7 @@ internal class GalleryScreen(
                 bottomMargin = activity.dp(12)
             },
         )
-        return ListHeader(container, empty)
+        return ListHeader(container, empty, banner)
     }
 
     private fun buildEmptyPanel(): EmptyPanel {
@@ -738,6 +769,7 @@ internal class GalleryScreen(
     private data class ListHeader(
         val container: LinearLayout,
         val empty: EmptyPanel,
+        val listingRefusedBanner: LinearLayout,
     )
 
     private data class SelectionBar(

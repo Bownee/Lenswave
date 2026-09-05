@@ -54,6 +54,9 @@
     <string name="could_not_load_album">Could not load this album</string>
     <string name="could_not_load_albums">Could not load albums</string>
     <string name="check_connection_refresh">Check your connection and use Refresh to try again.</string>
+    <string name="listing_refused_message">Some changes could not be applied. Refresh to update.</string>
+    <string name="refresh">Refresh</string>
+    <string name="dismiss">Dismiss</string>
     <string name="album_empty">Album is empty</string>
     <string name="album_photos_appear_here">Photos added to %1$s will appear here.</string>
     <plurals name="photo_count">
