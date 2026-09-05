@@ -1,7 +1,7 @@
 package com.bownee.lenswave.viewer
 
+import com.bownee.lenswave.proton.ProtonOriginalCopyMissingException
 import java.io.FileNotFoundException
-import java.io.IOException
 
 /**
  * When a playback error means the file behind the player is gone rather than broken. A complete
@@ -11,20 +11,16 @@ import java.io.IOException
  * that vanishes again is a failure worth showing, and a reload loop would hide it for good.
  */
 internal object ViewerVideoReloadPolicy {
-    /** The storage layer's own name for a complete stream whose plaintext file vanished. */
-    const val COPY_MISSING_EXCEPTION = "ProtonOriginalCopyMissingException"
-
     /**
-     * Whether [error] or anything in its cause chain says the file is missing: a plain
-     * [FileNotFoundException], or the storage layer's [IOException] subclass, matched by name so
-     * the viewer does not depend on it.
+     * Whether [error] or anything in its cause chain says the file is missing: a
+     * [FileNotFoundException], which the storage layer's [ProtonOriginalCopyMissingException]
+     * for a complete stream whose plaintext copy vanished also is.
      */
     fun copyMissing(error: Throwable): Boolean {
         var current: Throwable? = error
         val seen = HashSet<Throwable>()
         while (current != null && seen.add(current)) {
             if (current is FileNotFoundException) return true
-            if (current is IOException && current.javaClass.simpleName == COPY_MISSING_EXCEPTION) return true
             current = current.cause
         }
         return false
