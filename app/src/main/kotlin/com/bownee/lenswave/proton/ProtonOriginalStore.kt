@@ -2,6 +2,8 @@ package com.bownee.lenswave.proton
 
 import android.content.Context
 import com.bownee.lenswave.LenswaveClock
+import com.bownee.lenswave.LenswaveDiagnostics
+import com.bownee.lenswave.LenswaveOperation
 import com.bownee.lenswave.storage.AtomicFileStore
 import com.bownee.lenswave.storage.SecureFileStore
 import dagger.Binds
@@ -172,11 +174,16 @@ internal class ProtonOriginalStore
         ) {
             target.setLastModified(clock.nowMillis())
             val stored = target.length()
-            // A first listing already includes the file that was just committed.
+            // A first listing already includes the file that was just committed. It runs before
+            // the map is touched: listing a directory inside compute would hold the map's bin lock
+            // across every stat.
+            val listed = if (trackedBytes.containsKey(userId)) null else directoryBytes(userId)
             val total =
-                checkNotNull(
-                    trackedBytes.compute(userId) { _, current -> current?.plus(stored) ?: directoryBytes(userId) },
-                )
+                if (listed != null && trackedBytes.putIfAbsent(userId, listed) == null) {
+                    listed
+                } else {
+                    checkNotNull(trackedBytes.merge(userId, stored) { current, added -> current + added })
+                }
             if (total > ProtonStorageLayout.ORIGINALS_CACHE_LIMIT_BYTES) trimToLimit(userId, keepName = target.name)
         }
 
@@ -222,14 +229,25 @@ internal class ProtonOriginalStore
             return originalsDeleted && decryptedDeleted
         }
 
+        /**
+         * Best effort, like the cache's own sweep: a directory that resists deletion is reported
+         * once and left for the next account transition. Throwing here failed that transition,
+         * which the session manager then retried forever.
+         */
         fun retainOnly(userId: String?) {
             trackedBytes.keys.removeAll { key -> key != userId }
             val retainedName = userId?.let(AtomicFileStore::safeName)
-            originals.listFiles()?.filter { it.name != retainedName }?.forEach { directory ->
-                check(directory.deleteRecursively()) { "Could not remove orphaned Proton originals" }
+            var deleted = true
+            listOf(originals, decrypted).forEach { root ->
+                root.listFiles()?.filter { it.name != retainedName }?.forEach { directory ->
+                    deleted = directory.deleteRecursively() && deleted
+                }
             }
-            decrypted.listFiles()?.filter { it.name != retainedName }?.forEach { directory ->
-                check(directory.deleteRecursively()) { "Could not remove orphaned decrypted Proton media" }
+            if (!deleted) {
+                LenswaveDiagnostics.reportFailure(
+                    LenswaveOperation.CACHE_CLEAR,
+                    IllegalStateException("Could not remove all orphaned Proton originals; residue is swept later"),
+                )
             }
         }
 
