@@ -104,6 +104,16 @@ class ViewerMutationCoordinator internal constructor(
     }
 
     /**
+     * Takes several outcomes in one step, for a consumer that drains the queue: consuming them
+     * one by one emits an intermediate list per outcome, and a collector of [outcomes] re-enters
+     * mid-drain with the outcomes it has not yet been handed.
+     */
+    internal fun consumeAll(outcomes: Collection<Outcome>) {
+        if (outcomes.isEmpty()) return
+        pending.update { queued -> queued - outcomes }
+    }
+
+    /**
      * Drops every queued outcome and every in-flight mark, and disowns every call still running.
      * For an account transition: the outcomes belong to photos of the account that is going, and
      * no viewer of the next account must find its buttons held by them. A call still running

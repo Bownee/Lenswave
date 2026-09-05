@@ -8,6 +8,7 @@ import com.bownee.lenswave.proton.ProtonSessionChangedException
 import com.bownee.lenswave.proton.ProtonTrashResult
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
@@ -134,6 +135,31 @@ class ViewerMutationCoordinatorTest {
                 coordinator.outcomes.value,
             )
             assertFalse(coordinator.isInFlight("s1"))
+        }
+
+    @Test
+    fun `consuming several outcomes at once emits a single queue`() =
+        runTest(dispatcher) {
+            val coordinator = coordinator()
+            val other = PhotoRequest("s2", "n2", "u", 0L, "two.jpg")
+            coordinator.setFavorite(UserId("u"), request, favorite = true)
+            coordinator.setFavorite(UserId("u"), other, favorite = true)
+            coordinator.trash(UserId("u"), PhotoRequest("s3", "n3", "u", 0L, "three.jpg"))
+            runCurrent()
+            mutations.favoriteAnswers.forEach { answer -> answer.complete(ProtonFavoriteResult(updatedCount = 1)) }
+            mutations.trashAnswers.single().complete(ProtonTrashResult(trashedCount = 1, failedCount = 0))
+            runCurrent()
+            val queued = coordinator.outcomes.value
+            assertEquals(3, queued.size)
+            val seen = mutableListOf<List<ViewerMutationCoordinator.Outcome>>()
+            val collector = backgroundScope.launch { coordinator.outcomes.collect(seen::add) }
+            runCurrent()
+
+            coordinator.consumeAll(queued.take(2))
+            runCurrent()
+
+            assertEquals(listOf(queued, queued.drop(2)), seen)
+            collector.cancel()
         }
 
     private fun TestScope.coordinator() =
