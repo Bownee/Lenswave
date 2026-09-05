@@ -6,7 +6,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.Bundle
-import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
@@ -52,7 +51,6 @@ import com.bownee.lenswave.update.AppUpdateChecker
 import com.bownee.lenswave.update.UpdateAvailableDialogFragment
 import com.bownee.lenswave.viewer.PhotoViewerActivity
 import com.bownee.lenswave.viewer.ViewerMutationCoordinator
-import com.bownee.lenswave.viewer.ViewerPrivacySettings
 import dagger.Lazy
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.Dispatchers
@@ -86,8 +84,6 @@ class GalleryActivity :
     @Inject lateinit var observeUserSettings: Lazy<ObserveUserSettings>
 
     @Inject lateinit var appUpdateChecker: AppUpdateChecker
-
-    @Inject lateinit var viewerPrivacySettings: ViewerPrivacySettings
 
     @Inject lateinit var mutationCoordinator: Lazy<ViewerMutationCoordinator>
 
@@ -156,8 +152,6 @@ class GalleryActivity :
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Set before any content: the thumbnails are the same photos the viewer keeps out of screenshots.
-        applyScreenshotPolicy()
         updatePresenter =
             GalleryUpdatePresenter(
                 host = GalleryUpdatePresenter.ActivityHost(this),
@@ -177,10 +171,8 @@ class GalleryActivity :
                 activity = this,
                 observeUserSettings = observeUserSettings::get,
                 currentUserId = { currentUiState.currentUserId },
-                privacySettings = viewerPrivacySettings,
                 onConnectProton = ::connectProton,
                 onDisconnectProton = { viewModel.disconnectProton() },
-                onScreenshotPolicyChanged = ::applyScreenshotPolicy,
             )
         deletionCoordinator =
             GalleryDeletionCoordinator(
@@ -205,8 +197,6 @@ class GalleryActivity :
 
     override fun onResume() {
         super.onResume()
-        // The menu toggle applies the flag itself; this catches a change made while paused (the viewer shares the setting).
-        applyScreenshotPolicy()
         viewerLaunched = false
         if (galleryStarted) onGalleryResumed()
         updatePresenter.showPendingUpdate()
@@ -219,12 +209,6 @@ class GalleryActivity :
         if (timeChangeReceiverRegistered) unregisterReceiver(timeChangeReceiver)
         if (this::authCoordinator.isInitialized) authCoordinator.unregister()
         super.onDestroy()
-    }
-
-    /** Mirrors [ViewerPrivacySettings.blockScreenshots] into the window's secure flag. */
-    private fun applyScreenshotPolicy() {
-        val secure = WindowManager.LayoutParams.FLAG_SECURE
-        if (viewerPrivacySettings.blockScreenshots) window.addFlags(secure) else window.clearFlags(secure)
     }
 
     /**

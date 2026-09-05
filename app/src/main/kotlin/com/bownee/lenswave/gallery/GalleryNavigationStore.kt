@@ -5,7 +5,6 @@ import androidx.core.content.edit
 import com.bownee.lenswave.proton.ProtonAlbumReference
 import com.bownee.lenswave.proton.ProtonMediaTag
 import com.bownee.lenswave.proton.SharedPreferencesProtonThumbnailPauseStore
-import com.bownee.lenswave.viewer.ViewerPrivacySettings
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -86,10 +85,13 @@ internal object GalleryNavigationCodec {
  * is no guarantee the load has finished by the time the activity starts.
  */
 internal object GalleryPreferenceWarmUp {
+    private const val LEGACY_VIEWER_PRIVACY_PREFERENCES = "viewer-privacy"
+
     fun warm(context: Context) {
         context.getSharedPreferences(SharedPreferencesGalleryNavigationStore.PREFERENCES_NAME, Context.MODE_PRIVATE).all
         context.getSharedPreferences(GalleryNotificationPermissionPrompter.PREFERENCES_NAME, Context.MODE_PRIVATE).all
-        context.getSharedPreferences(ViewerPrivacySettings.PREFERENCES_NAME, Context.MODE_PRIVATE).all
+        // The screenshot-blocking setting is gone; its file is removed from installs that still have it.
+        context.deleteSharedPreferences(LEGACY_VIEWER_PRIVACY_PREFERENCES)
         // The pause flag is read by every thumbnail run request, the first of them from the gallery's resume.
         context
             .getSharedPreferences(

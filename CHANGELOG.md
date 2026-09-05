@@ -4,6 +4,11 @@ All notable changes to Lenswave. The format follows [Keep a Changelog](https://k
 
 ## [Unreleased]
 
+### Removed
+- The "Block screenshots and screen recording" setting. It only marked the app's own windows
+  secure, which also blanked the app in the recents screen; the stored setting is deleted on
+  the next launch.
+
 ### Added
 - Previews (~1920 px) of every photo are downloaded in the background after thumbnails, so
   photos open sharp immediately.

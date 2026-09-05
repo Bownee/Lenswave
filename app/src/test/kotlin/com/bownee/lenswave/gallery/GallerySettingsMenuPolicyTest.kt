@@ -13,23 +13,21 @@ class GallerySettingsMenuPolicyTest {
             listOf(
                 Entry(Item.CONNECT_PROTON),
                 Entry(Item.PRIVACY),
-                Entry(Item.BLOCK_SCREENSHOTS, checked = false),
                 Entry(Item.VERSION, enabled = false),
             ),
-            GallerySettingsMenuPolicy.entries(connected = false, blockScreenshots = false),
+            GallerySettingsMenuPolicy.entries(connected = false),
         )
     }
 
     @Test
-    fun aSignedInSessionOffersToDisconnectAndTheToggleShowsItsState() {
+    fun aSignedInSessionOffersToDisconnect() {
         assertEquals(
             listOf(
                 Entry(Item.DISCONNECT_PROTON),
                 Entry(Item.PRIVACY),
-                Entry(Item.BLOCK_SCREENSHOTS, checked = true),
                 Entry(Item.VERSION, enabled = false),
             ),
-            GallerySettingsMenuPolicy.entries(connected = true, blockScreenshots = true),
+            GallerySettingsMenuPolicy.entries(connected = true),
         )
     }
 
