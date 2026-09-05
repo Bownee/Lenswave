@@ -746,12 +746,12 @@ class PhotoViewerActivity :
                                 }
                             }
                         }
-                    // Photos load the original quietly behind the preview; the spinner only appears
-                    // when there is nothing at all to show, and a thumbnail arriving within the
-                    // delay withdraws it. Videos keep their download progress.
-                    if (requestedPhoto.mediaKind == MediaKind.VIDEO || !thumbnailPreview.isVisible) {
-                        scheduleLoadingPanel()
-                    }
+                    // The original loads quietly behind the preview; the spinner only appears when
+                    // there is nothing at all to show, and a thumbnail arriving within the delay
+                    // withdraws it. A cached video is decrypted and decoded behind its thumbnail
+                    // the same way; only a download still in flight puts its bar up, and the
+                    // video controller does that itself the moment the stream starts.
+                    if (!thumbnailPreview.isVisible) scheduleLoadingPanel()
                     val cachedOriginal = cachedOriginalPreparation?.await()?.getOrThrow()
                     if (request.stableId != requestedPhoto.stableId) return@launch
                     if (cachedOriginal != null) {

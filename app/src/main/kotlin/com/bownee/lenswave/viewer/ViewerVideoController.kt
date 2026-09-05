@@ -239,8 +239,9 @@ internal class ViewerVideoController(
     /**
      * Shows, updates or hides the progress panel for the current download according to
      * [ViewerVideoProgressPolicy.panelVisible]. Before the first frame the panel is already up
-     * and only its figures change; afterwards it appears for a buffering stall against an
-     * unfinished download and goes when the player moves on or the download completes.
+     * and only its bar moves; it goes the moment the download completes, so the player decodes
+     * the first frame behind the thumbnail with nothing over it, and afterwards it appears for a
+     * buffering stall against an unfinished download and goes when the player moves on.
      */
     private fun refreshProgressPanel(requestedStableId: String) {
         val downloadProgress = latestProgress ?: return
@@ -249,7 +250,7 @@ internal class ViewerVideoController(
         if (ViewerVideoProgressPolicy.panelVisible(mediaReady, buffering, waitingForBytes, downloadProgress.complete)) {
             if (mediaReady) host.showLoadingPanelImmediately()
             updateDownloadProgress(downloadProgress)
-        } else if (mediaReady) {
+        } else {
             host.hideLoadingPanel()
         }
     }
@@ -422,12 +423,6 @@ internal class ViewerVideoController(
         status.visibility = View.GONE
         retryButton.visibility = View.GONE
         when (val display = ViewerVideoProgressPolicy.display(downloadProgress)) {
-            ViewerVideoProgressPolicy.Display.Preparing -> {
-                progress.isIndeterminate = false
-                progress.max = ViewerVideoProgressPolicy.PROGRESS_MAX
-                progress.progress = ViewerVideoProgressPolicy.PROGRESS_MAX
-            }
-
             is ViewerVideoProgressPolicy.Display.Unsized -> {
                 progress.isIndeterminate = true
             }
