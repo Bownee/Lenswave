@@ -103,7 +103,11 @@ android {
         create("minified") {
             initWith(getByName("release"))
             applicationIdSuffix = ".minified"
-            versionNameSuffix = "-minified"
+            // No versionNameSuffix: LenswaveApiClient builds Proton's app version header from
+            // VERSION_NAME, and Proton rejects anything but "name@major.minor.patch-suffix", so
+            // "1.0.0-minified-alpha" threw IllegalArgumentException on the first API call and the
+            // variant could never sign in. The applicationIdSuffix already keeps it installable
+            // beside the real app.
             signingConfig = signingConfigs.getByName("debug")
             proguardFile("proguard-instrumentation.pro")
             // Keep this non-debuggable: AGP disables R8 optimizations for debuggable
