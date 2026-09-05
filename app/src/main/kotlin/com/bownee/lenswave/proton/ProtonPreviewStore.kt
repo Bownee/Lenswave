@@ -77,8 +77,9 @@ internal class ProtonPreviewStore
         /**
          * Stores the bytes exactly as Proton delivered them after checking that they carry a
          * decodable image header; re-encoding a 1920 px JPEG would cost CPU for nothing. The
-         * cache scan for stale decodes runs before the shard lock is taken; the lock covers only
-         * the commit and the removal of the keys found.
+         * decoded entries of the old bytes go under the shard lock, the same lock a [load] puts
+         * under: scanned before it, a [load] committing between the scan and the lock would keep
+         * an entry of the old bytes that the scan never saw.
          */
         fun write(
             userId: String,
@@ -86,9 +87,8 @@ internal class ProtonPreviewStore
             bytes: ByteArray,
         ) {
             require(ProtonPreviewCodec.isDecodable(bytes)) { "Proton returned an invalid preview image" }
-            val stale = decodedKeys { key -> key.userId == userId && key.nodeUid == nodeUid }
             synchronized(lock(userId, nodeUid)) {
-                stale.forEach(decoded::remove)
+                dropDecoded { key -> key.userId == userId && key.nodeUid == nodeUid }
                 val target = file(userId, nodeUid)
                 val existed = target.isFile && target.length() > 0L
                 target.parentFile?.mkdirs()
@@ -117,7 +117,9 @@ internal class ProtonPreviewStore
          * Decrypt and decode run outside the shard lock, as they do in [ProtonThumbnailStore]:
          * holding it serialized every load that hashed into the same shard behind a decode. Two
          * loads of the same key racing each other decode twice; the second adopts the first's
-         * bitmap.
+         * bitmap. A [write] that replaced the file meanwhile has already dropped the old bytes'
+         * entries, so a bitmap decoded from them is handed out for this one read but never
+         * cached: the file version the read saw is checked again under the lock before the put.
          */
         fun load(
             userId: String,
@@ -160,7 +162,9 @@ internal class ProtonPreviewStore
                     cached
                 } else {
                     ProtonPreviewOrientation.record(preview.bitmap, preview.orientation)
-                    decoded.put(key, preview.bitmap)
+                    // Only the bytes still on disk are worth remembering: a write since the read
+                    // replaced them, and its own reader caches the fresh decode.
+                    if (FileVersion.of(file) == version) decoded.put(key, preview.bitmap)
                     preview.bitmap
                 }
             }
