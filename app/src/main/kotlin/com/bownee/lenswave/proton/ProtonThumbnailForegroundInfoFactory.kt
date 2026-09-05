@@ -3,6 +3,7 @@ package com.bownee.lenswave.proton
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
@@ -102,8 +103,11 @@ internal class ProtonThumbnailForegroundInfoFactory(
         PendingIntent.getActivity(
             context,
             OPEN_APP_REQUEST_CODE,
-            Intent(context, GalleryActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            Intent.makeMainActivity(ComponentName(context, GalleryActivity::class.java)).apply {
+                // The launcher's own intent shape, so the task is brought forward as it is: the
+                // gallery gets onNewIntent when it is on top, and a viewer on top stays. A plain
+                // component intent stacks a second gallery; CLEAR_TOP finished the viewer.
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
             },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
