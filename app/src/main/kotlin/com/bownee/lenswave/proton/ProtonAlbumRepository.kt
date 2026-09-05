@@ -59,19 +59,28 @@ internal class ProtonAlbumRepository
             )
         }
 
+        /**
+         * Opens [album]: this is the one publish that may move the album-photo state to another
+         * album, so it cannot apply the same-album guard the sync publishes use. It still goes
+         * through an update rather than a plain assignment, so a mark landing at the same moment
+         * is applied on top of it instead of being overwritten, and reopening the album keeps
+         * the published list instance when the cache has not changed, so the grid's memos hold.
+         */
         fun loadCachedAlbum(
             userId: UserId,
             album: ProtonAlbumReference,
         ) {
             val photos = cache.readAlbumPhotosSnapshot(userId.id, album.nodeUid)
-            mutableAlbumPhotosState.value =
+            mutableAlbumPhotosState.update { previous ->
+                val loaded = photos.orEmpty()
                 ProtonAlbumPhotosState(
                     userId = userId.id,
                     albumUid = album.nodeUid,
                     albumName = album.name,
-                    photos = photos.orEmpty(),
+                    photos = if (previous.photos == loaded) previous.photos else loaded,
                     hasLoaded = photos != null,
                 )
+            }
         }
 
         suspend fun syncMetadata(

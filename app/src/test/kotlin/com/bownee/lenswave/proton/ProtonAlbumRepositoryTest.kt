@@ -15,6 +15,7 @@ import me.proton.drive.sdk.entity.AlbumItem
 import me.proton.drive.sdk.entity.NodeUid
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.lang.reflect.Proxy
@@ -161,6 +162,37 @@ class ProtonAlbumRepositoryTest {
         }
 
     @Test
+    fun `opening an album switches the published album and keeps the list instance when unchanged`() =
+        runTest {
+            cache.albumPhotos[USER.id to "al1"] = listOf(photo("x", 2L))
+            cache.albumPhotos[USER.id to "al2"] = listOf(photo("y", 1L))
+            repository.loadCachedAlbum(USER, ProtonAlbumReference("al1", "First"))
+            val first = repository.albumPhotosState.value.photos
+
+            // Reopening the same album with an unchanged cache keeps the published instance.
+            repository.loadCachedAlbum(USER, ProtonAlbumReference("al1", "First"))
+            assertSame(first, repository.albumPhotosState.value.photos)
+
+            repository.loadCachedAlbum(USER, ProtonAlbumReference("al2", "Second"))
+            assertEquals("al2", repository.albumPhotosState.value.albumUid)
+            assertEquals(
+                listOf("y"),
+                repository.albumPhotosState.value.photos
+                    .map(ProtonGalleryPhoto::nodeUid),
+            )
+
+            repository.loadCachedAlbum(USER, ProtonAlbumReference("al1", "First"))
+            assertEquals("al1", repository.albumPhotosState.value.albumUid)
+            assertEquals(
+                listOf("x"),
+                repository.albumPhotosState.value.photos
+                    .map(ProtonGalleryPhoto::nodeUid),
+            )
+
+            assertTrue(repository.albumPhotosState.value.hasLoaded)
+        }
+
+    @Test
     fun `a sync writes the album listing before it deletes the indexes of vanished albums`() =
         runTest {
             cache.albums[USER.id] = listOf(album("al1", photoCount = 2L))
@@ -292,7 +324,7 @@ class ProtonAlbumRepositoryTest {
             userId: String,
             albumUid: String,
             availability: ProtonStoredRenditions,
-        ): List<ProtonGalleryPhoto>? = albumPhotos[userId to albumUid]
+        ): List<ProtonGalleryPhoto>? = albumPhotos[userId to albumUid]?.map { it }
 
         override fun writeAlbumPhotos(
             userId: String,
