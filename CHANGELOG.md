@@ -4,6 +4,10 @@ All notable changes to Lenswave. The format follows [Keep a Changelog](https://k
 
 ## [Unreleased]
 
+## [1.0.0]
+
+The first stable release. Everything below since 0.19.10.
+
 ### Removed
 - The "Block screenshots and screen recording" setting. It only marked the app's own windows
   secure, which also blanked the app in the recents screen; the stored setting is deleted on
