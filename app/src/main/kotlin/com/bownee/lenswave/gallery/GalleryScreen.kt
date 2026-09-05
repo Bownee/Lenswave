@@ -41,14 +41,20 @@ internal class GalleryScreen(
     currentUserId: () -> UserId?,
     private val actions: Actions,
 ) {
-    val root = FrameLayout(activity).apply { setBackgroundColor(UiStyle.background) }
+    val root =
+        GalleryRootLayout(activity, header = { stickyHeader }, onHeaderMeasured = ::layoutBelowHeader).apply {
+            setBackgroundColor(UiStyle.background)
+        }
     val list: GalleryListView
     val adapter: GalleryListAdapter
     val selectionBar: LinearLayout
     val settingsButton: ImageButton
 
     /** Height of the pinned header including the status-bar inset; the list starts below it. */
-    val headerHeight: Int get() = stickyHeader.height
+    val headerHeight: Int get() = appliedHeaderHeight.coerceAtLeast(0)
+
+    /** The header height the views below it were last laid out for; -1 forces the next measure to apply it again. */
+    private var appliedHeaderHeight = -1
     var onHeaderHeightChanged: ((Int) -> Unit)? = null
 
     private val stickyHeader: LinearLayout
@@ -180,10 +186,6 @@ internal class GalleryScreen(
                 Gravity.TOP,
             ),
         )
-        stickyHeader.addOnLayoutChangeListener { _, _, top, _, bottom, _, oldTop, _, oldBottom ->
-            if (bottom - top != oldBottom - oldTop) layoutBelowHeader()
-        }
-
         val selection = buildSelectionBar()
         selectionBar = selection.container.apply { visibility = View.GONE }
         selectionCount = selection.count
@@ -300,7 +302,9 @@ internal class GalleryScreen(
         )
         galleryHeader.setPadding(insets.left, activity.dp(2), insets.right, activity.dp(6))
         filterRow.setPadding(activity.dp(16), 0, activity.dp(16), 0)
-        layoutBelowHeader()
+        // The date badge's start margin follows the safe area too; the next measure re-applies everything.
+        appliedHeaderHeight = -1
+        root.requestLayout()
     }
 
     fun showContent() {
@@ -361,8 +365,13 @@ internal class GalleryScreen(
         )
     }
 
-    private fun layoutBelowHeader() {
-        val headerHeight = stickyHeader.height
+    /**
+     * Lays out the views below the pinned header for [headerHeight]; called from the root's
+     * measure pass, see [GalleryRootLayout]. True when anything changed.
+     */
+    private fun layoutBelowHeader(headerHeight: Int): Boolean {
+        if (headerHeight == appliedHeaderHeight) return false
+        appliedHeaderHeight = headerHeight
         if (list.paddingTop != headerHeight) list.setPadding(0, headerHeight, 0, 0)
         // The spinner drops out from under the pinned header rather than from the screen edge.
         refreshLayout.setProgressViewOffset(false, headerHeight, headerHeight + activity.dp(REFRESH_SPINNER_END_DP))
@@ -377,6 +386,7 @@ internal class GalleryScreen(
             stickyDate.layoutParams = this
         }
         onHeaderHeightChanged?.invoke(headerHeight)
+        return true
     }
 
     private fun revealChip(chip: FilterChip) {
