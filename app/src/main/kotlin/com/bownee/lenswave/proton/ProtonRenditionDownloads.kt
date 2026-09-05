@@ -237,6 +237,10 @@ internal class ProtonRenditionDownloads
          * with neither successes nor failures and its nodes are reported as deferred: they are
          * not the ones at fault, so they take no backoff step, and stay claimed until the run
          * that abandoned them is idle and the sync clears the claims a batch left behind.
+         *
+         * The viewer's own download is given way to once, here, for the whole call: asked per
+         * chunk, a batch of sixteen and the single-node re-asks after it waited the coordinator's
+         * five seconds several times over while one original was fetched.
          */
         private suspend fun downloadChunks(
             nodeUids: List<String>,
@@ -244,28 +248,32 @@ internal class ProtonRenditionDownloads
             maxConcurrent: Int = ProtonThumbnailDownloadPolicy.MAX_CONCURRENT_BATCHES,
             mayStart: () -> Boolean = { true },
             downloadChunk: suspend (List<String>) -> ThumbnailBatchResult,
-        ): ChunkResults =
-            coroutineScope {
-                val permits = Semaphore(maxConcurrent)
-                val deferred = mutableSetOf<String>()
-                val results =
-                    ProtonThumbnailDownloadPolicy
-                        .batches(nodeUids, batchSize)
-                        .map { chunk ->
-                            async {
-                                permits.withPermit {
-                                    if (mayStart()) {
-                                        downloadChunk(chunk)
-                                    } else {
-                                        synchronized(deferred) { deferred += chunk }
-                                        null
+        ): ChunkResults {
+            if (nodeUids.isEmpty()) return ChunkResults(emptyList(), emptySet())
+            return transferCoordinator.withBackgroundTransfer {
+                coroutineScope {
+                    val permits = Semaphore(maxConcurrent)
+                    val deferred = mutableSetOf<String>()
+                    val results =
+                        ProtonThumbnailDownloadPolicy
+                            .batches(nodeUids, batchSize)
+                            .map { chunk ->
+                                async {
+                                    permits.withPermit {
+                                        if (mayStart()) {
+                                            downloadChunk(chunk)
+                                        } else {
+                                            synchronized(deferred) { deferred += chunk }
+                                            null
+                                        }
                                     }
                                 }
-                            }
-                        }.awaitAll()
-                        .filterNotNull()
-                ChunkResults(results, deferred)
+                            }.awaitAll()
+                            .filterNotNull()
+                    ChunkResults(results, deferred)
+                }
             }
+        }
 
         /** What the chunks of one [downloadChunks] call came to, and the nodes whose chunk never started. */
         private class ChunkResults(
@@ -311,18 +319,6 @@ internal class ProtonRenditionDownloads
             store: (nodeUid: String, bytes: ByteArray) -> Unit = { nodeUid, bytes ->
                 cache.writeThumbnail(userId.id, nodeUid, bytes)
             },
-        ): ThumbnailBatchResult =
-            transferCoordinator.withBackgroundTransfer {
-                downloadThumbnailPassWhenAllowed(photosClient, nodeUids, type, onProgress, timeoutMillis, store)
-            }
-
-        private suspend fun downloadThumbnailPassWhenAllowed(
-            photosClient: ProtonPhotosClient,
-            nodeUids: Collection<String>,
-            type: ThumbnailType,
-            onProgress: suspend (ThumbnailBatchResult) -> Unit,
-            timeoutMillis: Long,
-            store: (nodeUid: String, bytes: ByteArray) -> Unit,
         ): ThumbnailBatchResult {
             val requested = nodeUids.toSet()
             val successful = mutableSetOf<String>()
