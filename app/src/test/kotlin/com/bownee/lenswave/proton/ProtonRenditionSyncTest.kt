@@ -34,6 +34,7 @@ class ProtonRenditionSyncTest {
             source.previewResult = ThumbnailBatchResult(setOf("a", "b"), emptyMap())
 
             val step = sync.downloadNextBatch(USER, allowPreviews = true) {}
+            sync.finishPublishing(USER)
 
             assertEquals(ProtonThumbnailQueueStep.Processed, step)
             assertEquals(0, previews.pendingCount(USER.id))
@@ -159,6 +160,7 @@ class ProtonRenditionSyncTest {
             source.thumbnailResult = ThumbnailBatchResult(setOf("x", "cover", "orphan"), emptyMap())
 
             sync.downloadNextBatch(USER, allowPreviews = true) {}
+            sync.finishPublishing(USER)
 
             assertEquals(0, thumbnails.pendingCount(USER.id))
             assertEquals(1, previews.pendingCount(USER.id))
@@ -180,6 +182,7 @@ class ProtonRenditionSyncTest {
                 )
 
             sync.downloadNextBatch(USER, allowPreviews = true) {}
+            sync.finishPublishing(USER)
 
             assertTrue(
                 "a settled thumbnail must not be deleted: ${source.removedThumbnails}",
@@ -253,7 +256,7 @@ class ProtonRenditionSyncTest {
         }
 
     @Test
-    fun `thumbnail marks are coalesced within the publish interval and flushed at batch end`() =
+    fun `thumbnail marks are coalesced within the publish interval and flushed when the run idles`() =
         test { sync ->
             thumbnails.replaceSource(USER.id, ProtonSyncKeys.QueueSource.TIMELINE, candidates("a", "b", "c"))
             source.thumbnailProgress =
@@ -262,12 +265,49 @@ class ProtonRenditionSyncTest {
             source.beforeProgress = { yield() }
 
             sync.downloadNextBatch(USER, allowPreviews = true) {}
+            assertEquals(
+                ProtonThumbnailQueueStep.Idle(hasPending = false),
+                sync.downloadNextBatch(USER, allowPreviews = true) {},
+            )
 
             assertEquals(
                 listOf(setOf("a"), setOf("b", "c")),
                 availability.thumbnailsAvailable.map(PublishedThumbnails::timeline),
             )
             assertEquals(0, thumbnails.pendingCount(USER.id))
+        }
+
+    @Test
+    fun `the publish interval spans batches instead of starting over with each`() =
+        test { sync ->
+            source.beforeProgress = { yield() }
+
+            suspend fun queued(vararg nodeUids: String) =
+                nodeUids.forEach { nodeUid ->
+                    thumbnails.retryNow(
+                        USER.id,
+                        ProtonThumbnailCandidate(nodeUid, 1L),
+                        setOf(ProtonSyncKeys.QueueSource.TIMELINE),
+                    )
+                }
+
+            queued("c")
+            source.thumbnailResult = ThumbnailBatchResult(setOf("c"), emptyMap())
+            assertEquals(ProtonThumbnailQueueStep.Processed, sync.downloadNextBatch(USER, allowPreviews = true) {})
+            queued("a", "b")
+            source.thumbnailResult = ThumbnailBatchResult(setOf("a", "b"), emptyMap())
+            assertEquals(ProtonThumbnailQueueStep.Processed, sync.downloadNextBatch(USER, allowPreviews = true) {})
+            assertEquals(
+                ProtonThumbnailQueueStep.Idle(hasPending = false),
+                sync.downloadNextBatch(USER, allowPreviews = true) {},
+            )
+
+            // The first batch's mark went out at once; the second batch's waited for the
+            // interval that started then, rather than going out at once again.
+            assertEquals(
+                listOf(setOf("c"), setOf("a", "b")),
+                availability.thumbnailsAvailable.map(PublishedThumbnails::timeline),
+            )
         }
 
     @Test
@@ -282,6 +322,7 @@ class ProtonRenditionSyncTest {
             }
 
             sync.downloadNextBatch(USER, allowPreviews = true) {}
+            sync.finishPublishing(USER)
 
             assertEquals(
                 listOf(setOf("a"), setOf("b"), setOf("c")),
@@ -290,7 +331,7 @@ class ProtonRenditionSyncTest {
         }
 
     @Test
-    fun `marks are published off the download coroutine and awaited when the batch ends`() =
+    fun `marks are published off the download coroutine and finished when the run ends`() =
         test { sync ->
             thumbnails.replaceSource(USER.id, ProtonSyncKeys.QueueSource.TIMELINE, candidates("a", "b"))
             source.thumbnailProgress =
@@ -300,9 +341,10 @@ class ProtonRenditionSyncTest {
             sync.downloadNextBatch(USER, allowPreviews = true) {
                 publishedDuringProgress += availability.thumbnailsAvailable.size
             }
+            sync.finishPublishing(USER)
 
             // The progress callback returned before any listing was touched: the publication
-            // ran on the sync's own coroutine, and was complete when the batch returned.
+            // ran on the sync's own coroutine, and was complete when the run was finished.
             assertEquals(listOf(0, 0), publishedDuringProgress)
             assertEquals(listOf(setOf("a", "b")), availability.thumbnailsAvailable.map(PublishedThumbnails::timeline))
         }
@@ -370,6 +412,7 @@ class ProtonRenditionSyncTest {
             source.thumbnailResult = ThumbnailBatchResult(setOf("a"), emptyMap(), previewsStored = setOf("a"))
 
             sync.downloadNextBatch(USER, allowPreviews = false) {}
+            sync.finishPublishing(USER)
 
             assertEquals(0, thumbnails.pendingCount(USER.id))
             assertEquals(1, previews.pendingCount(USER.id))
