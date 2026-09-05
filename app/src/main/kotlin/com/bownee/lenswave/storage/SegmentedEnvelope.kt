@@ -76,12 +76,14 @@ internal object SegmentedEnvelope {
      * plaintext byte count. [shouldContinue] is asked before every segment; once it returns false
      * the decrypt stops with a [CopyInterruptedException] and only whole verified segments have
      * been written. Any damage to the file surfaces as [IllegalArgumentException] or
-     * [javax.crypto.AEADBadTagException].
+     * [javax.crypto.AEADBadTagException]. [onBytesWritten] is told the plaintext total after
+     * every segment has been written, so a reader can follow the file as it grows.
      */
     fun decrypt(
         key: SecretKey,
         input: InputStream,
         output: OutputStream,
+        onBytesWritten: (totalBytes: Long) -> Unit = {},
         shouldContinue: () -> Boolean = { true },
     ): Long {
         val header = ByteArray(Int.SIZE_BYTES + NONCE_BYTES)
@@ -104,6 +106,7 @@ internal object SegmentedEnvelope {
             val produced = cipher.doFinal(ciphertext, 0, read, plaintext, 0)
             output.write(plaintext, 0, produced)
             total += produced
+            onBytesWritten(total)
             if (final) return total
             index = nextIndex(index)
         }

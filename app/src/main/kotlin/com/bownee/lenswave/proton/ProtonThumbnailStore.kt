@@ -92,6 +92,7 @@ internal class ProtonThumbnailStore
                 return null
             }
             if (!isActive()) throw CancellationException("Thumbnail load cancelled before decrypting")
+            val observed = StoredFile.of(file)
             val bytes =
                 try {
                     secureFiles.read(scope(userId), file)
@@ -100,7 +101,7 @@ internal class ProtonThumbnailStore
                     // again); a Keystore or I/O hiccup keeps the file and is retried on the
                     // next bind, and must not read as "corrupt" to the caller either.
                     if (ProtonSnapshotCorruptionPolicy.isCorrupt(error)) {
-                        discardUnreadable(key, file)
+                        discardUnreadable(key, file, observed)
                         return null
                     }
                     transientReadFailures.report(error)
@@ -111,10 +112,9 @@ internal class ProtonThumbnailStore
             if (!isActive()) throw CancellationException("Thumbnail load cancelled before decoding")
             val bitmap = ProtonThumbnailCodec.decode(bytes)
             if (bitmap == null) {
-                discardUnreadable(key, file)
+                discardUnreadable(key, file, observed)
                 return null
             }
-            file.setLastModified(clock.nowMillis())
             return synchronized(lock(key)) {
                 val cached = bitmaps.get(key)?.takeUnless(Bitmap::isRecycled)
                 if (cached != null) {
@@ -130,14 +130,16 @@ internal class ProtonThumbnailStore
 
         /**
          * Deletes a stored file that failed to decrypt or decode, unless a write replaced it
-         * meanwhile: a write publishes its bitmap under the shard lock right after committing.
+         * meanwhile: the file on disk is then no longer the one that was [observed] before the
+         * read, or the write published its bitmap under the shard lock right after committing.
          */
         private fun discardUnreadable(
             key: ThumbnailKey,
             file: File,
+            observed: StoredFile,
         ) {
             synchronized(lock(key)) {
-                if (bitmaps.get(key) != null) return
+                if (bitmaps.get(key) != null || StoredFile.of(file) != observed) return
                 if (file.delete()) adjustCount(key.userId, -1)
             }
         }
@@ -149,11 +151,18 @@ internal class ProtonThumbnailStore
          * shard lock, and the bytes are stored as delivered unless they need downsampling, so a
          * normal 480 px thumbnail is never re-encoded; the lock covers only the commit and the
          * cache put.
+         *
+         * The validation bitmap goes into the process-wide memory cache only when
+         * [publishToMemory] asks for it: a background backfill writes thousands of thumbnails the
+         * grid is not looking at, and each one it published evicted a bitmap the grid was. Without
+         * publishing, the bitmap is recycled once the file is committed and the next bind decodes
+         * it from disk like any other stored thumbnail.
          */
         fun write(
             userId: String,
             nodeUid: String,
             bytes: ByteArray,
+            publishToMemory: Boolean = false,
         ) {
             val decoded =
                 ProtonThumbnailCodec.decodeForStore(bytes)
@@ -167,9 +176,14 @@ internal class ProtonThumbnailStore
                     val existed = target.isFile && target.length() > 0L
                     target.parentFile?.mkdirs()
                     secureFiles.write(scope(userId), target, stored, "Could not commit thumbnail cache file")
-                    target.setLastModified(clock.nowMillis())
                     if (!existed) adjustCount(userId, 1)
-                    bitmaps.put(key, bitmap)
+                    if (publishToMemory) {
+                        bitmaps.put(key, bitmap)
+                    } else {
+                        // A stale bitmap of the file this write replaced must not outlive it.
+                        bitmaps.remove(key)
+                        bitmap.recycle()
+                    }
                 }
             } catch (error: Throwable) {
                 bitmap.recycle()
@@ -327,6 +341,16 @@ internal class ProtonThumbnailStore
             val userId: String,
             val nodeUid: String,
         )
+
+        /** The identity of a stored file as far as a stat can tell; a replacing write changes it. */
+        private data class StoredFile(
+            val length: Long,
+            val lastModified: Long,
+        ) {
+            companion object {
+                fun of(file: File): StoredFile = StoredFile(file.length(), file.lastModified())
+            }
+        }
 
         private companion object {
             const val LOCK_COUNT = 32

@@ -14,6 +14,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import me.proton.core.domain.entity.UserId
 import me.proton.drive.sdk.ProgressUpdate
 import me.proton.drive.sdk.ProtonPhotosClient
@@ -26,7 +27,9 @@ import java.io.File
 import java.nio.channels.WritableByteChannel
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.io.path.createTempDirectory
 
 /**
  * Drives the real gateway over the real repositories, queues and session guard; only the disk
@@ -54,7 +57,8 @@ class ProtonPhotoGatewayTest {
     private val albums = ProtonAlbumRepository(clients, cache, snapshotSync)
     private val transfers = ProtonTransferCoordinator()
     private val renditions = ProtonRenditionDownloads(clients, cache, transfers, ProtonPreviewAdmission())
-    private val originals = ProtonOriginalDownloads(clients, cache, transfers)
+    private val materializer = FakeMaterializer()
+    private val originals = ProtonOriginalDownloads(clients, cache, transfers, materializer)
     private val sessionGuard = ProtonSessionGuard()
 
     init {
@@ -286,6 +290,94 @@ class ProtonPhotoGatewayTest {
         }
 
     @Test
+    fun `a cached original is handed to the player after its first verified segment`() =
+        runBlocking {
+            val directory = createTempDirectory("lenswave-originals").toFile()
+            val firstSegmentSeen = CountDownLatch(1)
+            val committed = File(directory, "video.image")
+            materializer.materialize = { _, onStarted, onBytesWritten ->
+                val part = File(directory, "video.image.part")
+                onStarted(part)
+                part.writeBytes(ByteArray(1_024))
+                onBytesWritten(1_024L)
+                // The player already reads while the rest of the file decrypts.
+                assertTrue(firstSegmentSeen.await(5L, TimeUnit.SECONDS))
+                part.appendBytes(ByteArray(512))
+                onBytesWritten(1_536L)
+                assertTrue(part.renameTo(committed))
+                committed
+            }
+            lateinit var stream: ProtonOriginalStream
+            try {
+                val file =
+                    withContext(Dispatchers.IO) {
+                        originals.downloadOriginalProgressively(USER_A, "a3") { ready ->
+                            stream = ready
+                            assertEquals(ProtonOriginalReadState(1_024L, complete = false), ready.awaitReadable(0L))
+                            firstSegmentSeen.countDown()
+                        }
+                    }
+
+                assertEquals(committed, file)
+                assertEquals(committed, stream.file)
+                assertEquals(ProtonOriginalDownloadProgress(1_536L, 1_536L, complete = true), stream.progress.value)
+                assertTrue(events.none { it.startsWith("readOriginal") })
+            } finally {
+                directory.deleteRecursively()
+            }
+        }
+
+    @Test
+    fun `a plaintext copy already on disk is handed to the player complete`() =
+        runBlocking {
+            val copy = File.createTempFile("lenswave-original", ".image").apply { writeBytes(ByteArray(300)) }
+            materializer.materialize = { _, _, _ -> copy }
+            lateinit var stream: ProtonOriginalStream
+            try {
+                val file = originals.downloadOriginalProgressively(USER_A, "a3") { ready -> stream = ready }
+
+                assertEquals(copy, file)
+                assertEquals(ProtonOriginalReadState(300L, complete = true), stream.awaitReadable(0L))
+            } finally {
+                copy.delete()
+            }
+        }
+
+    @Test
+    fun `a player that refuses the stream stops the decrypt between segments`() =
+        runBlocking {
+            val directory = createTempDirectory("lenswave-originals").toFile()
+            val refused = CountDownLatch(1)
+            materializer.materialize = { shouldContinue, onStarted, onBytesWritten ->
+                val part = File(directory, "video.image.part")
+                onStarted(part)
+                part.writeBytes(ByteArray(1_024))
+                onBytesWritten(1_024L)
+                assertTrue(refused.await(5L, TimeUnit.SECONDS))
+                // The decrypt asks before the next segment, as SegmentedEnvelope does.
+                while (shouldContinue()) Thread.sleep(5L)
+                part.delete()
+                throw CancellationException("Copy interrupted before completion")
+            }
+            try {
+                val outcome =
+                    withContext(Dispatchers.IO) {
+                        runCatching {
+                            originals.downloadOriginalProgressively(USER_A, "a3") { ready ->
+                                refused.countDown()
+                                throw CancellationException("Viewer moved to different media")
+                            }
+                        }
+                    }
+
+                assertTrue(outcome.exceptionOrNull() is CancellationException)
+                assertTrue(directory.listFiles().orEmpty().isEmpty())
+            } finally {
+                directory.deleteRecursively()
+            }
+        }
+
+    @Test
     fun `syncTimelineMetadata reconciles both queues after the sync and refreshes the tag listings`() =
         testScope.runTest {
             val gateway = gateway()
@@ -428,6 +520,23 @@ class ProtonPhotoGatewayTest {
             output: WritableByteChannel,
             onProgress: (ProgressUpdate) -> Unit,
         ) = error("The SDK must not be reached")
+    }
+
+    /** The progressive decrypt of a cached original, scripted per test; nothing is cached by default. */
+    private class FakeMaterializer : ProtonOriginalMaterializer {
+        var materialize: (
+            shouldContinue: () -> Boolean,
+            onStarted: (File) -> Unit,
+            onBytesWritten: (Long) -> Unit,
+        ) -> File? = { _, _, _ -> null }
+
+        override fun materialize(
+            userId: String,
+            nodeUid: String,
+            shouldContinue: () -> Boolean,
+            onStarted: (plaintextInProgress: File) -> Unit,
+            onBytesWritten: (totalBytes: Long) -> Unit,
+        ): File? = materialize(shouldContinue, onStarted, onBytesWritten)
     }
 
     /** The on-disk photo cache: listings keyed by user, renditions as name sets, no bitmaps. */

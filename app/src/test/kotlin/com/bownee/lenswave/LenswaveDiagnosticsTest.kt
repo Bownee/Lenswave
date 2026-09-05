@@ -114,6 +114,32 @@ class LenswaveDiagnosticsTest {
     }
 
     @Test
+    fun unstructuredProtonFailureKeepsOnlyATokenMessageAndTheCauseClass() {
+        val tokenMessage =
+            LenswaveDiagnostics.failureSummary(
+                operation = "original-download",
+                error = ProtonDriveSdkException(message = "DownloadTimeout", cause = java.io.IOException("socket")),
+            )
+        val freeFormMessage =
+            LenswaveDiagnostics.failureSummary(
+                operation = "original-download",
+                error =
+                    ProtonDriveSdkException(
+                        message = "GET https://example.test/drive/private-node-uid failed: /data/user/0/private.jpg",
+                    ),
+            )
+
+        assertEquals(
+            "operation=original-download failure=ProtonDriveSdkException " +
+                "sdkMessage=DownloadTimeout sdkCause=java.io.IOException",
+            tokenMessage,
+        )
+        assertEquals("operation=original-download failure=ProtonDriveSdkException", freeFormMessage)
+        assertFalse(freeFormMessage.contains("example.test"))
+        assertFalse(freeFormMessage.contains("private"))
+    }
+
+    @Test
     fun ordinaryFailureRetainsItsClassName() {
         val summary = LenswaveDiagnostics.failureSummary("local-operation", IllegalStateException())
 

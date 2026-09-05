@@ -67,6 +67,40 @@ class ProtonPhotoCacheInstrumentedTest {
         }
     }
 
+    @Test fun expiredDecryptedCopiesOfEveryUserAreSweptWhileFreshOnesAndOriginalsStay() {
+        val context = isolatedContext()
+        val clock = FakeClock(System.currentTimeMillis())
+        val secureFiles = SecureFileStore(File(context.filesDir, "secure-keys"))
+        val store = ProtonOriginalStore(context, secureFiles, clock)
+        val staleUser = "stale-${UUID.randomUUID()}"
+        val freshUser = "fresh-${UUID.randomUUID()}"
+        try {
+            val (stalePlaintext, staleEncrypted) = store.createTarget(staleUser, "old")
+            stalePlaintext.writeText("old plaintext")
+            store.commit(staleUser, "old", stalePlaintext, staleEncrypted)
+            clock.value += 31L * 60L * 1_000L
+            val (freshPlaintext, freshEncrypted) = store.createTarget(freshUser, "new")
+            freshPlaintext.writeText("new plaintext")
+            store.commit(freshUser, "new", freshPlaintext, freshEncrypted)
+
+            store.sweepExpiredDecryptedCopies()
+
+            // Only the copy past its TTL goes, whichever user it belongs to; the fresh copy and
+            // both encrypted originals stay, so the stale one simply decrypts again on read.
+            assertFalse(stalePlaintext.exists())
+            assertTrue(freshPlaintext.exists())
+            assertTrue(staleEncrypted.exists())
+            assertTrue(freshEncrypted.exists())
+            assertEquals("old plaintext", store.read(staleUser, "old")?.readText())
+        } finally {
+            store.clear(staleUser)
+            store.clear(freshUser)
+            secureFiles.deleteKey(ProtonStorageLayout.mediaScope(staleUser))
+            secureFiles.deleteKey(ProtonStorageLayout.mediaScope(freshUser))
+            context.testRoot.deleteRecursively()
+        }
+    }
+
     @Test fun thumbnailDatasetSurvivesMaintenanceAndAndroidCacheClearing() {
         val context = isolatedContext()
         val userId = "retention-${UUID.randomUUID()}"

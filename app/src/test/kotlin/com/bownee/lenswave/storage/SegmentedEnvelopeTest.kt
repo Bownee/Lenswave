@@ -228,6 +228,19 @@ class SegmentedEnvelopeTest {
     }
 
     @Test
+    fun reportsThePlaintextTotalAfterEveryVerifiedSegment() {
+        val encrypted = encrypt(pattern(SEGMENT * 2 + 10))
+        val totals = mutableListOf<Long>()
+        val output = ByteArrayOutputStream()
+
+        SegmentedEnvelope.decrypt(key, ByteArrayInputStream(encrypted), output, onBytesWritten = totals::add)
+
+        assertEquals(listOf(SEGMENT.toLong(), 2L * SEGMENT, 2L * SEGMENT + 10), totals)
+        // Each total was reported only once its bytes had been written.
+        assertEquals(totals.last(), output.size().toLong())
+    }
+
+    @Test
     fun segmentIvIsTheNonceFollowedByTheCounter() {
         val nonce = ByteArray(SegmentedEnvelope.NONCE_BYTES) { (it + 1).toByte() }
 
