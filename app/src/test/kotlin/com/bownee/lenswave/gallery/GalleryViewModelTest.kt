@@ -572,6 +572,30 @@ class GalleryViewModelTest {
             periodic.cancel()
         }
 
+    @Test
+    fun `a refresh the repository published as failed does not count as completed for the periodic sync`() =
+        runTest(dispatcher) {
+            val viewModel = connectedViewModel()
+            val periodic = backgroundScope.launch { viewModel.runPeriodicSync() }
+            runCurrent()
+
+            // A user-driven refresh shortly before a tick fails offline; the repository swallows the
+            // failure and publishes refreshFailed instead of a fresh listing.
+            advanceTimeBy(GalleryPeriodicSyncPolicy.CHECK_INTERVAL_MILLIS - 60_000L)
+            reader.failTimelineSyncs = true
+            viewModel.refreshAfterMutation()
+            runCurrent()
+            assertEquals(listOf("syncTimeline:u:false", "enqueue:u"), events)
+            events.clear()
+
+            // The tick that follows is not skipped as if the listing had been refreshed.
+            reader.failTimelineSyncs = false
+            advanceTimeBy(60_000L)
+            runCurrent()
+            assertEquals(listOf("syncTimeline:u:false", "enqueue:u"), events)
+            periodic.cancel()
+        }
+
     private fun viewModel() =
         GalleryViewModel(
             galleryText = text,
@@ -673,6 +697,7 @@ class GalleryViewModelTest {
         override val albumPhotosState = MutableStateFlow(ProtonAlbumPhotosState())
         var cachedAlbumPhotos: List<ProtonGalleryPhoto> = emptyList()
         var holdTimelineSyncs = false
+        var failTimelineSyncs = false
         val heldTimelineSyncs = mutableListOf<CompletableDeferred<Unit>>()
 
         override suspend fun syncTimelineMetadata(
@@ -680,6 +705,7 @@ class GalleryViewModelTest {
             forceRemote: Boolean,
         ) {
             events += "syncTimeline:${userId.id}:$forceRemote"
+            state.value = state.value.copy(refreshFailed = failTimelineSyncs)
             if (holdTimelineSyncs) CompletableDeferred<Unit>().also(heldTimelineSyncs::add).await()
         }
 
