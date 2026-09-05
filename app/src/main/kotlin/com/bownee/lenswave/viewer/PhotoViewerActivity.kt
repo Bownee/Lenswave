@@ -1168,6 +1168,9 @@ class PhotoViewerActivity :
         status.text = fallbackMessage
         status.visibility = View.VISIBLE
         retryButton.visibility = View.VISIBLE
+        // A sheet restored open waits for this: with no picture to attach to it would otherwise
+        // stay at alpha 0 while still counting as shown, blocking swipes and eating the first Back.
+        postDetailsSynchronization()
     }
 
     private var actionsEnabled = false
