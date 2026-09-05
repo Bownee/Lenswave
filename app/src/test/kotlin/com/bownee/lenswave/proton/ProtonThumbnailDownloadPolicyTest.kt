@@ -107,9 +107,11 @@ class ProtonThumbnailDownloadPolicyTest {
                 ProtonThumbnailDownloadPolicy.PREVIEW_PASS_TIMEOUT_MILLIS,
             ),
         )
-        // The preview fetched in place of a thumbnail runs under the shorter thumbnail deadline.
+        // The preview fetched in place of a thumbnail runs under the thumbnail deadline, so it
+        // waits whichever is shorter: its own first-answer allowance or that deadline. Asserted
+        // as the minimum rather than either constant, so it holds whichever of the two is larger.
         assertEquals(
-            ProtonThumbnailDownloadPolicy.SDK_PASS_TIMEOUT_MILLIS,
+            minOf(firstAnswer, ProtonThumbnailDownloadPolicy.SDK_PASS_TIMEOUT_MILLIS),
             ProtonThumbnailDownloadPolicy.answerWaitMillis(
                 ThumbnailType.PREVIEW,
                 answered = false,

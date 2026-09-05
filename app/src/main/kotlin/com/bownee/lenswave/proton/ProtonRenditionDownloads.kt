@@ -563,7 +563,18 @@ internal object ProtonThumbnailDownloadPolicy {
     const val MAX_CONCURRENT_BATCHES = 2
     const val BACKGROUND_CLAIM_SIZE = SDK_BATCH_SIZE * MAX_CONCURRENT_BATCHES
     const val PROGRESS_BATCH_SIZE = 4
-    const val SDK_PASS_TIMEOUT_MILLIS = 15_000L
+
+    /**
+     * The whole pass, not just the transfer: the SDK fetches the batch's metadata and keys before
+     * it can answer with the first thumbnail, and on a congested link that alone outran the old
+     * 15s deadline. Every pass then ended `stalled-16-of-16` with bytes already on the wire, the
+     * batch was cancelled and its downloaded bytes thrown away, and the nodes were re-claimed to
+     * download them again: on one phone that burned 239 kB over two minutes and stored nothing.
+     * [SDK_IDLE_TIMEOUT_MILLIS] still ends a pass 6s after the answers stop, so a healthy batch
+     * is no slower for this; the deadline only bites while waiting for the first answer, which is
+     * the case that was failing. Stays below [PREVIEW_PASS_TIMEOUT_MILLIS].
+     */
+    const val SDK_PASS_TIMEOUT_MILLIS = 60_000L
 
     /** Previews are a few hundred kilobytes each, so one pass of [SDK_BATCH_SIZE] gets longer. */
     const val PREVIEW_PASS_TIMEOUT_MILLIS = 90_000L
