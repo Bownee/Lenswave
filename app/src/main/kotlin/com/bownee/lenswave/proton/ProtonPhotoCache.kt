@@ -384,7 +384,26 @@ internal class ProtonPhotoCache
             previews.maintain(userId)
             originals.maintain(userId)
             sweepStaleWriteTemporaries(userId)
+            removeUnreferencedRenditions(userId)
             forgetRenditions(userId)
+        }
+
+        /**
+         * Deletes every stored rendition and original no listing names: a crash between a
+         * listing write and its rendition deletes leaves them behind, and so did every reconcile
+         * that found nothing changed. Once per activation is enough for strays; a reconcile
+         * deletes what it removed itself. Skipped whenever a listing could not be read right now,
+         * since a listing that reads as empty would otherwise delete everything it references.
+         */
+        private fun removeUnreferencedRenditions(userId: String) {
+            val timelineNodeUids = readNodeUidsOrNull(userId, indexFile(userId)) ?: return
+            val otherNodeUids = nonTimelineReferencedNodeUidsOrNull(userId) ?: return
+            val referencedNames = HashSet<String>((timelineNodeUids.size + otherNodeUids.size) * 4 / 3 + 1)
+            timelineNodeUids.mapTo(referencedNames, ::safeName)
+            otherNodeUids.mapTo(referencedNames, ::safeName)
+            thumbnails.removeUnreferenced(userId, referencedNames)
+            previews.removeUnreferenced(userId, referencedNames)
+            originals.removeUnreferenced(userId, referencedNames)
         }
 
         override fun sweepExpiredDecryptedCopies() {
@@ -416,7 +435,8 @@ internal class ProtonPhotoCache
             val changes = ProtonPhotoReconciliation.compare(cachedNodeUids, remote)
             // An unchanged library has no tag entry to drop and no rendition to delete, and
             // this used to decrypt every tag file, the albums index and every album-photo index
-            // on each sync to find that out. Stale write temporaries are swept by [trimUser].
+            // on each sync to find that out. Stale write temporaries and renditions no listing
+            // names are swept by [trimUser], once per activation rather than per reconcile.
             if (changes.isEmpty) return
             ProtonMediaTag.entries.forEach { tag ->
                 val tagged = readPhotoEntries(userId, tagIndexFile(userId, tag)) ?: return@forEach
@@ -430,14 +450,6 @@ internal class ProtonPhotoCache
                 previews.remove(userId, nodeUid)
                 originals.remove(userId, nodeUid)
             }
-            // The three stores judge their files against one shared set of retained file names
-            // rather than each hashing every referenced node uid on its own.
-            val referencedNames = HashSet<String>((remoteNodeUids.size + retainedNodeUids.size) * 4 / 3 + 1)
-            remoteNodeUids.mapTo(referencedNames, ::safeName)
-            retainedNodeUids.mapTo(referencedNames, ::safeName)
-            thumbnails.removeUnreferenced(userId, referencedNames)
-            previews.removeUnreferenced(userId, referencedNames)
-            originals.removeUnreferenced(userId, referencedNames)
             forgetRenditions(userId)
         }
 
@@ -634,7 +646,13 @@ internal class ProtonPhotoCache
         private fun readNodeUids(
             userId: String,
             index: File,
-        ): List<String> = parsePhotoIndex(userId, index) { value -> value.getString("nodeUid") }.orEmpty()
+        ): List<String> = readNodeUidsOrNull(userId, index).orEmpty()
+
+        /** [readNodeUids] that tells an absent or unreadable listing (null) from an empty one. */
+        private fun readNodeUidsOrNull(
+            userId: String,
+            index: File,
+        ): List<String>? = parsePhotoIndex(userId, index) { value -> value.getString("nodeUid") }
 
         private inline fun <T> parsePhotoIndex(
             userId: String,
@@ -707,6 +725,28 @@ internal class ProtonPhotoCache
                     ?.filter { it.extension == "json" }
                     ?.forEach { file -> addAll(readNodeUids(userId, file)) }
             }
+
+        /**
+         * Every node uid the albums index, the tag files and the album-photo indexes name, or
+         * null when any listing that exists cannot be read right now: a sweep judged against a
+         * partial set would delete renditions a listing still references.
+         */
+        private fun nonTimelineReferencedNodeUidsOrNull(userId: String): Set<String>? {
+            val referenced = HashSet<String>()
+            if (albumsIndexFile(userId).isFile) {
+                val albums = readAlbumsSnapshot(userId, ProtonStoredRenditions.NONE) ?: return null
+                albums.mapNotNullTo(referenced) { it.coverPhotoNodeUid }
+            }
+            ProtonMediaTag.entries.forEach { tag ->
+                val file = tagIndexFile(userId, tag)
+                if (file.isFile) referenced.addAll(readNodeUidsOrNull(userId, file) ?: return null)
+            }
+            albumPhotosDirectory(userId)
+                .listFiles()
+                ?.filter { it.extension == "json" }
+                ?.forEach { file -> referenced.addAll(readNodeUidsOrNull(userId, file) ?: return null) }
+            return referenced
+        }
 
         private fun writeAtomically(
             userId: String,
