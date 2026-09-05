@@ -168,13 +168,17 @@ internal class ProtonThumbnailForegroundInfoFactory(
             // already follow the phase (ProtonThumbnailWorkProgress.notificationProgress picks
             // the preview ones), so phrasing them differently made one steady job look like two
             // unrelated ones at the crossover. Separate resources so either can be reworded or
-            // translated on its own without the shapes drifting apart by accident.
-            phase == ProtonDownloadPhase.PREVIEWS -> {
-                context.getString(R.string.preview_download_notification_progress, downloaded, remaining)
-            }
-
+            // translated on its own without the shapes drifting apart by accident. Exhaustive,
+            // like the title, so a third phase fails to compile rather than borrow a line.
             else -> {
-                context.getString(R.string.thumbnail_download_notification_progress, downloaded, remaining)
+                context.getString(
+                    when (phase) {
+                        ProtonDownloadPhase.THUMBNAILS -> R.string.thumbnail_download_notification_progress
+                        ProtonDownloadPhase.PREVIEWS -> R.string.preview_download_notification_progress
+                    },
+                    downloaded,
+                    remaining,
+                )
             }
         }
 
