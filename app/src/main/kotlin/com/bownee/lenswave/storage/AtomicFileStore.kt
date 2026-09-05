@@ -6,6 +6,7 @@ import java.io.IOException
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
 
 internal object AtomicFileStore {
@@ -89,11 +90,10 @@ internal object AtomicFileStore {
      * [directory]; empty when the directory is absent or cannot be listed.
      *
      * One directory read and one stat per entry: a rendition store hydrates thousands of entries
-     * every time the gallery opens, so the listing is a single native call for the names and the
-     * stat is [File.length] alone (a directory of that name reads as stored; the stores never
-     * create one). A zero-length file (a rename that reached the disk before its data did) is
-     * left out, exactly as the stores' own stored checks leave it out, so a listed name is one
-     * that can be loaded.
+     * every time the gallery opens, so the listing is a single native call for the names and
+     * each entry is one attribute read (`isFile` plus `length` on a [File] would be two). A
+     * zero-length file (a rename that reached the disk before its data did) is left out, exactly
+     * as the stores' own stored checks leave it out, so a listed name is one that can be loaded.
      */
     fun nonEmptyFileNames(
         directory: File,
@@ -103,8 +103,14 @@ internal object AtomicFileStore {
         val names = directory.list() ?: return emptySet()
         return names.mapNotNullTo(HashSet()) { name ->
             if (!name.endsWith(suffix)) return@mapNotNullTo null
-            // A file removed between the listing and the stat has length zero: not stored.
-            name.removeSuffix(suffix).takeIf { File(directory, name).length() > 0L }
+            val attributes =
+                try {
+                    Files.readAttributes(File(directory, name).toPath(), BasicFileAttributes::class.java)
+                } catch (_: IOException) {
+                    // Removed between the listing and the stat: not stored.
+                    return@mapNotNullTo null
+                }
+            name.removeSuffix(suffix).takeIf { attributes.isRegularFile && attributes.size() > 0L }
         }
     }
 
