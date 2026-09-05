@@ -205,7 +205,8 @@ class ProtonRenditionDownloadsTest {
                 result.failures,
             )
             assertEquals(listOf(ThumbnailType.PREVIEW to listOf("a", "b")), client.enumerations)
-            assertEquals(ProtonThumbnailDownloadPolicy.PREVIEW_FIRST_ANSWER_TIMEOUT_MILLIS, currentTime)
+            // The first-answer allowance ends the pass, well before the preview deadline.
+            assertEquals(ProtonThumbnailDownloadPolicy.FIRST_ANSWER_TIMEOUT_MILLIS, currentTime)
         }
 
     @Test
