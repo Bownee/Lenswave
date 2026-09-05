@@ -263,13 +263,19 @@ class GalleryViewModel internal constructor(
      * session has settled; the call then waits for the account (bounded, see
      * [awaitSessionUserId]) rather than dropping a confirmed destructive action without a word.
      * The session that settles may belong to another account than the one the dialog was shown
-     * for; [confirmedUserId] is that account, and a mismatch is a failure, not a trash.
+     * for; [confirmedUserId] is that account, and a mismatch is a failure, not a trash. A second
+     * confirmation while one is in flight (possible during that wait) is refused and reported as
+     * failed, so the selection bar and the toast answer it rather than leaving it unheard.
      */
     fun trashPhotos(
         confirmedUserId: UserId,
         nodeUids: List<String>,
     ) {
-        if (mutationInFlight || nodeUids.isEmpty()) return
+        if (nodeUids.isEmpty()) return
+        if (mutationInFlight) {
+            mutableMutationEvents.trySend(GalleryMutationEvent.TrashFailed)
+            return
+        }
         mutationInFlight = true
         viewModelScope.launch {
             try {

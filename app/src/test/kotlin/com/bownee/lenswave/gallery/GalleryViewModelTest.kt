@@ -251,17 +251,24 @@ class GalleryViewModelTest {
             viewModel.trashPhotos(USER, listOf("p2"))
             runCurrent()
 
-            assertEquals("a second call while one is in flight is dropped", listOf("trash:u:p1"), events)
+            assertEquals("a second call while one is in flight is refused", listOf("trash:u:p1"), events)
             deletionExecutor.result = PhotoMutationResult(successfulCount = 1, failedCount = 1)
             deletionExecutor.held.single().complete(Unit)
             runCurrent()
 
             assertTrue(viewModel.selectedStableIds.isEmpty())
-            // The activity that started the call may be gone; the next one still hears the outcome.
+            // The activity that started the call may be gone; the next one still hears the outcome,
+            // and the refused call is reported as failed rather than dropped without a word.
             val received = mutableListOf<GalleryMutationEvent>()
             backgroundScope.launch { viewModel.mutationEvents.collect { received += it } }
             runCurrent()
-            assertEquals(listOf(GalleryMutationEvent.Trashed(successfulCount = 1, failedCount = 1)), received)
+            assertEquals(
+                listOf(
+                    GalleryMutationEvent.TrashFailed,
+                    GalleryMutationEvent.Trashed(successfulCount = 1, failedCount = 1),
+                ),
+                received,
+            )
 
             deletionExecutor.failure = IllegalStateException("offline")
             viewModel.trashPhotos(USER, listOf("p2"))
@@ -452,6 +459,31 @@ class GalleryViewModelTest {
             runCurrent()
             assertEquals(2, received.size)
             assertEquals(GalleryMutationEvent.TrashFailed, received.last())
+        }
+
+    @Test
+    fun `a second confirmation during the session wait is reported as failed without stopping the first`() =
+        runTest(dispatcher) {
+            val viewModel = viewModel()
+            val received = mutableListOf<GalleryMutationEvent>()
+            backgroundScope.launch { viewModel.mutationEvents.collect { received += it } }
+
+            viewModel.trashPhotos(USER, listOf("p1"))
+            runCurrent()
+            viewModel.trashPhotos(USER, listOf("p2"))
+            runCurrent()
+            assertEquals(listOf<GalleryMutationEvent>(GalleryMutationEvent.TrashFailed), received)
+
+            session.value = ProtonAccountSessionState(readyAccount(USER), USER, initialized = true)
+            runCurrent()
+            assertEquals(
+                "the first confirmation still runs",
+                listOf("trash:u:p1"),
+                events.filter { it.startsWith("trash:") },
+            )
+            deletionExecutor.held.single().complete(Unit)
+            runCurrent()
+            assertEquals(GalleryMutationEvent.Trashed(successfulCount = 1, failedCount = 0), received.last())
         }
 
     @Test
