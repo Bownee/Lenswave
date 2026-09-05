@@ -563,6 +563,64 @@ class ProtonThumbnailQueueTest {
             assertEquals(emptyList<ProtonThumbnailQueueEntry>(), store.entries.getValue(USER_ID))
         }
 
+    @Test
+    fun aDroppedEntryIsNotQueuedAgainByTheNextReconciliationForAWeek() =
+        runTest {
+            val clock = FakeClock()
+            val queue = queue(FakeStore(), clock)
+            queue.replaceSource(USER_ID, "timeline", candidates("missing", "fine"))
+            queue.claimReady(USER_ID, limit = 2)
+            queue.settle(USER_ID, setOf("fine"), mapOf("missing" to ThumbnailFailureKind.NOT_FOUND))
+            assertEquals(0, queue.pendingCount(USER_ID))
+
+            // Every sync re-adds each photo without a thumbnail; the dropped one stays out.
+            queue.replaceSource(USER_ID, "timeline", candidates("missing", "fine"))
+            queue.replaceSource(USER_ID, "album:one", candidates("missing"))
+            assertEquals(listOf("fine"), queue.claimReady(USER_ID, limit = 2).map { it.nodeUid })
+
+            clock.value += ProtonThumbnailQueue.SUPPRESSION_MILLIS
+            queue.replaceSource(USER_ID, "timeline", candidates("missing"))
+            assertEquals(1, queue.pendingCount(USER_ID))
+        }
+
+    @Test
+    fun anEntryThatSpentItsRetriesIsSuppressedUntilAnExplicitAsk() =
+        runTest {
+            val clock = FakeClock()
+            val queue = queue(FakeStore(), clock)
+            queue.replaceSource(USER_ID, "timeline", candidates("stubborn"))
+            repeat(ProtonThumbnailQueue.MAX_RETRY_COUNT) {
+                clock.value += 60L * 60L * 1_000L
+                queue.claimReady(USER_ID, limit = 1)
+                queue.settle(USER_ID, emptySet(), setOf("stubborn"))
+            }
+            assertEquals(0, queue.pendingCount(USER_ID))
+
+            queue.replaceSource(USER_ID, "timeline", candidates("stubborn"))
+            assertEquals(0, queue.pendingCount(USER_ID))
+
+            // The grid could not decode what is stored and asks outright: that outranks the drop.
+            queue.retryNow(USER_ID, candidate("stubborn", 1), setOf("timeline"))
+            assertEquals("stubborn", queue.claimReady(USER_ID, limit = 1).single().nodeUid)
+            queue.release(USER_ID, listOf("stubborn"))
+            queue.replaceSource(USER_ID, "timeline", candidates("stubborn"))
+            assertEquals(1, queue.pendingCount(USER_ID))
+        }
+
+    @Test
+    fun forgettingAUserForgetsItsSuppressions() =
+        runTest {
+            val queue = queue(FakeStore(), FakeClock())
+            queue.replaceSource(USER_ID, "timeline", candidates("missing"))
+            queue.claimReady(USER_ID, limit = 1)
+            queue.settle(USER_ID, emptySet(), mapOf("missing" to ThumbnailFailureKind.NOT_FOUND))
+
+            queue.forget(USER_ID)
+            queue.replaceSource(USER_ID, "timeline", candidates("missing"))
+
+            assertEquals(1, queue.pendingCount(USER_ID))
+        }
+
     private fun TestScope.queue(
         store: FakeStore,
         clock: FakeClock,

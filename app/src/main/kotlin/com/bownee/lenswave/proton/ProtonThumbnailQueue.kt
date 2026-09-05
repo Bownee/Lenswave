@@ -111,6 +111,14 @@ internal class ProtonThumbnailQueue(
     private val claimedNodeUids = mutableMapOf<String, MutableSet<String>>()
     private val persistence = mutableMapOf<String, UserPersistence>()
 
+    /**
+     * Nodes [settle] dropped (no such rendition, or the last retry spent), with when each may be
+     * queued again: every reconciliation re-adds each photo without a rendition, so without this
+     * a dropped node was back in the queue at the next sync and asked of the SDK forever. Kept in
+     * memory for the life of the process; the queue file's format does not carry it yet.
+     */
+    private val suppressedUntilByUser = mutableMapOf<String, MutableMap<String, Long>>()
+
     /** Bumped by [forget] so a read that was in progress for that user is not installed. */
     private var forgetCount = 0L
 
@@ -170,8 +178,10 @@ internal class ProtonThumbnailQueue(
                     slot.setValue(entry.copy(sourceCaptureTimes = kept))
                 }
             }
+            val suppressed = suppressedNodeUids(userId)
             pendingCandidatesBySource.forEach { (source, candidates) ->
                 candidates.distinctBy(ProtonThumbnailCandidate::nodeUid).forEach { candidate ->
+                    if (candidate.nodeUid in suppressed) return@forEach
                     val existing = entries[candidate.nodeUid]
                     originals.putIfAbsent(candidate.nodeUid, existing)
                     entries[candidate.nodeUid] = existing?.copy(
@@ -200,6 +210,8 @@ internal class ProtonThumbnailQueue(
         hydrate(userId)
         mutex.withLock {
             val entries = entries(userId)
+            // An explicit ask (the grid failed to decode what is stored) outranks a drop.
+            suppressedUntilByUser[userId]?.remove(candidate.nodeUid)
             val existing = entries[candidate.nodeUid]
             val sourceCaptureTimes = existing?.sourceCaptureTimes.orEmpty().toMutableMap()
             sources.forEach { source ->
@@ -248,10 +260,11 @@ internal class ProtonThumbnailQueue(
 
     /**
      * Removes successful entries and reschedules failed ones with backoff. An entry that has
-     * failed [MAX_RETRY_COUNT] times is dropped until the next sync queues it afresh, so one bad
-     * photo cannot keep the worker retrying for days; one Proton has no such rendition for
-     * ([ThumbnailFailureKind.NOT_FOUND]) is dropped at once, since retrying cannot help and every
-     * retry is a full SDK enumeration.
+     * failed [MAX_RETRY_COUNT] times is dropped, so one bad photo cannot keep the worker retrying
+     * for days; one Proton has no such rendition for ([ThumbnailFailureKind.NOT_FOUND]) is
+     * dropped at once, since retrying cannot help and every retry is a full SDK enumeration. A
+     * dropped node stays out of the queue for [SUPPRESSION_MILLIS] however often the listings
+     * are reconciled; [retryNow] lifts that.
      */
     suspend fun settle(
         userId: String,
@@ -273,6 +286,7 @@ internal class ProtonThumbnailQueue(
                 val retryCount = entry.retryCount + 1
                 if (kind == ThumbnailFailureKind.NOT_FOUND || retryCount >= MAX_RETRY_COUNT) {
                     entries.remove(nodeUid)
+                    suppressedUntilByUser.getOrPut(userId, ::mutableMapOf)[nodeUid] = now + SUPPRESSION_MILLIS
                     dropped++
                     return@forEach
                 }
@@ -341,6 +355,7 @@ internal class ProtonThumbnailQueue(
             forgetCount++
             entriesByUser.remove(userId)
             claimedNodeUids.remove(userId)
+            suppressedUntilByUser.remove(userId)
             persistence.remove(userId)?.scheduledFlush?.cancel()
         }
         writeMutex.withLock {}
@@ -448,6 +463,15 @@ internal class ProtonThumbnailQueue(
     private fun entries(userId: String): LinkedHashMap<String, ProtonThumbnailQueueEntry> =
         entriesByUser.getOrPut(userId, ::linkedMapOf)
 
+    /** Only under [mutex]: the nodes still kept out of the queue, with the expired ones forgotten. */
+    private fun suppressedNodeUids(userId: String): Set<String> {
+        val suppressed = suppressedUntilByUser[userId] ?: return emptySet()
+        val now = clock.nowMillis()
+        suppressed.values.removeAll { until -> until <= now }
+        if (suppressed.isEmpty()) suppressedUntilByUser.remove(userId)
+        return suppressed.keys
+    }
+
     private fun retryDelayMillis(retryCount: Int): Long {
         val multiplier = 1L shl (retryCount - 1).coerceIn(0, MAX_RETRY_SHIFT)
         return (BASE_RETRY_MILLIS * multiplier).coerceAtMost(MAX_RETRY_MILLIS)
@@ -469,6 +493,9 @@ internal class ProtonThumbnailQueue(
     companion object {
         /** Six failures span roughly half an hour of backoff before an entry is given up on. */
         const val MAX_RETRY_COUNT = 6
+
+        /** How long a dropped node stays out of the queue whatever the listings say. */
+        const val SUPPRESSION_MILLIS = 7L * 24L * 60L * 60L * 1_000L
         private const val BASE_RETRY_MILLIS = 30_000L
         private const val MAX_RETRY_MILLIS = 15L * 60L * 1_000L
         private const val MAX_RETRY_SHIFT = 5
