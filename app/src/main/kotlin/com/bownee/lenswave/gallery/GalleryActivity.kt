@@ -155,7 +155,12 @@ class GalleryActivity :
         super.onCreate(savedInstanceState)
         // Set before any content: the thumbnails are the same photos the viewer keeps out of screenshots.
         applyScreenshotPolicy()
-        updatePresenter = GalleryUpdatePresenter(activity = this, appUpdateChecker = appUpdateChecker)
+        updatePresenter =
+            GalleryUpdatePresenter(
+                host = GalleryUpdatePresenter.ActivityHost(this),
+                updates = GalleryUpdatePresenter.CheckerUpdates(appUpdateChecker),
+                scope = lifecycleScope,
+            )
         updatePresenter.restore(savedInstanceState)
         configureEdgeToEdgeWindow()
         authCoordinator =
@@ -174,7 +179,11 @@ class GalleryActivity :
                 onDisconnectProton = viewModel::disconnectProton,
                 onScreenshotPolicyChanged = ::applyScreenshotPolicy,
             )
-        deletionCoordinator = GalleryDeletionCoordinator(activity = this)
+        deletionCoordinator =
+            GalleryDeletionCoordinator(
+                host = GalleryDeletionCoordinator.ActivityHost(this),
+                text = AndroidGalleryText(resources),
+            )
         buildInterface()
         onBackPressedDispatcher.addCallback(
             this,
