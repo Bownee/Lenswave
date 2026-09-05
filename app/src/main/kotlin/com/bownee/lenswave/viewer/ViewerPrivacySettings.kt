@@ -8,8 +8,8 @@ import javax.inject.Singleton
 
 /**
  * The user's choices about what the viewer lets out of the app. Read on the main thread in the
- * viewer's onCreate, so the value is kept in memory after the first read and the preference file
- * can be loaded ahead of time with [warm].
+ * viewer's onCreate, so the value is kept in memory after the first read; the preference file is
+ * loaded ahead of time by the gallery's start-up warm-up, which names it by [PREFERENCES_NAME].
  */
 @Singleton
 class ViewerPrivacySettings
@@ -34,16 +34,8 @@ class ViewerPrivacySettings
             }
 
         companion object {
+            /** The platform caches one SharedPreferences per name, so a warm-up by this name shares the injected instance's load. */
             const val PREFERENCES_NAME = "viewer-privacy"
             private const val KEY_BLOCK_SCREENSHOTS = "block-screenshots"
-
-            /**
-             * Loads the preference file off the main thread so the viewer's first read finds it
-             * in memory. The platform caches the SharedPreferences instance per name, so the
-             * injected instance shares the load. For the application's start-up warm-up.
-             */
-            fun warm(context: Context) {
-                context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE).all
-            }
         }
     }
