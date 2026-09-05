@@ -262,14 +262,25 @@ class GalleryViewModel internal constructor(
      * The confirmation dialog survives a process death and may answer before the restored
      * session has settled; the call then waits for the account (bounded, see
      * [awaitSessionUserId]) rather than dropping a confirmed destructive action without a word.
+     * The session that settles may belong to another account than the one the dialog was shown
+     * for; [confirmedUserId] is that account, and a mismatch is a failure, not a trash. A second
+     * confirmation while one is in flight (possible during that wait) is refused and reported as
+     * failed, so the selection bar and the toast answer it rather than leaving it unheard.
      */
-    fun trashPhotos(nodeUids: List<String>) {
-        if (mutationInFlight || nodeUids.isEmpty()) return
+    fun trashPhotos(
+        confirmedUserId: UserId,
+        nodeUids: List<String>,
+    ) {
+        if (nodeUids.isEmpty()) return
+        if (mutationInFlight) {
+            mutableMutationEvents.trySend(GalleryMutationEvent.TrashFailed)
+            return
+        }
         mutationInFlight = true
         viewModelScope.launch {
             try {
                 val userId = currentUserId ?: awaitSessionUserId()
-                if (userId == null) {
+                if (userId != confirmedUserId) {
                     mutableMutationEvents.trySend(GalleryMutationEvent.TrashFailed)
                 } else {
                     val result = deletionExecutor.trashProton(userId, nodeUids)
@@ -304,11 +315,14 @@ class GalleryViewModel internal constructor(
     /**
      * The answer from the privacy dialog. Runs in this scope: the dialog is a fragment that
      * survives a rotation, and its write must too, or a rotation right after the toggle loses
-     * it. The account may have gone while the dialog was up; that is reported as not saved.
+     * it. The fragment manager also restores the dialog after a process death, where a Save may
+     * land before the session has settled; like [trashPhotos] the write then waits for the
+     * account (see [awaitSessionUserId]). None arriving, or the account having gone while the
+     * dialog was up, is reported as not saved.
      */
     fun saveTelemetryPreference(enabled: Boolean) {
-        val userId = currentUserId
         viewModelScope.launch {
+            val userId = currentUserId ?: awaitSessionUserId()
             val saved =
                 userId != null &&
                     try {

@@ -243,7 +243,10 @@ class GalleryActivity :
 
     override fun onUpdateSnoozed(versionName: String) = updatePresenter.onUpdateSnoozed(versionName)
 
-    override fun onTrashConfirmed(nodeUids: List<String>) = viewModel.trashPhotos(nodeUids)
+    override fun onTrashConfirmed(
+        userId: UserId,
+        nodeUids: List<String>,
+    ) = viewModel.trashPhotos(userId, nodeUids)
 
     override fun onTelemetryPreferenceSaved(enabled: Boolean) = viewModel.saveTelemetryPreference(enabled)
 
@@ -563,7 +566,8 @@ class GalleryActivity :
     }
 
     private fun deleteSelectedPhotos() {
-        deletionCoordinator.delete(adapter.selectedPhotos())
+        val userId = currentUiState.currentUserId ?: return
+        deletionCoordinator.delete(userId, adapter.selectedPhotos())
     }
 
     private fun updateNavigationControls() {

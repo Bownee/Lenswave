@@ -428,7 +428,8 @@ class PhotoViewerActivity :
     }
 
     override fun onStop() {
-        video.pause()
+        // Like onDestroy: an onCreate that failed before buildInterface has no video controller.
+        if (this::video.isInitialized) video.pause()
         super.onStop()
     }
 
@@ -800,15 +801,17 @@ class PhotoViewerActivity :
                     // the read (a viewer relaunched from recents after a sign-out, say). Left to
                     // the branch below it would end the job with the spinner still up and no retry.
                     thumbnailLoad?.cancel()
-                    cancelPreviewLoad()
+                    // The preview job belongs to whichever photo is current: a stale load's
+                    // failure must not cancel the preview the new photo is reading.
                     if (request.stableId != requestedPhoto.stableId) return@launch
+                    cancelPreviewLoad()
                     handlePhotoLoadFailure(error, getString(R.string.could_not_open_proton_photo_signed_out))
                 } catch (error: CancellationException) {
                     throw error
                 } catch (error: Throwable) {
                     thumbnailLoad?.cancel()
-                    cancelPreviewLoad()
                     if (request.stableId != requestedPhoto.stableId) return@launch
+                    cancelPreviewLoad()
                     if (!retryButton.isVisible) {
                         handlePhotoLoadFailure(error, getString(R.string.could_not_download_proton_photo))
                     }
@@ -1291,13 +1294,19 @@ class PhotoViewerActivity :
             return
         }
         TrashConfirmationDialogFragment
-            .create(listOf(request.nodeUid), singlePhoto = true)
+            .create(UserId(request.userId), listOf(request.nodeUid), singlePhoto = true)
             .show(supportFragmentManager, TrashConfirmationDialogFragment.TAG)
     }
 
-    /** The dialog may have been answered on a recreated activity; the photo it named is the one to trash. */
-    override fun onTrashConfirmed(nodeUids: List<String>) {
-        val target = navigationRequests.firstOrNull { it.nodeUid in nodeUids } ?: return
+    /**
+     * The dialog may have been answered on a recreated activity; the photo it named is the one to
+     * trash, and only under the account it was confirmed for.
+     */
+    override fun onTrashConfirmed(
+        userId: UserId,
+        nodeUids: List<String>,
+    ) {
+        val target = navigationRequests.firstOrNull { it.userId == userId.id && it.nodeUid in nodeUids } ?: return
         trashProtonPhoto(target)
     }
 
