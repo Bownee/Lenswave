@@ -402,12 +402,24 @@ internal object ProtonThumbnailCodec {
     private const val TARGET_LONG_EDGE = 480
     private const val JPEG_QUALITY = 88
 
-    /** The grid-sized bitmap, plus whether the source was subsampled to get there. */
+    /** The grid-sized bitmap, plus whether the source was shrunk to get there. */
     class Decoded(
         val bitmap: Bitmap,
         /** True when the delivered bytes are larger than the grid needs and are worth re-encoding. */
         val downsampled: Boolean,
     )
+
+    /**
+     * Whether the bytes Proton delivered are worth replacing by a re-encode of the grid-sized
+     * bitmap: when the decoder subsampled them, or when the decoded picture still had to be
+     * scaled down. A source between one and two times the target is never subsampled (the
+     * sample size is a power of two) yet is shrunk; keeping its bytes made every later load
+     * decode the larger picture again.
+     */
+    fun needsReencode(
+        sampleSize: Int,
+        rescaled: Boolean,
+    ): Boolean = sampleSize > 1 || rescaled
 
     fun decode(bytes: ByteArray): Bitmap? = decodeForStore(bytes)?.bitmap
 
@@ -424,15 +436,20 @@ internal object ProtonThumbnailCodec {
             }
         val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options) ?: return null
         val longEdge = max(decoded.width, decoded.height)
-        if (longEdge <= TARGET_LONG_EDGE) return Decoded(decoded, downsampled = sampleSize > 1)
+        if (longEdge <=
+            TARGET_LONG_EDGE
+        ) {
+            return Decoded(decoded, downsampled = needsReencode(sampleSize, rescaled = false))
+        }
         val scale = TARGET_LONG_EDGE.toFloat() / longEdge
         val scaled =
             decoded.scale(
                 (decoded.width * scale).toInt().coerceAtLeast(1),
                 (decoded.height * scale).toInt().coerceAtLeast(1),
             )
-        if (scaled !== decoded) decoded.recycle()
-        return Decoded(scaled, downsampled = sampleSize > 1)
+        val rescaled = scaled !== decoded
+        if (rescaled) decoded.recycle()
+        return Decoded(scaled, downsampled = needsReencode(sampleSize, rescaled))
     }
 
     fun encode(bitmap: Bitmap): ByteArray =
