@@ -104,13 +104,36 @@ class ViewerMutationCoordinatorTest {
 
             assertTrue(coordinator.outcomes.value.isEmpty())
             assertFalse(coordinator.isInFlight("s1"))
-            // The forgotten call still answers; its late outcome is a new one the viewer can consume.
+            // The forgotten call still answers, into an epoch that is closed: the outcome belongs
+            // to the account that went and never reaches the next account's queue.
             mutations.trashAnswers.single().complete(ProtonTrashResult(trashedCount = 1, failedCount = 0))
             runCurrent()
+            assertTrue(coordinator.outcomes.value.isEmpty())
+            assertFalse(coordinator.isInFlight("s1"))
+        }
+
+    @Test
+    fun `a disowned call does not release a photo the next account has claimed`() =
+        runTest(dispatcher) {
+            val coordinator = coordinator()
+            coordinator.trash(UserId("u"), request)
+            runCurrent()
+
+            coordinator.forgetAll()
+            assertTrue("the photo is free at once", coordinator.setFavorite(UserId("v"), request, favorite = true))
+            runCurrent()
+            mutations.trashAnswers.single().complete(ProtonTrashResult(trashedCount = 1, failedCount = 0))
+            runCurrent()
+
+            assertTrue("the new claim survives the old call ending", coordinator.isInFlight("s1"))
+            assertTrue(coordinator.outcomes.value.isEmpty())
+            mutations.favoriteAnswers.single().complete(ProtonFavoriteResult(updatedCount = 1))
+            runCurrent()
             assertEquals(
-                listOf(ViewerMutationCoordinator.Outcome.Trashed("s1", succeeded = true)),
+                listOf(ViewerMutationCoordinator.Outcome.FavoriteSet("s1", favorite = true, succeeded = true)),
                 coordinator.outcomes.value,
             )
+            assertFalse(coordinator.isInFlight("s1"))
         }
 
     private fun TestScope.coordinator() =
