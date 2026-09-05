@@ -2,7 +2,6 @@ package com.bownee.lenswave.viewer
 
 import android.content.Context
 import android.net.Uri
-import android.text.format.Formatter
 import android.view.View
 import androidx.core.view.isVisible
 import androidx.media3.common.MediaItem
@@ -414,38 +413,29 @@ internal class ViewerVideoController(
             playerView.player = created
         }
 
+    /**
+     * The download shows as the bar alone: the byte counts and percentage it used to spell out
+     * sat in the middle of the picture, over the thumbnail, and said nothing the bar does not.
+     */
     private fun updateDownloadProgress(downloadProgress: ProtonOriginalDownloadProgress) {
         progress.visibility = View.VISIBLE
-        status.visibility = View.VISIBLE
+        status.visibility = View.GONE
         retryButton.visibility = View.GONE
         when (val display = ViewerVideoProgressPolicy.display(downloadProgress)) {
             ViewerVideoProgressPolicy.Display.Preparing -> {
                 progress.isIndeterminate = false
                 progress.max = ViewerVideoProgressPolicy.PROGRESS_MAX
                 progress.progress = ViewerVideoProgressPolicy.PROGRESS_MAX
-                status.setText(R.string.preparing_video)
             }
 
             is ViewerVideoProgressPolicy.Display.Unsized -> {
                 progress.isIndeterminate = true
-                status.text =
-                    context.getString(
-                        R.string.downloading_video_size,
-                        Formatter.formatShortFileSize(context, display.downloadedBytes),
-                    )
             }
 
             is ViewerVideoProgressPolicy.Display.Sized -> {
                 progress.isIndeterminate = false
                 progress.max = ViewerVideoProgressPolicy.PROGRESS_MAX
                 progress.progress = display.progress
-                status.text =
-                    context.getString(
-                        R.string.downloading_video_progress,
-                        Formatter.formatShortFileSize(context, display.downloadedBytes),
-                        Formatter.formatShortFileSize(context, display.totalBytes),
-                        display.percent,
-                    )
             }
         }
     }
