@@ -61,6 +61,31 @@ class AtomicFileStoreTest {
     }
 
     @Test
+    fun `non-empty file names list only the regular non-empty files with the extension`() {
+        val directory = File(temporaryFolder.root, "thumbnails")
+        directory.mkdirs()
+        File(directory, "stored.thumb").writeText("bytes")
+        File(directory, "empty.thumb").writeText("")
+        File(directory, "partial.thumb.part").writeText("bytes")
+        File(directory, "other.preview").writeText("bytes")
+        File(directory, "nested.thumb").mkdirs()
+
+        assertEquals(setOf("stored"), AtomicFileStore.nonEmptyFileNames(directory, "thumb"))
+        assertEquals(setOf("other"), AtomicFileStore.nonEmptyFileNames(directory, "preview"))
+    }
+
+    @Test
+    fun `non-empty file names of a missing directory or a plain file are empty`() {
+        val file = File(temporaryFolder.root, "not-a-directory").apply { writeText("x") }
+
+        assertEquals(
+            emptySet<String>(),
+            AtomicFileStore.nonEmptyFileNames(File(temporaryFolder.root, "absent"), "thumb"),
+        )
+        assertEquals(emptySet<String>(), AtomicFileStore.nonEmptyFileNames(file, "thumb"))
+    }
+
+    @Test
     fun `safe names are stable and contain no path separators`() {
         val safeName = AtomicFileStore.safeName("account/../photo")
 

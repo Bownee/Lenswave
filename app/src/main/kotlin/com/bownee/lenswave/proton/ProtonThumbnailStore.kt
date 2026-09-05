@@ -51,15 +51,12 @@ internal class ProtonThumbnailStore
 
         /**
          * File names (without extension) of every stored thumbnail, from a single directory
-         * listing. Writes are atomic renames, so a listed name is a complete file; a zero-length
-         * file (a rename that hit the disk before its data did) is judged exactly as [exists] and
-         * [count] judge it, so a photo listed here is one the grid can actually load.
+         * listing and one stat per entry. Writes are atomic renames, so a listed name is a complete
+         * file; a zero-length file (a rename that hit the disk before its data did) is judged
+         * exactly as [exists] and [count] judge it, so a photo listed here is one the grid can
+         * actually load.
          */
-        fun storedNames(userId: String): Set<String> =
-            directory(userId)
-                .listFiles()
-                ?.mapNotNullTo(HashSet()) { file -> file.nameWithoutExtension.takeIf { isStoredThumbnail(file) } }
-                .orEmpty()
+        fun storedNames(userId: String): Set<String> = AtomicFileStore.nonEmptyFileNames(directory(userId), EXTENSION)
 
         /** The decoded bitmap when it is already in memory; never touches disk or blocks on a decode. */
         fun peek(
@@ -312,7 +309,7 @@ internal class ProtonThumbnailStore
         private fun file(
             userId: String,
             nodeUid: String,
-        ): File = File(directory(userId), "${AtomicFileStore.safeName(nodeUid)}.thumb")
+        ): File = File(directory(userId), "${AtomicFileStore.safeName(nodeUid)}.$EXTENSION")
 
         private fun directory(userId: String): File =
             File(File(root, AtomicFileStore.safeName(userId)), ProtonStorageLayout.THUMBNAILS_DIRECTORY)
@@ -335,7 +332,7 @@ internal class ProtonThumbnailStore
 
         /** The single definition of "stored" shared by [exists], [count], [storedNames] and the sweeps. */
         private fun isStoredThumbnail(file: File): Boolean =
-            file.extension == "thumb" && file.isFile && file.length() > 0L
+            file.extension == EXTENSION && file.isFile && file.length() > 0L
 
         /** The only decoded-thumbnail cache in the process, so it must hold a whole gallery screen. */
         private fun bitmapCacheSize(): Int =
@@ -366,6 +363,7 @@ internal class ProtonThumbnailStore
 
         private companion object {
             const val LOCK_COUNT = 32
+            const val EXTENSION = "thumb"
         }
     }
 

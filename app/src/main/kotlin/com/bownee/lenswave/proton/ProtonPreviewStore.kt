@@ -63,16 +63,12 @@ internal class ProtonPreviewStore
         ): Boolean = isStoredPreview(file(userId, nodeUid))
 
         /**
-         * File names (without extension) of every stored preview, from a single directory listing.
-         * A zero-length file is excluded exactly as [exists] and [count] exclude it, so the timeline
-         * never marks a preview as stored that the viewer cannot load and the queue would never
-         * fetch again.
+         * File names (without extension) of every stored preview, from a single directory listing
+         * and one stat per entry. A zero-length file is excluded exactly as [exists] and [count]
+         * exclude it, so the timeline never marks a preview as stored that the viewer cannot load
+         * and the queue would never fetch again.
          */
-        fun storedNames(userId: String): Set<String> =
-            directory(userId)
-                .listFiles()
-                ?.mapNotNullTo(HashSet()) { file -> file.nameWithoutExtension.takeIf { isStoredPreview(file) } }
-                .orEmpty()
+        fun storedNames(userId: String): Set<String> = AtomicFileStore.nonEmptyFileNames(directory(userId), EXTENSION)
 
         /**
          * Stores the bytes exactly as Proton delivered them after checking that they carry a

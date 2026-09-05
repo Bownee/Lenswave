@@ -2,9 +2,12 @@ package com.bownee.lenswave.storage
 
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
 import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.DirectoryIteratorException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
 
 internal object AtomicFileStore {
@@ -80,6 +83,42 @@ internal object AtomicFileStore {
             }
         } catch (error: Exception) {
             throw IllegalStateException(failureMessage, error)
+        }
+    }
+
+    /**
+     * The names, without their extension, of every regular non-empty `.[extension]` file in
+     * [directory]; empty when the directory is absent or cannot be listed.
+     *
+     * One directory read and one stat per entry: a rendition store hydrates thousands of entries
+     * every time the gallery opens, and `isFile` plus `length` on a [File] cost two stats each. A
+     * zero-length file (a rename that reached the disk before its data did) is left out, exactly
+     * as the stores' own stored checks leave it out, so a listed name is one that can be loaded.
+     */
+    fun nonEmptyFileNames(
+        directory: File,
+        extension: String,
+    ): Set<String> {
+        val suffix = ".$extension"
+        return try {
+            Files.newDirectoryStream(directory.toPath()).use { entries ->
+                entries.mapNotNullTo(HashSet()) { entry ->
+                    val name = entry.fileName.toString()
+                    if (!name.endsWith(suffix)) return@mapNotNullTo null
+                    val attributes =
+                        try {
+                            Files.readAttributes(entry, BasicFileAttributes::class.java)
+                        } catch (_: IOException) {
+                            // Removed between the listing and the stat: not stored.
+                            return@mapNotNullTo null
+                        }
+                    name.removeSuffix(suffix).takeIf { attributes.isRegularFile && attributes.size() > 0L }
+                }
+            }
+        } catch (_: IOException) {
+            emptySet()
+        } catch (_: DirectoryIteratorException) {
+            emptySet()
         }
     }
 
