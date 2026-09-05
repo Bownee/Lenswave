@@ -8,6 +8,7 @@ import android.net.Uri
 import android.view.View
 import android.widget.Toast
 import androidx.core.net.toUri
+import androidx.core.view.doOnNextLayout
 import com.bownee.lenswave.R
 import com.bownee.lenswave.metadata.PhotoMetadataAction
 import com.bownee.lenswave.metadata.PhotoMetadataHints
@@ -73,6 +74,9 @@ internal class ViewerDetailsSheetController(
     private var detailsDragStartOffset: Int? = null
     private var detailsDragStartedShown = false
     private var detailsSheetAttachmentOffset = 0
+
+    /** True while a settle waits for the surface's first layout pass (see [synchronizeWithImage]). */
+    private var layoutSynchronizationPending = false
 
     /** Resolved once: a resource lookup per animation frame is a needless trip through the resource table. */
     private val sheetOverlap = resources.getDimensionPixelSize(R.dimen.photo_details_sheet_overlap)
@@ -167,6 +171,9 @@ internal class ViewerDetailsSheetController(
     fun restoreShown() {
         shown = true
         detailsSheet.visibility = View.VISIBLE
+        // Opaque from the start: an open sheet at alpha 0 would block swipes while showing nothing
+        // if the settle never came. synchronizeWithImage scrolls it into place once it is measured.
+        detailsSheet.alpha = 1f
     }
 
     /** Fixes the offsets a drag or animation will move between. */
@@ -245,6 +252,18 @@ internal class ViewerDetailsSheetController(
 
     /** Re-attaches the sheet to the fitted image and keeps the current scroll position sensible. */
     fun synchronizeWithImage() {
+        if (PhotoDetailsLayoutPolicy.awaitsLayout(shown, surfaceHeight(), photoDetailsScroll.height)) {
+            // An open sheet settled against an unmeasured surface would land at offset 0 and alpha
+            // 0: open, invisible, and blocking swipes. Settle once the layout pass has run instead.
+            if (!layoutSynchronizationPending) {
+                layoutSynchronizationPending = true
+                photoDetailsScroll.doOnNextLayout {
+                    layoutSynchronizationPending = false
+                    synchronizeWithImage()
+                }
+            }
+            return
+        }
         val attachmentChange = updateDetailsSheetAttachment()
         val adjustedOffset = photoDetailsScroll.scrollY - attachmentChange
         val maximumOffset = maximumDetailsOffset()
@@ -253,8 +272,11 @@ internal class ViewerDetailsSheetController(
         setDetailsOffset(target.coerceAtMost(maximumOffset), initialOffset, maximumOffset)
     }
 
+    /** Measured height of the scrolling surface (media frame plus sheet); 0 before the first layout. */
+    private fun surfaceHeight(): Int = photoDetailsScroll.getChildAt(0)?.measuredHeight ?: 0
+
     private fun maximumDetailsOffset(): Int {
-        val surfaceHeight = photoDetailsScroll.getChildAt(0)?.measuredHeight ?: return 0
+        val surfaceHeight = surfaceHeight().takeIf { it > 0 } ?: return 0
         return PhotoDetailsLayoutPolicy.maximumOffset(
             surfaceHeight = surfaceHeight,
             viewportHeight = photoDetailsScroll.height,
