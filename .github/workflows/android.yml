@@ -46,6 +46,10 @@ jobs:
     name: API 29 device contracts
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    env:
+      # avdmanager and the emulator each have their own idea of the default AVD home; pinning
+      # it makes them agree.
+      ANDROID_AVD_HOME: ${{ github.workspace }}/.avd
 
     steps:
       - name: Check out source
@@ -99,6 +103,7 @@ jobs:
         run: |
           set -euo pipefail
           tools="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin"
+          mkdir -p "$ANDROID_AVD_HOME"
           set +o pipefail
           yes | "$tools/sdkmanager" --licenses >/dev/null 2>&1 || true
           # A no-op when the cache restored the packages above.
@@ -106,13 +111,14 @@ jobs:
           set -o pipefail
           echo no | "$tools/avdmanager" create avd --force --name test \
             --package "system-images;android-29;default;x86_64" --device pixel_2
-          # avdmanager decides the AVD home (ANDROID_AVD_HOME, else ~/.android/avd); ask it.
-          avd_dir="$("$tools/avdmanager" list avd | sed -n 's/^ *Path: *//p' | grep '/test\.avd$' | head -n 1)"
-          test -f "$avd_dir/config.ini" || { echo "AVD 'test' not found (path '$avd_dir')" >&2; exit 1; }
+          avd_dir="$ANDROID_AVD_HOME/test.avd"
+          test -f "$avd_dir/config.ini" || { echo "AVD 'test' not found at $avd_dir" >&2; ls -R "$ANDROID_AVD_HOME" >&2; exit 1; }
           printf 'hw.cpu.ncore=2\ndisk.dataPartition.size=2G\n' >> "$avd_dir/config.ini"
+          "$ANDROID_SDK_ROOT/emulator/emulator" -list-avds
           nohup "$ANDROID_SDK_ROOT/emulator/emulator" -avd test -port 5554 \
             -no-window -gpu software -no-snapshot -noaudio -no-boot-anim -camera-back none \
             > "$RUNNER_TEMP/emulator.log" 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/emulator.pid"
           echo "Emulator starting (pid $!)"
 
       # The APKs build while the emulator boots; the connected tasks below find them up to date.
@@ -141,8 +147,12 @@ jobs:
           set -euo pipefail
           adb="$ANDROID_SDK_ROOT/platform-tools/adb"
           deadline=$((SECONDS + 600))
-          "$adb" wait-for-device
-          until [ "$("$adb" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; do
+          until [ "$("$adb" -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; do
+            if ! kill -0 "$(cat "$RUNNER_TEMP/emulator.pid")" 2>/dev/null; then
+              echo "The emulator process exited before booting" >&2
+              cat "$RUNNER_TEMP/emulator.log" >&2
+              exit 1
+            fi
             if [ "$SECONDS" -ge "$deadline" ]; then
               echo "Emulator did not boot within 10 minutes" >&2
               tail -n 50 "$RUNNER_TEMP/emulator.log" >&2
