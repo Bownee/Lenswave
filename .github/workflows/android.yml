@@ -20,6 +20,9 @@ jobs:
     uses: ./.github/workflows/verify.yml
     with:
       assemble-debug: true
+      # The R8 build is the slowest verify job and no pull-request check consumes it; pushes to
+      # main still build it, and release.yml re-runs the full set before anything is signed.
+      build-release: ${{ github.event_name != 'pull_request' }}
       upload-name: lenswave-ci-${{ github.sha }}
     permissions:
       contents: read
@@ -67,6 +70,23 @@ jobs:
             | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
+
+      # android-emulator-runner installs the platform and system image with sdkmanager on every
+      # run (~30 s from Google); restoring the installed directories first makes that a no-op.
+      - name: Locate the Android SDK
+        id: sdk
+        shell: bash
+        run: |
+          test -d "$ANDROID_SDK_ROOT"
+          echo "root=$ANDROID_SDK_ROOT" >> "$GITHUB_OUTPUT"
+
+      - name: Restore API 29 emulator packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.sdk.outputs.root }}/platforms/android-29
+            ${{ steps.sdk.outputs.root }}/system-images/android-29/default/x86_64
+          key: emulator-packages-api29-default-x86_64-v1
 
       - name: Cache AVD
         id: avd-cache
