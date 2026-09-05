@@ -383,14 +383,21 @@ class PhotoViewerActivity :
         photoLoadJob?.cancel()
         cancelPreviewLoad()
         prefetchJob?.cancel()
-        photoDetailsScroll.removeCallbacks(detailsSynchronizationRunnable)
-        mediaFrame.removeCallbacks(mediaBoundsRunnable)
-        details.release()
-        cancelLoadingPanelDelay()
-        clearThumbnailPreview()
-        swipe.release()
-        photoView.close()
-        video.release()
+        // An onCreate that failed before buildInterface has none of these; touching them would
+        // raise UninitializedPropertyAccessException over the failure that actually happened.
+        if (this::screen.isInitialized) {
+            photoDetailsScroll.removeCallbacks(detailsSynchronizationRunnable)
+            mediaFrame.removeCallbacks(mediaBoundsRunnable)
+            cancelLoadingPanelDelay()
+            photoView.close()
+        }
+        if (this::details.isInitialized) details.release()
+        if (this::swipe.isInitialized) swipe.release()
+        if (this::video.isInitialized) {
+            // Clearing the thumbnail also withdraws the video controller's pending clear.
+            clearThumbnailPreview()
+            video.release()
+        }
         if (isFinishing) {
             // The intent's list goes whether or not it was adopted: a window that no longer lined
             // up, or a source rebuilt after a process death, would otherwise leave the gallery's
