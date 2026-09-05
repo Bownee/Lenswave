@@ -16,11 +16,18 @@ This is what CI runs on every pull request. Run it before pushing:
 
 `ktlintCheck` fails on formatting drift; `./gradlew ktlintFormat` fixes it in place.
 
-On Windows use `gradlew.bat`. The release build and the license inventory need one extra invocation
+On Windows use `gradlew.bat`. CI also checks the license inventory, which needs its own invocation
 because the SBOM task is not configuration-cache compatible:
 
 ```shell
-./gradlew assembleRelease verifySbomLicenses --no-configuration-cache
+./gradlew verifySbomLicenses --no-configuration-cache
+```
+
+The R8 release build runs on every push to main and on release tags rather than on pull requests.
+Build it yourself when you touch keep rules or dependencies:
+
+```shell
+./gradlew assembleRelease
 ```
 
 Instrumented tests run against the debug build by default. To exercise the R8-optimised build:
