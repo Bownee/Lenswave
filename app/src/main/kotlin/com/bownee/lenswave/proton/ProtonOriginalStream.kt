@@ -4,6 +4,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
+import java.io.FileNotFoundException
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.locks.ReentrantLock
@@ -25,9 +26,14 @@ data class ProtonOriginalDownloadProgress(
  * [file] is where the bytes are right now. A decrypt writes into a temporary file and renames it
  * once the whole original verified, so [complete] may move [file]; a reader that finds its path
  * gone waits for [awaitCompletion] and opens [file] again.
+ *
+ * A reader announces itself through [readerOpened] and [readerClosed]; while one holds the file
+ * it is reported to [readers], and its age restarts on every open and close, so the plaintext
+ * TTL counts from the last use rather than from the decrypt.
  */
 class ProtonOriginalStream(
     file: File,
+    private val readers: ProtonOriginalReaders = ProtonOriginalReaders.None,
 ) {
     private val lock = ReentrantLock()
     private val changed = lock.newCondition()
@@ -35,6 +41,7 @@ class ProtonOriginalStream(
     private var availableBytes = file.length()
     private var failure: Throwable? = null
     private var downloadComplete = false
+    private var openReaders = 0
 
     private var blockedReaders = 0
     private val mutableWaitingForBytes = MutableStateFlow(false)
@@ -80,10 +87,38 @@ class ProtonOriginalStream(
         )
     }
 
+    /**
+     * A reader is about to open [file]; returns it. The copy is reported as in use until the
+     * matching [readerClosed], across a rename by [complete].
+     */
+    fun readerOpened(): File =
+        lock.withLock {
+            if (openReaders++ == 0) readers.opened(file)
+            touch(file)
+            file
+        }
+
+    fun readerClosed() =
+        lock.withLock {
+            if (openReaders == 0) return@withLock
+            if (--openReaders == 0) {
+                readers.closed(file)
+                touch(file)
+            }
+        }
+
+    /** True once [complete] ran: every byte is in [file], and a path that is gone will not come back. */
+    val isComplete: Boolean
+        get() = lock.withLock { downloadComplete }
+
     /** Every byte is on disk, in [committed]: the same file, or the name the growing file was renamed to. */
     fun complete(committed: File = file) =
         lock.withLock {
             if (failure != null) return@withLock
+            if (openReaders > 0 && committed != file) {
+                readers.closed(file)
+                readers.opened(committed)
+            }
             file = committed
             availableBytes = maxOf(availableBytes, committed.length())
             downloadComplete = true
@@ -125,25 +160,61 @@ class ProtonOriginalStream(
 
     /**
      * Waits until the stream changes or [timeoutMillis] pass, for a reader whose file lags what
-     * the stream reports: a bounded pause instead of a spin.
+     * the stream reports: a bounded pause instead of a spin. The reader is out of bytes for the
+     * duration, so [waitingForBytes] is set like it is for [awaitReadable].
      */
     @Throws(IOException::class)
     fun awaitChange(timeoutMillis: Long) =
         lock.withLock {
             if (downloadComplete || failure != null) return@withLock
+            blockedReaders++
+            mutableWaitingForBytes.value = true
             try {
                 changed.await(timeoutMillis, TimeUnit.MILLISECONDS)
             } catch (error: InterruptedException) {
                 Thread.currentThread().interrupt()
                 throw IOException("Interrupted while waiting for Proton media", error)
+            } finally {
+                if (--blockedReaders == 0) mutableWaitingForBytes.value = false
             }
         }
 
-    /** Waits until every byte is on disk, then returns the final [file]. */
+    /**
+     * Waits until every byte is on disk, then returns the final [file]. The caller lost its file
+     * to the rename that ends a decrypt, so completion is moments away; a stream that has not
+     * completed after [timeoutMillis] fails the read with an [IOException] rather than holding
+     * the player's loader forever.
+     */
     @Throws(IOException::class)
-    fun awaitCompletion(): File {
-        awaitReadable(Long.MAX_VALUE)
-        return file
+    fun awaitCompletion(timeoutMillis: Long = COMPLETION_TIMEOUT_MILLIS): File {
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
+        lock.withLock {
+            blockedReaders++
+            mutableWaitingForBytes.value = true
+            try {
+                while (!downloadComplete && failure == null) {
+                    val remaining = deadline - System.nanoTime()
+                    if (remaining <= 0L) throw IOException("Timed out waiting for Proton media to complete")
+                    changed.await(remaining, TimeUnit.NANOSECONDS)
+                }
+            } catch (error: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw IOException("Interrupted while waiting for Proton media", error)
+            } finally {
+                if (--blockedReaders == 0) mutableWaitingForBytes.value = false
+            }
+            failure?.let { error -> throw IOException("Proton media download failed", error) }
+            return file
+        }
+    }
+
+    private companion object {
+        const val COMPLETION_TIMEOUT_MILLIS = 30_000L
+    }
+
+    /** Best effort: the age of a copy nobody can stamp simply keeps counting from the decrypt. */
+    private fun touch(file: File) {
+        file.setLastModified(System.currentTimeMillis())
     }
 
     /**
@@ -164,6 +235,19 @@ class ProtonOriginalStream(
         if (ProtonOriginalProgressPolicy.shouldPublish(previous, validDownloaded, validTotal, complete)) {
             mutableProgress.value = ProtonOriginalDownloadProgress(validDownloaded, validTotal, complete)
         }
+    }
+}
+
+/**
+ * The plaintext copy of a complete stream is gone from disk: swept, or removed with its node.
+ * A [FileNotFoundException] so Media3 fails the load at once instead of retrying a file that
+ * will not come back; the viewer runs the download again once, which decrypts a fresh copy.
+ */
+class ProtonOriginalCopyMissingException(
+    cause: Throwable,
+) : FileNotFoundException("The plaintext copy of the original is gone") {
+    init {
+        initCause(cause)
     }
 }
 

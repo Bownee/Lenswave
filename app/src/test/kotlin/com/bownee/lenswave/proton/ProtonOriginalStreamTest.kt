@@ -125,6 +125,47 @@ class ProtonOriginalStreamTest {
     }
 
     @Test
+    fun `a reader paused in a bounded wait is visible as waiting for bytes`() {
+        val stream = ProtonOriginalStream(temporaryFolder.newFile())
+        val executor = Executors.newSingleThreadExecutor()
+        try {
+            val waited = executor.submit { stream.awaitChange(5_000L) }
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2L)
+            while (!stream.waitingForBytes.value && System.nanoTime() < deadline) Thread.yield()
+            assertTrue(stream.waitingForBytes.value)
+
+            stream.bytesWritten(1)
+
+            waited.get(1L, TimeUnit.SECONDS)
+            assertFalse(stream.waitingForBytes.value)
+        } finally {
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun `waiting for completion gives up after its timeout and reports the wait meanwhile`() {
+        val stream = ProtonOriginalStream(temporaryFolder.newFile())
+        val executor = Executors.newSingleThreadExecutor()
+        try {
+            val completion = executor.submit<File> { stream.awaitCompletion(timeoutMillis = 200L) }
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2L)
+            while (!stream.waitingForBytes.value && System.nanoTime() < deadline) Thread.yield()
+            assertTrue(stream.waitingForBytes.value)
+
+            val failure = assertThrows(ExecutionException::class.java) { completion.get(5L, TimeUnit.SECONDS) }
+
+            assertTrue(failure.cause is IOException)
+            assertFalse(stream.waitingForBytes.value)
+            // A stream that completes in time hands over its file at once.
+            stream.complete()
+            assertEquals(stream.file, stream.awaitCompletion(timeoutMillis = 10L))
+        } finally {
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
     fun `failure unblocks a waiting reader`() {
         val stream = ProtonOriginalStream(temporaryFolder.newFile())
         val executor = Executors.newSingleThreadExecutor()
@@ -149,5 +190,52 @@ class ProtonOriginalStreamTest {
         } finally {
             executor.shutdownNow()
         }
+    }
+}
+
+class ProtonOriginalStreamReadersTest {
+    @get:Rule
+    val temporaryFolder = TemporaryFolder()
+
+    private val registry = ProtonDecryptedCopyRegistry()
+
+    @Test
+    fun `readers hold the copy in use across a rename and restart its age`() {
+        val growing = temporaryFolder.newFile("video.image.part")
+        val committed = File(temporaryFolder.root, "video.image")
+        val stream = ProtonOriginalStream(growing, registry)
+        growing.setLastModified(1_000L)
+
+        assertEquals(growing, stream.readerOpened())
+        stream.readerOpened()
+        assertTrue(registry.isInUse(growing))
+        assertTrue(growing.lastModified() > 1_000L)
+
+        assertTrue(growing.renameTo(committed))
+        stream.complete(committed)
+        assertFalse(registry.isInUse(growing))
+        assertTrue(registry.isInUse(committed))
+
+        stream.readerClosed()
+        assertTrue(registry.isInUse(committed))
+        committed.setLastModified(1_000L)
+        stream.readerClosed()
+        assertFalse(registry.isInUse(committed))
+        assertTrue(committed.lastModified() > 1_000L)
+        // A close nobody opened for changes nothing.
+        stream.readerClosed()
+        assertFalse(registry.isInUse(committed))
+    }
+
+    @Test
+    fun `a stream reports completion and a missing copy is a file-not-found`() {
+        val stream = ProtonOriginalStream(temporaryFolder.newFile())
+        assertFalse(stream.isComplete)
+        stream.complete()
+        assertTrue(stream.isComplete)
+
+        val missing: IOException = ProtonOriginalCopyMissingException(java.io.FileNotFoundException("gone"))
+        assertTrue(missing is java.io.FileNotFoundException)
+        assertEquals("gone", missing.cause?.message)
     }
 }

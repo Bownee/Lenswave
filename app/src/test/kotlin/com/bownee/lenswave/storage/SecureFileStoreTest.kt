@@ -122,6 +122,32 @@ class SecureFileStoreTest {
     }
 
     @Test
+    fun `a family marker is written before its key and is harmless on its own`() {
+        val store = store()
+        val keys = File(temporaryFolder.root, "keys")
+        val userC = "proton-media:user-c-${UUID.randomUUID()}"
+        // The residue of a crash between the two writes of a new key: the marker alone.
+        keys.mkdirs()
+        File(keys, "${store.keyAlias(userC)}.family").writeText("proton-media")
+
+        assertEquals(listOf(store.keyAlias(userC)), store.keyAliases("proton-media"))
+        store.deleteKeyAlias(store.keyAlias(userC))
+
+        assertEquals(emptyList<String>(), store.keyAliases("proton-media"))
+        assertTrue(keys.listFiles().orEmpty().isEmpty())
+        // A key created afterwards has both files again.
+        store.write(userC, File(temporaryFolder.root, "c.bin"), byteArrayOf(1), "write failed")
+        assertEquals(
+            setOf("${store.keyAlias(userC)}.family", "${store.keyAlias(userC)}.key"),
+            keys
+                .listFiles()
+                .orEmpty()
+                .map(File::getName)
+                .toSet(),
+        )
+    }
+
+    @Test
     fun `whole files round trip through the segmented envelope`() {
         val store = store()
         val plaintext =
@@ -152,10 +178,50 @@ class SecureFileStoreTest {
         val bytes = ByteArray(50_000) { (it * 3).toByte() }
         // A small payload is one whole-file GCM record: exactly the layout of a version 2 original.
         store.write(scope, legacy, bytes, "write failed")
+        var expected: Long? = null
 
-        store.decryptFile(scope, legacy, decrypted)
+        store.decryptFile(scope, legacy, decrypted, onStarted = { _, expectedBytes -> expected = expectedBytes })
 
         assertArrayEquals(bytes, decrypted.readBytes())
+        assertEquals(50_000L, expected)
+    }
+
+    @Test
+    fun `a decrypt announces the plaintext size its file promises before the first segment`() {
+        val store = store()
+        val plaintext = File(temporaryFolder.root, "original").apply { writeBytes(ByteArray(2_500_001)) }
+        val encrypted = File(temporaryFolder.root, "encrypted")
+        val decrypted = File(temporaryFolder.root, "decrypted")
+        store.encryptFile(scope, plaintext, encrypted, "encrypt failed")
+        val announced = mutableListOf<Long?>()
+        val written = mutableListOf<Long>()
+
+        store.decryptFile(
+            scope,
+            encrypted,
+            decrypted,
+            onStarted = { _, expectedBytes -> announced += expectedBytes },
+            onBytesWritten = { total -> written += total },
+        )
+
+        assertEquals(listOf<Long?>(2_500_001L), announced)
+        assertEquals(2_500_001L, written.last())
+        // A file cut at a segment boundary has a length no envelope has (the final segment is
+        // mandatory); the decrypt itself rejects it.
+        val fullSegments = 2 * (SegmentedEnvelope.DEFAULT_SEGMENT_BYTES + SegmentedEnvelope.TAG_BYTES)
+        encrypted.writeBytes(
+            encrypted.readBytes().copyOf(4 + 1 + Int.SIZE_BYTES + SegmentedEnvelope.NONCE_BYTES + fullSegments),
+        )
+        announced.clear()
+        assertThrows(IllegalArgumentException::class.java) {
+            store.decryptFile(scope, encrypted, decrypted, onStarted = {
+                _,
+                expectedBytes,
+                ->
+                announced += expectedBytes
+            })
+        }
+        assertEquals(listOf<Long?>(null), announced)
     }
 
     @Test
@@ -181,6 +247,21 @@ class SecureFileStoreTest {
     }
 
     @Test
+    fun `a legacy record cut before its tag is rejected as truncated`() {
+        val store = store()
+        val legacy = File(temporaryFolder.root, "legacy")
+        val decrypted = File(temporaryFolder.root, "decrypted")
+        store.write(scope, legacy, ByteArray(1_000), "write failed")
+        // The header and a body shorter than one GCM tag: nothing to verify.
+        legacy.writeBytes(legacy.readBytes().copyOf(4 + 2 + 12 + 8))
+
+        assertThrows(IllegalArgumentException::class.java) { store.decryptFile(scope, legacy, decrypted) }
+
+        assertFalse(decrypted.exists())
+        assertTrue(legacy.isFile)
+    }
+
+    @Test
     fun `an oversized legacy record is discarded as corrupt rather than decrypted in memory`() {
         val store = store()
         val legacy = File(temporaryFolder.root, "legacy")
@@ -191,7 +272,7 @@ class SecureFileStoreTest {
         legacy.outputStream().use { output ->
             output.write(header)
             val chunk = ByteArray(1 shl 20)
-            repeat(9) { output.write(chunk) }
+            repeat(5) { output.write(chunk) }
         }
 
         assertThrows(IllegalArgumentException::class.java) { store.decryptFile(scope, legacy, decrypted) }

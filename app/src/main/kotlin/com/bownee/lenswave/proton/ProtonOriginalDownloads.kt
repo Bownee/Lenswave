@@ -36,6 +36,7 @@ internal class ProtonOriginalDownloads
         private val cache: ProtonMediaCache,
         private val transferCoordinator: ProtonTransferCoordinator,
         private val materializer: ProtonOriginalMaterializer,
+        private val openCopies: ProtonDecryptedCopyRegistry,
     ) {
         /** Resolved names, including "Proton has none" so a missing name is asked for once. */
         private val originalFileNames = ConcurrentHashMap<String, ResolvedName>()
@@ -78,7 +79,7 @@ internal class ProtonOriginalDownloads
                     }
                 }
             // A transfer another caller started has no stream of ours; it is complete by now.
-            if (!streamed) onReady(ProtonOriginalStream(file).apply { complete() })
+            if (!streamed) onReady(completeStream(file))
             return file
         }
 
@@ -111,7 +112,14 @@ internal class ProtonOriginalDownloads
                                     userId.id,
                                     nodeUid,
                                     shouldContinue = { isActive },
-                                    onStarted = { plaintext -> stream = ProtonOriginalStream(plaintext) },
+                                    onStarted = { plaintext, expectedBytes ->
+                                        stream =
+                                            ProtonOriginalStream(plaintext, openCopies).also { started ->
+                                                // Sized from the encrypted file, so the panel shows a
+                                                // percentage rather than a bare byte count.
+                                                started.updateProgress(downloadedBytes = 0L, totalBytes = expectedBytes)
+                                            }
+                                    },
                                     onBytesWritten = { total ->
                                         stream?.let { started ->
                                             started.availableBytes(total)
@@ -136,9 +144,13 @@ internal class ProtonOriginalDownloads
                 val stream = ready.await()
                 if (stream != null) onReady(stream)
                 val file = decrypt.await()
-                if (file != null && stream == null) onReady(ProtonOriginalStream(file).apply { complete() })
+                if (file != null && stream == null) onReady(completeStream(file))
                 file
             }
+
+        /** A stream over a plaintext copy that is already whole; its readers still hold the copy against the sweep. */
+        private fun completeStream(file: File): ProtonOriginalStream =
+            ProtonOriginalStream(file, openCopies).apply { complete() }
 
         private suspend fun downloadProgressivelyInForeground(
             userId: UserId,
@@ -146,7 +158,7 @@ internal class ProtonOriginalDownloads
             onReady: suspend (ProtonOriginalStream) -> Unit,
         ): File {
             val (temporary, target) = cache.createOriginalTarget(userId.id, nodeUid)
-            val stream = ProtonOriginalStream(temporary)
+            val stream = ProtonOriginalStream(temporary, openCopies)
             return try {
                 onReady(stream)
                 FileOutputStream(temporary).use { output ->

@@ -25,8 +25,12 @@ class LenswaveDiagnosticsTest {
         val longState = "open-beyond-end-position-" + "9".repeat(60)
 
         assertEquals(
-            "operation=video-playback state=${longState.take(64)} attempt=1 maximumAttempts=1",
+            "operation=video-playback state=${longState.take(32)} attempt=1 maximumAttempts=1",
             LenswaveDiagnostics.stateSummary("video-playback", longState, 1, 1),
+        )
+        assertEquals(
+            "operation=video-playback state=file_mp4 attempt=1 maximumAttempts=1",
+            LenswaveDiagnostics.stateSummary("video-playback", "file.mp4", 1, 1),
         )
         assertEquals(
             "operation=video-playback state=user_data_line_break attempt=1 maximumAttempts=1",
@@ -137,6 +141,33 @@ class LenswaveDiagnosticsTest {
         assertEquals("operation=original-download failure=ProtonDriveSdkException", freeFormMessage)
         assertFalse(freeFormMessage.contains("example.test"))
         assertFalse(freeFormMessage.contains("private"))
+    }
+
+    @Test
+    fun aHostnameOrAnIdentifierIsNotATokenMessage() {
+        val hostname = "api.proton.me"
+        val nodeUid = "pJt1o3L9QmXc7VwB2ZaK8dRfHs5nEyUg0TiWq6ObNlA4CxMv"
+        val shortId = "Z3Vlc3Mtd2hv"
+
+        listOf(hostname, nodeUid).forEach { message ->
+            val summary =
+                LenswaveDiagnostics.failureSummary(
+                    operation = "original-download",
+                    error = ProtonDriveSdkException(message = message),
+                )
+            assertEquals(message, "operation=original-download failure=ProtonDriveSdkException", summary)
+        }
+        // A short opaque id is indistinguishable from an error type and is the accepted residue.
+        assertEquals(
+            "operation=original-download failure=ProtonDriveSdkException sdkMessage=$shortId",
+            LenswaveDiagnostics.failureSummary("original-download", ProtonDriveSdkException(message = shortId)),
+        )
+        val dottedType =
+            ProtonSdkError(message = "ignored", type = "network.timeout", domain = ProtonSdkError.ErrorDomain.Network)
+        assertEquals(
+            "operation=timeline-sync failure=ProtonDriveSdkException sdkDomain=Network",
+            LenswaveDiagnostics.failureSummary("timeline-sync", ProtonDriveSdkException(error = dottedType)),
+        )
     }
 
     @Test

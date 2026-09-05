@@ -24,15 +24,16 @@ import javax.inject.Singleton
 internal interface ProtonOriginalMaterializer {
     /**
      * The plaintext copy, or null when nothing is cached. [onStarted] names the growing plaintext
-     * file before the first segment is written and [onBytesWritten] follows every verified
-     * segment with the plaintext total; neither is called for a copy that was already on disk.
-     * The growing file is renamed to the returned one once the whole original verified.
+     * file before the first segment is written, with the plaintext size the encrypted file
+     * promises (null when its length does not fit the format), and [onBytesWritten] follows every
+     * verified segment with the plaintext total; neither is called for a copy that was already on
+     * disk. The growing file is renamed to the returned one once the whole original verified.
      */
     fun materialize(
         userId: String,
         nodeUid: String,
         shouldContinue: () -> Boolean,
-        onStarted: (plaintextInProgress: File) -> Unit,
+        onStarted: (plaintextInProgress: File, expectedBytes: Long?) -> Unit,
         onBytesWritten: (totalBytes: Long) -> Unit,
     ): File?
 }
@@ -50,7 +51,9 @@ internal abstract class ProtonOriginalStoreModule {
  * Encrypted originals live under `cacheDir` and are kept per user up to
  * [ProtonStorageLayout.ORIGINALS_CACHE_LIMIT_BYTES]; the least recently read ones go first.
  * Plaintext copies expire after [ProtonStorageLayout.DECRYPTED_TTL_MILLIS] and are wiped
- * wholesale once per process.
+ * wholesale once per process. A copy a reader holds open (see [ProtonDecryptedCopyRegistry]) is
+ * never expired: the player keeps its file for as long as the video is up, and the copy's age
+ * restarts when the reader closes it.
  */
 @Singleton
 internal class ProtonOriginalStore
@@ -59,6 +62,7 @@ internal class ProtonOriginalStore
         @ApplicationContext context: Context,
         private val secureFiles: SecureFileStore,
         private val clock: LenswaveClock,
+        private val openCopies: ProtonDecryptedCopyRegistry,
     ) : ProtonOriginalMaterializer {
         private val originals = File(context.cacheDir, ProtonStorageLayout.ORIGINALS_DIRECTORY).apply { mkdirs() }
         private val decrypted = File(context.cacheDir, ProtonStorageLayout.DECRYPTED_DIRECTORY)
@@ -91,13 +95,13 @@ internal class ProtonOriginalStore
             userId: String,
             nodeUid: String,
             shouldContinue: () -> Boolean = { true },
-        ): File? = materialize(userId, nodeUid, shouldContinue, onStarted = {}, onBytesWritten = {})
+        ): File? = materialize(userId, nodeUid, shouldContinue, onStarted = { _, _ -> }, onBytesWritten = {})
 
         override fun materialize(
             userId: String,
             nodeUid: String,
             shouldContinue: () -> Boolean,
-            onStarted: (plaintextInProgress: File) -> Unit,
+            onStarted: (plaintextInProgress: File, expectedBytes: Long?) -> Unit,
             onBytesWritten: (totalBytes: Long) -> Unit,
         ): File? {
             wipeStaleDecryptedCopies()
@@ -107,11 +111,14 @@ internal class ProtonOriginalStore
                 return null
             }
             val materialized = decryptedFile(userId, nodeUid)
-            if (materialized.isFile && !isExpired(materialized, ProtonStorageLayout.DECRYPTED_TTL_MILLIS)) {
+            if (materialized.isFile && !isExpiredCopy(materialized)) {
                 materialized.setLastModified(clock.nowMillis())
                 file.setLastModified(clock.nowMillis())
                 return materialized
             }
+            // Read before the decrypt: an oversized legacy original is deleted by the decrypt
+            // itself, and its length is gone by the time the tracked total is adjusted below.
+            val encryptedBytes = file.length()
             return try {
                 materialized.delete()
                 secureFiles.decryptFile(scope(userId), file, materialized, onStarted, onBytesWritten, shouldContinue)
@@ -127,7 +134,7 @@ internal class ProtonOriginalStore
                 // Only a provably bad original is dropped; a Keystore or I/O hiccup keeps the
                 // encrypted file, and the next open decrypts it again.
                 if (ProtonSnapshotCorruptionPolicy.isCorrupt(error)) {
-                    deleteTracked(userId, file)
+                    deleteTracked(userId, file, encryptedBytes)
                 } else {
                     transientReadFailures.report(error)
                 }
@@ -189,7 +196,7 @@ internal class ProtonOriginalStore
 
         fun maintain(userId: String) {
             wipeStaleDecryptedCopies()
-            expireFiles(decryptedDirectory(userId), ProtonStorageLayout.DECRYPTED_TTL_MILLIS)
+            expireCopies(decryptedDirectory(userId))
             trimToLimit(userId, keepName = null)
         }
 
@@ -198,13 +205,12 @@ internal class ProtonOriginalStore
          * [ProtonStorageLayout.DECRYPTED_TTL_MILLIS]. [maintain] does the same for one user once
          * per activation; this is for the gallery when the app leaves the screen, so plaintext
          * does not sit on disk for the rest of the process just because nothing re-activated the
-         * account. Copies still within their TTL are left, since the viewer may come back to them.
+         * account. Copies still within their TTL are left, since the viewer may come back to them,
+         * and so is a copy a player holds open, however old.
          */
         fun sweepExpiredDecryptedCopies() {
             wipeStaleDecryptedCopies()
-            decrypted.listFiles()?.filter(File::isDirectory)?.forEach { directory ->
-                expireFiles(directory, ProtonStorageLayout.DECRYPTED_TTL_MILLIS)
-            }
+            decrypted.listFiles()?.filter(File::isDirectory)?.forEach(::expireCopies)
         }
 
         fun remove(
@@ -308,26 +314,31 @@ internal class ProtonOriginalStore
                 ?.sumOf { file -> if (file.isFile) file.length() else 0L }
                 ?: 0L
 
-        /** Deletes one original and keeps the tracked total in step; a miss costs nothing. */
+        /**
+         * Deletes one original and keeps the tracked total in step; a miss costs nothing. [size]
+         * is the length the file had when it was counted, for a caller whose file may already be
+         * gone: the total comes down by it whether this call or an earlier one removed the file.
+         */
         private fun deleteTracked(
             userId: String,
             file: File,
+            size: Long = file.length(),
         ) {
-            val size = file.length()
-            if (file.delete() && size > 0L) {
+            if ((file.delete() || !file.exists()) && size > 0L) {
                 trackedBytes.computeIfPresent(userId) { _, total -> (total - size).coerceAtLeast(0L) }
             }
         }
 
-        private fun expireFiles(
-            directory: File,
-            ttlMillis: Long,
-        ) {
+        /** Deletes the plaintext copies in [directory] past their TTL, except those a reader holds open. */
+        private fun expireCopies(directory: File) {
             directory
                 .listFiles()
-                ?.filter { file -> file.isFile && isExpired(file, ttlMillis) }
+                ?.filter { file -> file.isFile && isExpiredCopy(file) }
                 ?.forEach(File::delete)
         }
+
+        private fun isExpiredCopy(file: File): Boolean =
+            !openCopies.isInUse(file) && isExpired(file, ProtonStorageLayout.DECRYPTED_TTL_MILLIS)
 
         private fun file(
             userId: String,

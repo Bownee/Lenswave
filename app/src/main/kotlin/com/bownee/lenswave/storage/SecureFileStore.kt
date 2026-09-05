@@ -6,6 +6,7 @@ import android.security.keystore.KeyProperties
 import com.bownee.lenswave.LenswaveDiagnostics
 import com.bownee.lenswave.LenswaveOperation
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.io.BufferedInputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -148,24 +149,27 @@ class SecureFileStore internal constructor(
      * format is asked once, before it starts: it is decrypted in one piece, see [decryptLegacyFile].
      *
      * A reader that wants the plaintext before the decrypt is over gets the growing temporary
-     * file through [onStarted] and the verified plaintext total through [onBytesWritten] after
-     * every segment; the temporary is renamed to [target] once the whole file verified.
+     * file through [onStarted], with the plaintext size the header and file length promise (null
+     * when they do not add up; the decrypt then fails on its own), and the verified plaintext
+     * total through [onBytesWritten] after every segment; the temporary is renamed to [target]
+     * once the whole file verified.
      */
     fun decryptFile(
         scope: String,
         encrypted: File,
         target: File,
-        onStarted: (plaintextInProgress: File) -> Unit = {},
+        onStarted: (plaintextInProgress: File, expectedBytes: Long?) -> Unit = { _, _ -> },
         onBytesWritten: (totalBytes: Long) -> Unit = {},
         shouldContinue: () -> Boolean = { true },
     ) {
         target.parentFile?.mkdirs()
         val temporary = File.createTempFile("${target.name}.", ".part", target.parentFile)
         try {
-            FileInputStream(encrypted).use { rawInput ->
+            BufferedInputStream(FileInputStream(encrypted)).use { rawInput ->
                 val version = readMagic(rawInput)
+                val expectedBytes = expectedPlaintextBytes(version, encrypted.length(), rawInput)
                 FileOutputStream(temporary).use { output ->
-                    onStarted(temporary)
+                    onStarted(temporary, expectedBytes)
                     if (version == SEGMENTED_VERSION) {
                         SegmentedEnvelope.decrypt(dataKey(scope), rawInput, output, onBytesWritten, shouldContinue)
                     } else {
@@ -189,7 +193,8 @@ class SecureFileStore internal constructor(
      * ciphertext and plaintext in memory before it can verify the tag, and a cipher stream
      * would let the platform implementation treat a failed tag at end of stream as an ordinary
      * end of file and commit a truncated plaintext. The record is therefore read into a buffer
-     * and finished explicitly, so a bad tag throws, and only up to [LEGACY_FILE_LIMIT_BYTES]: a
+     * sized from the file (a growing stream copy peaked at several times the record) and
+     * finished explicitly, so a bad tag throws, and only up to [LEGACY_FILE_LIMIT_BYTES]: a
      * larger legacy original is discarded through [LegacyFileTooLargeException], an
      * [IllegalArgumentException] its callers already treat as a corrupt file and fetch again.
      */
@@ -202,10 +207,39 @@ class SecureFileStore internal constructor(
     ): Long {
         if (encrypted.length() > LEGACY_FILE_LIMIT_BYTES) throw LegacyFileTooLargeException()
         val cipher = readLegacyHeader(scope, version, rawInput)
-        val ciphertext = rawInput.readBytes()
+        val ciphertextBytes = encrypted.length() - (MAGIC.size + 2 + cipher.iv.size)
+        require(ciphertextBytes >= TAG_BITS / 8) { "Encrypted file is truncated" }
+        val ciphertext = ByteArray(ciphertextBytes.toInt())
+        require(SegmentedEnvelope.readFully(rawInput, ciphertext) == ciphertext.size) { "Encrypted file is truncated" }
         val plaintext = cipher.doFinal(ciphertext)
         output.write(plaintext)
         return plaintext.size.toLong()
+    }
+
+    /**
+     * The plaintext size the file's length promises, read from the four bytes after the version
+     * without consuming them: the segment size of an envelope, or the IV size of a whole-file
+     * record. Null when the length is not one of the format, which the decrypt then rejects.
+     */
+    private fun expectedPlaintextBytes(
+        version: Byte,
+        encryptedBytes: Long,
+        rawInput: BufferedInputStream,
+    ): Long? {
+        val field = ByteArray(Int.SIZE_BYTES)
+        rawInput.mark(field.size)
+        try {
+            if (SegmentedEnvelope.readFully(rawInput, field) != field.size) return null
+        } finally {
+            rawInput.reset()
+        }
+        val afterVersion = encryptedBytes - (MAGIC.size + 1)
+        return if (version == SEGMENTED_VERSION) {
+            SegmentedEnvelope.plaintextLength(afterVersion, ByteBuffer.wrap(field).int)
+        } else {
+            val ivSize = field[0].toInt() and 0xff
+            (afterVersion - 1 - ivSize - TAG_BITS / 8).takeIf { bytes -> bytes >= 0L }
+        }
     }
 
     private class LegacyFileTooLargeException :
@@ -420,11 +454,15 @@ class SecureFileStore internal constructor(
     ): ByteArray =
         ByteArray(DATA_KEY_BYTES).also { bytes ->
             SecureRandom().nextBytes(bytes)
-            AtomicFileStore.write(file, wrap(scope, bytes), "Could not store data key")
-            // Best effort: a key without its family marker is still a working key, see [keyAliases].
+            // The family marker goes first: a marker without a key is harmless (the cleaner
+            // deletes both, and deleting a key that is not there is nothing), whereas a key
+            // without its marker, left by a crash between the two writes, is one [keyAliases]
+            // never lists and no cleaner ever removes. Best effort still: a key whose marker
+            // cannot be written is a working key.
             runCatching {
                 AtomicFileStore.write(familyFile(alias(scope)), scopeFamily(scope), "Could not record the key family")
             }
+            AtomicFileStore.write(file, wrap(scope, bytes), "Could not store data key")
         }
 
     private fun wrap(
@@ -482,7 +520,7 @@ class SecureFileStore internal constructor(
         const val DATA_KEY_BYTES = 32
 
         /** Whole-file legacy originals larger than this are not worth two copies of themselves in the heap. */
-        const val LEGACY_FILE_LIMIT_BYTES = 8L * 1024L * 1024L
+        const val LEGACY_FILE_LIMIT_BYTES = 4L * 1024L * 1024L
         val MAGIC = byteArrayOf(0x4c, 0x57, 0x45, 0x46)
         const val LEGACY_VERSION: Byte = 1
         const val VERSION: Byte = 2

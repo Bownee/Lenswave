@@ -112,6 +112,26 @@ internal object SegmentedEnvelope {
         }
     }
 
+    /**
+     * The plaintext bytes an envelope of [envelopeBytes] (from its segment size field to its last
+     * tag) holds when its segments are [segmentBytes] long, or null when no envelope of that
+     * layout has that length. Every full segment carries one tag, and the final segment, always
+     * shorter than a full one, carries the last; so a length that leaves less than a tag after
+     * the full segments is not an envelope. Lets a reader size its progress before decrypting.
+     */
+    fun plaintextLength(
+        envelopeBytes: Long,
+        segmentBytes: Int,
+    ): Long? {
+        if (segmentBytes !in 1..MAX_SEGMENT_BYTES) return null
+        val body = envelopeBytes - Int.SIZE_BYTES - NONCE_BYTES
+        val fullSegmentBytes = segmentBytes.toLong() + TAG_BYTES
+        val fullSegments = body / fullSegmentBytes
+        val finalBytes = body - fullSegments * fullSegmentBytes
+        if (body < TAG_BYTES || finalBytes < TAG_BYTES) return null
+        return fullSegments * segmentBytes + (finalBytes - TAG_BYTES)
+    }
+
     /** The 96-bit IV of segment [index]: the file nonce followed by the big-endian counter. */
     fun segmentIv(
         nonce: ByteArray,
@@ -144,7 +164,7 @@ internal object SegmentedEnvelope {
     }
 
     /** Fills [buffer] unless the stream ends first; returns the bytes read. */
-    private fun readFully(
+    fun readFully(
         input: InputStream,
         buffer: ByteArray,
     ): Int {
