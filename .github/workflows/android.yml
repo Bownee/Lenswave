@@ -71,8 +71,8 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      # android-emulator-runner installs the platform and system image with sdkmanager on every
-      # run (~30 s from Google); restoring the installed directories first makes that a no-op.
+      # Installing the platform and system image with sdkmanager takes ~30 s from Google;
+      # restoring the installed directories first makes that a no-op.
       - name: Locate the Android SDK
         id: sdk
         shell: bash
@@ -88,31 +88,28 @@ jobs:
             ${{ steps.sdk.outputs.root }}/system-images/android-29/default/x86_64
           key: emulator-packages-api29-default-x86_64-v1
 
-      - name: Cache AVD
-        id: avd-cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.android/avd/*
-            ~/.android/adb*
-          key: avd-api29-x86_64-pixel2-v1
+      # The emulator is started here, before the APK build, so its boot overlaps the Gradle work
+      # instead of following it. The AVD is created fresh each run: the runner image ships a
+      # current emulator, and a cached snapshot from an older one never loaded anyway.
+      - name: Start the API 29 emulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          tools="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin"
+          set +o pipefail
+          yes | "$tools/sdkmanager" --licenses >/dev/null 2>&1 || true
+          # A no-op when the cache restored the packages above.
+          yes | "$tools/sdkmanager" "platforms;android-29" "system-images;android-29;default;x86_64" >/dev/null
+          set -o pipefail
+          echo no | "$tools/avdmanager" create avd --force --name test \
+            --package "system-images;android-29;default;x86_64" --device pixel_2 >/dev/null
+          printf 'hw.cpu.ncore=2\ndisk.dataPartition.size=2G\n' >> ~/.android/avd/test.avd/config.ini
+          nohup "$ANDROID_SDK_ROOT/emulator/emulator" -avd test -port 5554 \
+            -no-window -gpu software -no-snapshot -noaudio -no-boot-anim -camera-back none \
+            > "$RUNNER_TEMP/emulator.log" 2>&1 &
+          echo "Emulator starting (pid $!)"
 
-      - name: Create AVD snapshot
-        if: steps.avd-cache.outputs.cache-hit != 'true'
-        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
-        with:
-          api-level: 29
-          arch: x86_64
-          target: default
-          profile: pixel_2
-          cores: 2
-          disk-size: 2G
-          force-avd-creation: false
-          emulator-options: -no-window -gpu software -noaudio -no-boot-anim -camera-back none
-          script: echo "Generated AVD snapshot for caching."
-
-      # APKs are compiled before the emulator boots so it is not sitting idle through the build,
-      # and the connected tasks below find them up to date.
+      # The APKs build while the emulator boots; the connected tasks below find them up to date.
       - name: Build debug device-test APKs
         run: |
           ./gradlew assembleDebug assembleDebugAndroidTest \
@@ -132,24 +129,47 @@ jobs:
         shell: bash
         run: scripts/verify-minified-contract.sh app/build/outputs/mapping/minified
 
+      - name: Wait for the emulator to boot
+        shell: bash
+        run: |
+          set -euo pipefail
+          adb="$ANDROID_SDK_ROOT/platform-tools/adb"
+          deadline=$((SECONDS + 600))
+          "$adb" wait-for-device
+          until [ "$("$adb" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; do
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "Emulator did not boot within 10 minutes" >&2
+              tail -n 50 "$RUNNER_TEMP/emulator.log" >&2
+              exit 1
+            fi
+            sleep 2
+          done
+          echo "Boot completed after ${SECONDS}s of waiting"
+          # Animations only slow the activity tests down.
+          "$adb" shell settings put global window_animation_scale 0
+          "$adb" shell settings put global transition_animation_scale 0
+          "$adb" shell settings put global animator_duration_scale 0
+
       - name: Run minimum-SDK device tests
-        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
-        with:
-          api-level: 29
-          arch: x86_64
-          target: default
-          profile: pixel_2
-          cores: 2
-          disk-size: 2G
-          force-avd-creation: false
-          disable-animations: true
-          emulator-options: -no-window -gpu software -no-snapshot-save -noaudio -no-boot-anim -camera-back none
-          script: |
-            ./gradlew connectedDebugAndroidTest -Plenswave.includeX86TestAbi=true --stacktrace
-            # The runner executes each script line in its own shell, so this must stay on one line.
-            [ "$RUN_MINIFIED_CONTRACT" != "true" ] || ./gradlew connectedMinifiedAndroidTest -Plenswave.instrumentationBuildType=minified -Plenswave.includeX86TestAbi=true -Pandroid.testInstrumentationRunnerArguments.class=com.bownee.lenswave.proton.ProtonSdkJniContractInstrumentedTest --stacktrace
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./gradlew connectedDebugAndroidTest -Plenswave.includeX86TestAbi=true --stacktrace
+          if [ "$RUN_MINIFIED_CONTRACT" = "true" ]; then
+            ./gradlew connectedMinifiedAndroidTest \
+              -Plenswave.instrumentationBuildType=minified -Plenswave.includeX86TestAbi=true \
+              -Pandroid.testInstrumentationRunnerArguments.class=com.bownee.lenswave.proton.ProtonSdkJniContractInstrumentedTest \
+              --stacktrace
+          fi
         env:
           RUN_MINIFIED_CONTRACT: ${{ github.event_name != 'pull_request' }}
+
+      - name: Stop the emulator
+        if: always()
+        shell: bash
+        run: |
+          "$ANDROID_SDK_ROOT/platform-tools/adb" -s emulator-5554 emu kill >/dev/null 2>&1 || true
+          cp "$RUNNER_TEMP/emulator.log" app/build/emulator.log 2>/dev/null || true
 
       - name: Upload device-test evidence
         if: always()
@@ -159,5 +179,6 @@ jobs:
           path: |
             app/build/reports/androidTests/**
             app/build/outputs/androidTest-results/**
+            app/build/emulator.log
           if-no-files-found: warn
           retention-days: 30
