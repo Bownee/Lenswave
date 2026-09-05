@@ -13,9 +13,12 @@ runs:
     - name: Set up Gradle
       uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5
       with:
-        # Pull request pushes save their cache too, so the next push to the same branch reuses
-        # dependency transforms and unchanged task outputs instead of rebuilding from scratch.
-        cache-read-only: false
+        # Pull requests only read the cache that pushes to main (and release tags) save: with the
+        # module split (#29) an unchanged module's compile, KSP, lint and unit tests come from
+        # main's build cache anyway, and saving a fresh entry cost every PR job 30-45 s in the
+        # post step. A PR therefore does not reuse its own earlier pushes' outputs, which only
+        # mattered for retries of an unchanged commit.
+        cache-read-only: ${{ github.event_name == 'pull_request' }}
         add-job-summary: on-failure
         # The default on-success cleanup provisions a second Gradle distribution and spends ~40 s
         # per job pruning the user home; the 10 GiB repository cache already evicts stale entries.
