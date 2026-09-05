@@ -260,9 +260,10 @@ internal class ProtonRenditionDownloads(
      * not the ones at fault, so they take no backoff step, and stay claimed until the run
      * that abandoned them is idle and the sync clears the claims a batch left behind.
      *
-     * The viewer's own download is given way to once, here, for the whole call: asked per
-     * chunk, a batch of sixteen and the single-node re-asks after it waited the coordinator's
-     * five seconds several times over while one original was fetched.
+     * The viewer's own download is given way to once per call of this function rather than
+     * per chunk (so up to three times per downloadThumbnails: the batch pass, the single-node
+     * re-asks and the preview fallback): asked per chunk, a batch of sixteen and its re-asks
+     * waited the coordinator's five seconds several times over while one original was fetched.
      */
     private suspend fun downloadChunks(
         nodeUids: List<String>,
