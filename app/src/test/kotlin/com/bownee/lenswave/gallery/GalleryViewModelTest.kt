@@ -224,6 +224,89 @@ class GalleryViewModelTest {
         }
 
     @Test
+    fun `the span and first visible photo travel with the saved scroll position`() =
+        runTest(dispatcher) {
+            val viewModel = connectedViewModel()
+
+            viewModel.saveScrollPosition(
+                GalleryDestination.Timeline,
+                GalleryScrollPosition(
+                    firstVisiblePosition = 5,
+                    topOffset = -9,
+                    photoColumns = 4,
+                    firstVisibleAssetIndex = 12,
+                ),
+            )
+
+            assertEquals(5, savedState.get<Int>("gallery.scroll-first-visible"))
+            assertEquals(-9, savedState.get<Int>("gallery.scroll-top-offset"))
+            assertEquals(4, savedState.get<Int>("gallery.scroll-columns"))
+            assertEquals(12, savedState.get<Int>("gallery.scroll-asset-index"))
+
+            // A page without a photo on screen (a header at the top of an empty day, or the library) has no photo index.
+            viewModel.saveScrollPosition(
+                GalleryDestination.Timeline,
+                GalleryScrollPosition(
+                    firstVisiblePosition = 0,
+                    topOffset = 0,
+                    photoColumns = 4,
+                    firstVisibleAssetIndex = null,
+                ),
+            )
+            assertTrue(
+                "the key is written, not left over from the earlier save",
+                savedState.contains("gallery.scroll-asset-index"),
+            )
+            assertNull(savedState.get<Int>("gallery.scroll-asset-index"))
+            assertEquals(4, savedState.get<Int>("gallery.scroll-columns"))
+
+            viewModel.selectDestination(GalleryDestination.Tag(ProtonMediaTag.VIDEOS))
+            runCurrent()
+            assertFalse("a page never scrolled drops every scroll key", savedState.contains("gallery.scroll-columns"))
+            assertFalse(savedState.contains("gallery.scroll-asset-index"))
+            assertFalse(savedState.contains("gallery.scroll-first-visible"))
+            assertFalse(savedState.contains("gallery.scroll-top-offset"))
+        }
+
+    @Test
+    fun `a restored view model reads the span and photo index back, or marks them unknown for an older state`() =
+        runTest(dispatcher) {
+            savedState["gallery.destination"] = "proton-timeline"
+            savedState["gallery.scroll-first-visible"] = 7
+            savedState["gallery.scroll-top-offset"] = -3
+            savedState["gallery.scroll-columns"] = 6
+            savedState["gallery.scroll-asset-index"] = 30
+
+            assertEquals(
+                GalleryScrollPosition(
+                    firstVisiblePosition = 7,
+                    topOffset = -3,
+                    photoColumns = 6,
+                    firstVisibleAssetIndex = 30,
+                ),
+                viewModel().scrollPositions.positionFor(GalleryDestination.Timeline),
+            )
+
+            // A state written before the span was saved carries only the position and offset.
+            savedState.remove<Int>("gallery.scroll-columns")
+            savedState.remove<Int>("gallery.scroll-asset-index")
+            val legacy = viewModel().scrollPositions.positionFor(GalleryDestination.Timeline)
+            assertEquals(
+                GalleryScrollPosition(
+                    firstVisiblePosition = 7,
+                    topOffset = -3,
+                    photoColumns = GalleryScrollPosition.UNKNOWN_COLUMNS,
+                    firstVisibleAssetIndex = null,
+                ),
+                legacy,
+            )
+
+            // A position without an offset is no position at all.
+            savedState.remove<Int>("gallery.scroll-top-offset")
+            assertNull(viewModel().scrollPositions.positionFor(GalleryDestination.Timeline))
+        }
+
+    @Test
     fun `the selection is saved to the state and cleared by a navigation`() =
         runTest(dispatcher) {
             val viewModel = connectedViewModel()
