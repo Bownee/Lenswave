@@ -645,6 +645,12 @@ internal class GalleryScreen(
                 gravity = Gravity.CENTER
             }
 
+        // Both colours are built once; a render only re-applies them when the tab's state changes.
+        // Declared before the init block: it calls setSelectedTab, which reads them.
+        private val selectedColor = ColorStateList.valueOf(UiStyle.text)
+        private val plainColor = ColorStateList.valueOf(UiStyle.muted)
+        private var isSelectedTab: Boolean? = null
+
         init {
             isClickable = true
             isFocusable = true
@@ -655,11 +661,6 @@ internal class GalleryScreen(
             ViewCompat.setAccessibilityHeading(this, true)
             setSelectedTab(false)
         }
-
-        // Both colours are built once; a render only re-applies them when the tab's state changes.
-        private val selectedColor = ColorStateList.valueOf(UiStyle.text)
-        private val plainColor = ColorStateList.valueOf(UiStyle.muted)
-        private var isSelectedTab: Boolean? = null
 
         fun setSelectedTab(selected: Boolean) {
             if (isSelectedTab == selected) return
