@@ -283,6 +283,59 @@ class ProtonPhotoCacheInstrumentedTest {
         }
     }
 
+    @Test fun anUnreadableAlbumListingKeepsEveryRenditionThroughTheReconcile() {
+        val context = isolatedContext()
+        val userId = "albums-${UUID.randomUUID()}"
+        val cache =
+            createCache(
+                context,
+                SecureFileStore(File(context.filesDir, "secure-keys")),
+                FakeClock(System.currentTimeMillis()),
+            )
+        val albumsIndex =
+            File(
+                context.filesDir,
+                "proton-photo-cache/${AtomicFileStore.safeName(userId)}/albums.json",
+            )
+        val inTimeline = ProtonGalleryPhoto("volume~timeline", 200L, false)
+        val albumOnly = ProtonGalleryPhoto("volume~album-only", 100L, false)
+        try {
+            cache.writeIndex(userId, listOf(inTimeline, albumOnly))
+            cache.writeAlbums(
+                userId,
+                listOf(ProtonAlbum("album", "Album", 1L, albumOnly.nodeUid, 1L, 1L, false, false)),
+            )
+            cache.writeThumbnail(userId, albumOnly.nodeUid, validThumbnail())
+            cache.writeThumbnail(userId, inTimeline.nodeUid, validThumbnail())
+            val bytes = albumsIndex.readBytes()
+            bytes[bytes.lastIndex] = (bytes.last().toInt() xor 1).toByte()
+            albumsIndex.writeBytes(bytes)
+
+            // The album listing cannot be read, so nobody knows which photos the albums still
+            // show: the timeline listing is what the sync rewrites, and no rendition goes.
+            cache.reconcilePhotos(
+                userId,
+                cachedNodeUids = listOf(inTimeline.nodeUid, albumOnly.nodeUid),
+                remoteNodeUids = listOf(inTimeline.nodeUid),
+            )
+
+            assertTrue(cache.thumbnailExists(userId, albumOnly.nodeUid))
+            assertTrue(cache.thumbnailExists(userId, inTimeline.nodeUid))
+            assertFalse(albumsIndex.exists())
+
+            // With no album listing left at all there is nothing to keep the photo for.
+            cache.reconcilePhotos(
+                userId,
+                cachedNodeUids = listOf(inTimeline.nodeUid, albumOnly.nodeUid),
+                remoteNodeUids = listOf(inTimeline.nodeUid),
+            )
+            assertFalse(cache.thumbnailExists(userId, albumOnly.nodeUid))
+        } finally {
+            cache.clearUser(userId)
+            context.testRoot.deleteRecursively()
+        }
+    }
+
     private fun validThumbnail(): ByteArray =
         ByteArrayOutputStream().use { output ->
             val bitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)

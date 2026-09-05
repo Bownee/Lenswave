@@ -445,9 +445,17 @@ internal class ProtonPhotoCache
                 val retained = tagged.filter { it.nodeUid in remote }
                 if (retained.size != tagged.size) writeTag(userId, tag, retained)
             }
-            val retainedNodeUids = nonTimelineReferencedNodeUids(userId)
-            changes.removedNodeUids.forEach { nodeUid ->
-                if (nodeUid in retainedNodeUids) return@forEach
+            // An album-only photo keeps its renditions. When the album listings cannot be read right
+            // now, nothing is deleted: a listing that read as empty used to delete every album-only
+            // photo, and the strays a skipped sweep leaves are [trimUser]'s job.
+            val referencedElsewhere = nonTimelineReferencedNodeUidsOrNull(userId)
+            if (referencedElsewhere == null) {
+                LenswaveDiagnostics.reportFailure(
+                    LenswaveOperation.CACHE_SNAPSHOT_READ,
+                    ProtonRenditionSweepSkippedException(),
+                )
+            }
+            ProtonReconcileDeletionPolicy.deletable(changes.removedNodeUids, referencedElsewhere).forEach { nodeUid ->
                 thumbnails.remove(userId, nodeUid)
                 previews.remove(userId, nodeUid)
                 originals.remove(userId, nodeUid)
@@ -644,13 +652,7 @@ internal class ProtonPhotoCache
                 )
             }
 
-        /** Node uids only, for callers that never look at rendition availability. */
-        private fun readNodeUids(
-            userId: String,
-            index: File,
-        ): List<String> = readNodeUidsOrNull(userId, index).orEmpty()
-
-        /** [readNodeUids] that tells an absent or unreadable listing (null) from an empty one. */
+        /** Node uids only, for callers that never look at rendition availability; null when the listing is absent or unreadable. */
         private fun readNodeUidsOrNull(
             userId: String,
             index: File,
@@ -717,16 +719,6 @@ internal class ProtonPhotoCache
             }
             writeAtomically(userId, target, array.toString(), "Could not commit Proton Photos index")
         }
-
-        private fun nonTimelineReferencedNodeUids(userId: String): Set<String> =
-            buildSet {
-                readAlbumsSnapshot(userId, ProtonStoredRenditions.NONE)
-                    ?.mapNotNullTo(this) { it.coverPhotoNodeUid }
-                albumPhotosDirectory(userId)
-                    .listFiles()
-                    ?.filter { it.extension == "json" }
-                    ?.forEach { file -> addAll(readNodeUids(userId, file)) }
-            }
 
         /**
          * Every node uid the albums index, the tag files and the album-photo indexes name, or
