@@ -64,7 +64,6 @@ import me.proton.core.accountmanager.domain.AccountManager
 import me.proton.core.auth.presentation.AuthOrchestrator
 import me.proton.core.domain.entity.UserId
 import me.proton.core.usersettings.domain.usecase.ObserveUserSettings
-import me.proton.core.usersettings.domain.usecase.PerformUpdateTelemetry
 import javax.inject.Inject
 
 @AndroidEntryPoint
@@ -81,8 +80,6 @@ class GalleryActivity :
     @Inject lateinit var thumbnailSource: ProtonThumbnailImageSource
 
     @Inject lateinit var observeUserSettings: ObserveUserSettings
-
-    @Inject lateinit var updateTelemetry: PerformUpdateTelemetry
 
     @Inject lateinit var appUpdateChecker: AppUpdateChecker
 
@@ -166,7 +163,6 @@ class GalleryActivity :
             GallerySettingsPresenter(
                 activity = this,
                 observeUserSettings = observeUserSettings,
-                updateTelemetry = updateTelemetry,
                 currentUserId = { currentUiState.currentUserId },
                 privacySettings = viewerPrivacySettings,
                 onConnectProton = ::connectProton,
@@ -249,7 +245,7 @@ class GalleryActivity :
 
     override fun onTrashConfirmed(nodeUids: List<String>) = viewModel.trashPhotos(nodeUids)
 
-    override fun onTelemetryPreferenceSaved(enabled: Boolean) = settingsPresenter.saveTelemetryPreference(enabled)
+    override fun onTelemetryPreferenceSaved(enabled: Boolean) = viewModel.saveTelemetryPreference(enabled)
 
     override fun onDisconnectProtonConfirmed() = settingsPresenter.disconnectProtonConfirmed()
 
@@ -296,8 +292,16 @@ class GalleryActivity :
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 viewModel.mutationEvents.collect { event ->
-                    if (event is GalleryMutationEvent.Trashed) adapter.clearSelection()
-                    deletionCoordinator.showOutcome(event)
+                    when (event) {
+                        is GalleryMutationEvent.Trash -> {
+                            if (event is GalleryMutationEvent.Trashed) adapter.clearSelection()
+                            deletionCoordinator.showOutcome(event)
+                        }
+
+                        is GalleryMutationEvent.TelemetryPreferenceSaved -> {
+                            settingsPresenter.showTelemetryOutcome(event.saved)
+                        }
+                    }
                 }
             }
         }

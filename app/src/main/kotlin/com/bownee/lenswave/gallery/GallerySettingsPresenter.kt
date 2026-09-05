@@ -14,19 +14,18 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import me.proton.core.domain.entity.UserId
 import me.proton.core.usersettings.domain.usecase.ObserveUserSettings
-import me.proton.core.usersettings.domain.usecase.PerformUpdateTelemetry
 
 /**
  * The settings popup: connect/disconnect Proton, the privacy and telemetry dialog, app version.
  * The popup is a window-backed view anchored to a button, so it is kept here and dismissed in
  * [dispose]; the dialogs are fragments ([PrivacySettingsDialogFragment],
  * [DisconnectProtonDialogFragment]) that the fragment manager restores across a rotation, and
- * the hosting activity forwards their answers to [saveTelemetryPreference] and [onDisconnectProton].
+ * the hosting activity forwards their answers to [GalleryViewModel.saveTelemetryPreference] (whose
+ * outcome comes back through [showTelemetryOutcome]) and [disconnectProtonConfirmed].
  */
 internal class GallerySettingsPresenter(
     private val activity: FragmentActivity,
     private val observeUserSettings: ObserveUserSettings,
-    private val updateTelemetry: PerformUpdateTelemetry,
     private val currentUserId: () -> UserId?,
     private val privacySettings: ViewerPrivacySettings,
     private val onConnectProton: () -> Unit,
@@ -106,18 +105,14 @@ internal class GallerySettingsPresenter(
         show(fragment, tag)
     }
 
-    /** The answer from [PrivacySettingsDialogFragment]; the account may have gone while the dialog was up. */
-    fun saveTelemetryPreference(enabled: Boolean) {
-        val userId = currentUserId()
-        activity.lifecycleScope.launch {
-            val updated = userId != null && runCatching { updateTelemetry(userId, enabled) }.isSuccess
-            Toast
-                .makeText(
-                    activity,
-                    if (updated) R.string.privacy_setting_saved else R.string.privacy_setting_failed,
-                    Toast.LENGTH_LONG,
-                ).show()
-        }
+    /** What the view model's telemetry write came to; the write itself outlives this activity. */
+    fun showTelemetryOutcome(saved: Boolean) {
+        Toast
+            .makeText(
+                activity,
+                if (saved) R.string.privacy_setting_saved else R.string.privacy_setting_failed,
+                Toast.LENGTH_LONG,
+            ).show()
     }
 
     /** The answer from [DisconnectProtonDialogFragment]. */

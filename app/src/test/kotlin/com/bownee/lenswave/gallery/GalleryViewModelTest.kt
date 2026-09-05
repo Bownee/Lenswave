@@ -60,6 +60,7 @@ class GalleryViewModelTest {
     private val session = MutableStateFlow(ProtonAccountSessionState())
     private val navigationStore = FakeNavigationStore()
     private val deletionExecutor = FakeDeletionExecutor(events)
+    private val telemetryWriter = FakeTelemetryWriter(events)
     private val savedState = SavedStateHandle()
     private val text = CountingText()
 
@@ -269,6 +270,51 @@ class GalleryViewModelTest {
             runCurrent()
 
             assertEquals(GalleryMutationEvent.TrashFailed, received.last())
+        }
+
+    @Test
+    fun `saveTelemetryPreference writes in the view model scope and reports the outcome to a late collector`() =
+        runTest(dispatcher) {
+            val viewModel = connectedViewModel()
+
+            viewModel.saveTelemetryPreference(enabled = true)
+            runCurrent()
+            assertEquals(listOf("telemetry:u:true"), events)
+            // The activity that opened the dialog may have been recreated meanwhile; the write goes on.
+            telemetryWriter.held.single().complete(Unit)
+            runCurrent()
+
+            val received = mutableListOf<GalleryMutationEvent>()
+            backgroundScope.launch { viewModel.mutationEvents.collect { received += it } }
+            runCurrent()
+            assertEquals(
+                listOf<GalleryMutationEvent>(GalleryMutationEvent.TelemetryPreferenceSaved(saved = true)),
+                received,
+            )
+
+            telemetryWriter.failure = IllegalStateException("offline")
+            viewModel.saveTelemetryPreference(enabled = false)
+            runCurrent()
+            telemetryWriter.held.last().complete(Unit)
+            runCurrent()
+            assertEquals(GalleryMutationEvent.TelemetryPreferenceSaved(saved = false), received.last())
+        }
+
+    @Test
+    fun `saveTelemetryPreference without an account is reported as not saved and writes nothing`() =
+        runTest(dispatcher) {
+            val viewModel = viewModel()
+            val received = mutableListOf<GalleryMutationEvent>()
+            backgroundScope.launch { viewModel.mutationEvents.collect { received += it } }
+
+            viewModel.saveTelemetryPreference(enabled = true)
+            runCurrent()
+
+            assertEquals(
+                listOf<GalleryMutationEvent>(GalleryMutationEvent.TelemetryPreferenceSaved(saved = false)),
+                received,
+            )
+            assertTrue(events.none { it.startsWith("telemetry:") })
         }
 
     @Test
@@ -671,6 +717,7 @@ class GalleryViewModelTest {
             accountSession = session,
             navigationStore = navigationStore,
             deletionExecutor = deletionExecutor,
+            telemetryWriter = telemetryWriter,
             savedStateHandle = savedState,
             clock = SchedulerClock(),
             dispatchers = TestDispatchers(),
@@ -853,6 +900,22 @@ class GalleryViewModelTest {
             CompletableDeferred<Unit>().also(held::add).await()
             failure?.let { throw it }
             return result
+        }
+    }
+
+    private class FakeTelemetryWriter(
+        private val events: MutableList<String>,
+    ) : TelemetryPreferenceWriter {
+        var failure: Throwable? = null
+        val held = mutableListOf<CompletableDeferred<Unit>>()
+
+        override suspend fun setTelemetryEnabled(
+            userId: UserId,
+            enabled: Boolean,
+        ) {
+            events += "telemetry:${userId.id}:$enabled"
+            CompletableDeferred<Unit>().also(held::add).await()
+            failure?.let { throw it }
         }
     }
 

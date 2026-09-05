@@ -44,14 +44,22 @@ import me.proton.core.accountmanager.domain.AccountManager
 import me.proton.core.domain.entity.UserId
 import javax.inject.Inject
 
-/** What a photo mutation run by [GalleryViewModel] came to; the activity on screen reports it once. */
+/** What a mutation run by [GalleryViewModel] came to; the activity on screen reports it once. */
 internal sealed interface GalleryMutationEvent {
+    /** The outcome of a move to Proton Trash. */
+    sealed interface Trash : GalleryMutationEvent
+
     data class Trashed(
         val successfulCount: Int,
         val failedCount: Int,
-    ) : GalleryMutationEvent
+    ) : Trash
 
-    data object TrashFailed : GalleryMutationEvent
+    data object TrashFailed : Trash
+
+    /** Whether the telemetry preference from the privacy dialog reached Proton. */
+    data class TelemetryPreferenceSaved(
+        val saved: Boolean,
+    ) : GalleryMutationEvent
 }
 
 @HiltViewModel
@@ -63,6 +71,7 @@ class GalleryViewModel internal constructor(
     private val accountSession: StateFlow<ProtonAccountSessionState>,
     private val navigationStore: GalleryNavigationStore,
     private val deletionExecutor: PhotoDeletionExecutor,
+    private val telemetryWriter: TelemetryPreferenceWriter,
     private val savedStateHandle: SavedStateHandle,
     private val clock: LenswaveClock,
     private val dispatchers: LenswaveDispatchers,
@@ -77,6 +86,7 @@ class GalleryViewModel internal constructor(
         accountSessionManager: ProtonAccountSessionManager,
         navigationStore: GalleryNavigationStore,
         deletionExecutor: PhotoDeletionExecutor,
+        telemetryWriter: TelemetryPreferenceWriter,
         savedStateHandle: SavedStateHandle,
         clock: LenswaveClock,
         dispatchers: LenswaveDispatchers,
@@ -88,6 +98,7 @@ class GalleryViewModel internal constructor(
         accountSession = accountSessionManager.state,
         navigationStore = navigationStore,
         deletionExecutor = deletionExecutor,
+        telemetryWriter = telemetryWriter,
         savedStateHandle = savedStateHandle,
         clock = clock,
         dispatchers = dispatchers,
@@ -289,6 +300,28 @@ class GalleryViewModel internal constructor(
         withTimeoutOrNull(SESSION_WAIT_MILLIS) {
             accountSession.first { state -> state.initialized && !state.transitioning }
         }?.activeUserId
+
+    /**
+     * The answer from the privacy dialog. Runs in this scope: the dialog is a fragment that
+     * survives a rotation, and its write must too, or a rotation right after the toggle loses
+     * it. The account may have gone while the dialog was up; that is reported as not saved.
+     */
+    fun saveTelemetryPreference(enabled: Boolean) {
+        val userId = currentUserId
+        viewModelScope.launch {
+            val saved =
+                userId != null &&
+                    try {
+                        telemetryWriter.setTelemetryEnabled(userId, enabled)
+                        true
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (_: Throwable) {
+                        false
+                    }
+            mutableMutationEvents.trySend(GalleryMutationEvent.TelemetryPreferenceSaved(saved))
+        }
+    }
 
     fun requestRefresh(manual: Boolean = true) {
         val selectedDestination = destination
