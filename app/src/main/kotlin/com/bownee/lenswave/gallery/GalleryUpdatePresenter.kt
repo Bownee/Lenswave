@@ -41,7 +41,10 @@ internal class GalleryUpdatePresenter(
     fun checkForUpdate() {
         activity.lifecycleScope.launch {
             val update = appUpdateChecker.awaitStartupUpdate(BuildConfig.VERSION_NAME) ?: return@launch
+            // Stored first, then marked: nothing suspends in between, so a cancellation cannot leave
+            // the process with the update marked as shown and no activity holding it.
             pendingVersionName = update.versionName
+            appUpdateChecker.markStartupUpdateShown()
             showPendingUpdate()
         }
     }
