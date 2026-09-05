@@ -428,7 +428,8 @@ class PhotoViewerActivity :
     }
 
     override fun onStop() {
-        video.pause()
+        // Like onDestroy: an onCreate that failed before buildInterface has no video controller.
+        if (this::video.isInitialized) video.pause()
         super.onStop()
     }
 
