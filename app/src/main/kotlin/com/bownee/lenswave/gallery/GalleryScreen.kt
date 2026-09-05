@@ -78,6 +78,9 @@ internal class GalleryScreen(
     private var safeArea = Insets.NONE
     private var revealedDestination: GalleryDestination? = null
 
+    // Declared before the init block: a constructor must never read a member below it.
+    private val pullGapBelowChips = activity.dp(PULL_GAP_BELOW_CHIPS_DP)
+
     init {
         adapter =
             GalleryListAdapter(
@@ -334,7 +337,6 @@ internal class GalleryScreen(
     }
 
     /** Resolved once rather than on every touch-down. */
-    private val pullGapBelowChips = activity.dp(PULL_GAP_BELOW_CHIPS_DP)
 
     private fun layoutBelowHeader() {
         val headerHeight = stickyHeader.height
