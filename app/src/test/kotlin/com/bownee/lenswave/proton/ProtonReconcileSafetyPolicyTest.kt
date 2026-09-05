@@ -30,6 +30,42 @@ class ProtonReconcileSafetyPolicyTest {
     }
 
     @Test
+    fun `the album floor refuses a listing that loses three albums and most of them`() {
+        val albumFloor = ProtonReconcileSafetyPolicy.MINIMUM_SUSPICIOUS_ALBUM_REMOVALS
+        assertFalse(ProtonReconcileSafetyPolicy.mayCommit(5, removedCount = 3, forceRemote = false, albumFloor))
+        assertTrue(ProtonReconcileSafetyPolicy.mayCommit(5, removedCount = 2, forceRemote = false, albumFloor))
+        assertTrue(ProtonReconcileSafetyPolicy.mayCommit(10, removedCount = 3, forceRemote = false, albumFloor))
+        assertFalse(ProtonReconcileSafetyPolicy.mayCommit(10, removedCount = 6, forceRemote = false, albumFloor))
+        assertTrue(ProtonReconcileSafetyPolicy.mayCommit(5, removedCount = 3, forceRemote = true, albumFloor))
+        // The photo floor would have let every one of those through.
+        assertTrue(ProtonReconcileSafetyPolicy.mayCommit(10, removedCount = 6, forceRemote = false))
+
+        val existing = List(5) { index -> "al$index" }
+        val error =
+            assertThrows(ProtonSuspiciousListingException::class.java) {
+                ProtonReconcileSafetyPolicy.requireCommit(
+                    "albums",
+                    existing,
+                    setOf("al0"),
+                    forceRemote = false,
+                    nodeUid = { it },
+                    minimumSuspiciousRemovals = albumFloor,
+                )
+            }
+        assertEquals(
+            "Remote albums listing dropped 4 of 5 cached entries; refusing to reconcile without a manual refresh",
+            error.message,
+        )
+        ProtonReconcileSafetyPolicy.requireCommit("albums", existing, setOf("al0"), forceRemote = false) { it }
+    }
+
+    @Test
+    fun `a refusal is told apart from any other failure`() {
+        assertTrue(ProtonSuspiciousListingException("albums", 5, 4).isListingRefusal())
+        assertFalse(IllegalStateException("offline").isListingRefusal())
+    }
+
+    @Test
     fun `a first listing over an empty cache is always committed`() {
         assertTrue(ProtonReconcileSafetyPolicy.mayCommit(cachedCount = 0, removedCount = 0, forceRemote = false))
     }

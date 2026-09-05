@@ -149,13 +149,15 @@ class ProtonAlbumRepositoryTest {
     @Test
     fun `an automatic albums refresh that drops most of the albums keeps the cache and fails`() =
         runTest {
-            cache.albums[USER.id] = List(400) { index -> album("al$index", photoCount = 1L) }
+            // Real album counts are small; the album floor refuses losing three of five.
+            cache.albums[USER.id] = List(5) { index -> album("al$index", photoCount = 1L) }
             repository.loadCached(USER)
 
             repository.syncMetadata(USER, forceRemote = false)
 
-            assertEquals(400, repository.albumsState.value.albums.size)
+            assertEquals(5, repository.albumsState.value.albums.size)
             assertTrue(repository.albumsState.value.refreshFailed)
+            assertTrue(repository.albumsState.value.listingRefused)
             assertTrue(cache.events.isEmpty())
             assertTrue(failures.single().second is ProtonSuspiciousListingException)
 
@@ -165,6 +167,7 @@ class ProtonAlbumRepositoryTest {
                 repository.albumsState.value.albums
                     .isEmpty(),
             )
+            assertFalse(repository.albumsState.value.listingRefused)
             assertEquals(listOf("writeAlbums:0", "reconcileAlbums:0"), cache.events)
         }
 
@@ -180,6 +183,7 @@ class ProtonAlbumRepositoryTest {
 
             assertEquals(400, repository.albumPhotosState.value.photos.size)
             assertTrue(repository.albumPhotosState.value.refreshFailed)
+            assertTrue(repository.albumPhotosState.value.listingRefused)
             assertTrue(cache.events.isEmpty())
             assertTrue(failures.single().second is ProtonSuspiciousListingException)
 
@@ -189,6 +193,7 @@ class ProtonAlbumRepositoryTest {
                 repository.albumPhotosState.value.photos
                     .isEmpty(),
             )
+            assertFalse(repository.albumPhotosState.value.listingRefused)
             assertEquals(listOf("writeAlbumPhotos:al1:0"), cache.events)
         }
 

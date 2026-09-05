@@ -122,7 +122,17 @@ internal class ProtonTimelineRepository
                 hasSnapshot = hasCachedSnapshot,
                 operation = LenswaveOperation.TIMELINE_SYNC.tag,
                 publishFresh = { emit(userId, existing, hasLoaded = true, syncing = false) },
-                publishSyncing = { emit(userId, existing, hasLoaded = hasCachedSnapshot, syncing = true) },
+                publishSyncing = {
+                    // A refresh the user asked for is trusted with whatever Proton answers, so
+                    // the refusal it is about to resolve stops showing as it starts.
+                    emit(
+                        userId,
+                        existing,
+                        hasLoaded = hasCachedSnapshot,
+                        syncing = true,
+                        listingRefused = if (forceRemote) false else null,
+                    )
+                },
                 enumerate = {
                     val items = clientProvider.get(userId).enumerateTimeline().toList()
                     val availability = cache.storedRenditions(userId.id)
@@ -168,14 +178,22 @@ internal class ProtonTimelineRepository
                 },
                 publishResult = { photos ->
                     val remoteNodeUids = photos.mapTo(mutableSetOf(), ProtonGalleryPhoto::nodeUid)
-                    emit(userId, photos, hasLoaded = true, syncing = false) { previous ->
+                    emit(userId, photos, hasLoaded = true, syncing = false, listingRefused = false) { previous ->
                         previous.tags.mapValues { (_, tagState) ->
                             tagState.copy(photos = tagState.photos.filter { it.nodeUid in remoteNodeUids })
                         }
                     }
                 },
                 publishCancelled = { updateState(userId) { state -> state.copy(syncing = false) } },
-                publishFailed = { updateState(userId) { state -> state.copy(syncing = false, refreshFailed = true) } },
+                publishFailed = { error ->
+                    updateState(userId) { state ->
+                        state.copy(
+                            syncing = false,
+                            refreshFailed = true,
+                            listingRefused = state.listingRefused || error.isListingRefusal(),
+                        )
+                    }
+                },
                 commitGate = { commit -> mutationMutex.withLock { commit() } },
             )
         }
@@ -218,9 +236,20 @@ internal class ProtonTimelineRepository
                 forceRemote = forceRemote,
                 hasSnapshot = hasCachedSnapshot,
                 operation = "tag-sync-${tag.name.lowercase()}",
-                publishFresh = { updateTag(userId, tag) { ProtonTagState(existing, hasLoaded = true) } },
+                publishFresh = {
+                    updateTag(userId, tag) { current ->
+                        ProtonTagState(existing, hasLoaded = true, listingRefused = current.isRefused())
+                    }
+                },
                 publishSyncing = {
-                    updateTag(userId, tag) { ProtonTagState(existing, hasLoaded = hasCachedSnapshot, syncing = true) }
+                    updateTag(userId, tag) { current ->
+                        ProtonTagState(
+                            existing,
+                            hasLoaded = hasCachedSnapshot,
+                            syncing = true,
+                            listingRefused = !forceRemote && current.isRefused(),
+                        )
+                    }
                 },
                 enumerate = { listTag(userId, tag, existing) },
                 commit = { photos ->
@@ -245,12 +274,13 @@ internal class ProtonTimelineRepository
                 },
                 // Unlike the other listings, a failed tag sync republishes the cached photos rather
                 // than copying whatever tag state is currently published.
-                publishFailed = {
-                    updateTag(userId, tag) {
+                publishFailed = { error ->
+                    updateTag(userId, tag) { current ->
                         ProtonTagState(
                             photos = existing,
                             hasLoaded = hasCachedSnapshot,
                             refreshFailed = true,
+                            listingRefused = current.isRefused() || error.isListingRefusal(),
                         )
                     }
                 },
@@ -417,6 +447,7 @@ internal class ProtonTimelineRepository
                                     photos = nextFavorites,
                                     hasLoaded = current?.hasLoaded == true,
                                     refreshFailed = current?.refreshFailed == true,
+                                    listingRefused = current.isRefused(),
                                 )
                             state.copy(tags = state.tags + (ProtonMediaTag.FAVORITES to nextState))
                         }
@@ -475,13 +506,15 @@ internal class ProtonTimelineRepository
          * list identity, so a syncing heartbeat that re-published an equal copy made the Activity
          * compare the whole library on the main thread. Callers hand over lists they built
          * themselves, so no defensive copy is taken. [tags] derives the tag map from the state
-         * being replaced, inside the update, and keeps the published one by default.
+         * being replaced, inside the update, and keeps the published one by default; so does
+         * [listingRefused] while the state stays this user's, unless a value is given.
          */
         private fun emit(
             userId: UserId,
             photos: List<ProtonGalleryPhoto>,
             hasLoaded: Boolean,
             syncing: Boolean,
+            listingRefused: Boolean? = null,
             tags: (previous: ProtonGalleryState) -> Map<ProtonMediaTag, ProtonTagState> = { previous ->
                 previous.tags
             },
@@ -492,6 +525,7 @@ internal class ProtonTimelineRepository
                     photos = if (previous.photos == photos) previous.photos else photos,
                     hasLoaded = hasLoaded,
                     syncing = syncing,
+                    listingRefused = listingRefused ?: (previous.userId == userId.id && previous.listingRefused),
                     tags = tags(previous),
                 )
             }
@@ -515,6 +549,8 @@ internal class ProtonTimelineRepository
                 gallery.copy(tags = gallery.tags + (tag to transform(gallery.tags[tag])))
             }
         }
+
+        private fun ProtonTagState?.isRefused(): Boolean = this?.listingRefused == true
 
         private fun volumeId(photos: List<ProtonGalleryPhoto>): String? =
             photos

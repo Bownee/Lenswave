@@ -113,7 +113,15 @@ internal class ProtonAlbumRepository
                 hasSnapshot = hasCachedSnapshot,
                 operation = LenswaveOperation.ALBUM_SYNC.tag,
                 publishFresh = { emitAlbums(userId, existing, syncing = false, hasLoaded = true) },
-                publishSyncing = { emitAlbums(userId, existing, syncing = true, hasLoaded = hasCachedSnapshot) },
+                publishSyncing = {
+                    emitAlbums(
+                        userId,
+                        existing,
+                        syncing = true,
+                        hasLoaded = hasCachedSnapshot,
+                        listingRefused = if (forceRemote) false else null,
+                    )
+                },
                 enumerate = {
                     val photosClient = clientProvider.get(userId)
                     val sharedNodeUids = photosClient.enumerateSharedWithMeNodeUids().toList()
@@ -136,6 +144,7 @@ internal class ProtonAlbumRepository
                         remoteNodeUids = albums.mapTo(HashSet(), ProtonAlbum::nodeUid),
                         forceRemote = forceRemote,
                         nodeUid = ProtonAlbum::nodeUid,
+                        minimumSuspiciousRemovals = ProtonReconcileSafetyPolicy.MINIMUM_SUSPICIOUS_ALBUM_REMOVALS,
                     )
                     // The listing lands before the vanished albums' photo indexes are deleted,
                     // so a crash in between leaves a stray index rather than a listing whose
@@ -144,9 +153,17 @@ internal class ProtonAlbumRepository
                     cache.reconcileAlbums(userId.id, albums.map(ProtonAlbum::nodeUid))
                     albums
                 },
-                publishResult = { albums -> emitAlbums(userId, albums, syncing = false) },
+                publishResult = { albums -> emitAlbums(userId, albums, syncing = false, listingRefused = false) },
                 publishCancelled = { updateAlbums(userId) { state -> state.copy(syncing = false) } },
-                publishFailed = { updateAlbums(userId) { state -> state.copy(syncing = false, refreshFailed = true) } },
+                publishFailed = { error ->
+                    updateAlbums(userId) { state ->
+                        state.copy(
+                            syncing = false,
+                            refreshFailed = true,
+                            listingRefused = state.listingRefused || error.isListingRefusal(),
+                        )
+                    }
+                },
                 commitGate = { commit -> mutationMutex.withLock { commit() } },
             )
         }
@@ -187,7 +204,14 @@ internal class ProtonAlbumRepository
                 operation = LenswaveOperation.ALBUM_PHOTO_SYNC.tag,
                 publishFresh = { emitAlbumPhotos(userId, album, existing, hasLoaded = true, syncing = false) },
                 publishSyncing = {
-                    emitAlbumPhotos(userId, album, existing, hasLoaded = hasCachedSnapshot, syncing = true)
+                    emitAlbumPhotos(
+                        userId,
+                        album,
+                        existing,
+                        hasLoaded = hasCachedSnapshot,
+                        syncing = true,
+                        listingRefused = if (forceRemote) false else null,
+                    )
                 },
                 enumerate = {
                     val items = clientProvider.get(userId).enumerateAlbum(NodeUid(album.nodeUid)).toList()
@@ -212,16 +236,20 @@ internal class ProtonAlbumRepository
                     retained
                 },
                 publishResult = { photos ->
-                    emitAlbumPhotos(userId, album, photos, hasLoaded = true, syncing = false)
+                    emitAlbumPhotos(userId, album, photos, hasLoaded = true, syncing = false, listingRefused = false)
                 },
                 // The album-photo state may already belong to another album by the time the sync
                 // settles; only the album that is still open reflects the outcome.
                 publishCancelled = {
                     updateAlbumPhotos(userId, album.nodeUid) { state -> state.copy(syncing = false) }
                 },
-                publishFailed = {
+                publishFailed = { error ->
                     updateAlbumPhotos(userId, album.nodeUid) { state ->
-                        state.copy(syncing = false, refreshFailed = true)
+                        state.copy(
+                            syncing = false,
+                            refreshFailed = true,
+                            listingRefused = state.listingRefused || error.isListingRefusal(),
+                        )
                     }
                 },
                 commitGate = { commit -> mutationMutex.withLock { commit() } },
@@ -362,12 +390,14 @@ internal class ProtonAlbumRepository
          * The published list keeps its previous instance whenever the content is unchanged; the
          * gallery memoizes by list identity, so a syncing heartbeat must not hand it an equal copy.
          * Callers hand over lists they built themselves, so no defensive copy is taken.
+         * [listingRefused] keeps the published flag while the state stays this user's, unless given.
          */
         private fun emitAlbums(
             userId: UserId,
             albums: List<ProtonAlbum>,
             syncing: Boolean,
             hasLoaded: Boolean = true,
+            listingRefused: Boolean? = null,
         ) {
             mutableAlbumsState.update { previous ->
                 ProtonAlbumsState(
@@ -375,6 +405,7 @@ internal class ProtonAlbumRepository
                     albums = if (previous.albums == albums) previous.albums else albums,
                     hasLoaded = hasLoaded,
                     syncing = syncing,
+                    listingRefused = listingRefused ?: (previous.userId == userId.id && previous.listingRefused),
                 )
             }
         }
@@ -401,12 +432,14 @@ internal class ProtonAlbumRepository
             }
         }
 
+        /** [listingRefused] keeps the published flag while the state stays this album's, unless given. */
         private fun emitAlbumPhotos(
             userId: UserId,
             album: ProtonAlbumReference,
             photos: List<ProtonGalleryPhoto>,
             hasLoaded: Boolean,
             syncing: Boolean,
+            listingRefused: Boolean? = null,
         ) {
             mutableAlbumPhotosState.update { previous ->
                 val currentAlbumUid = previous.albumUid
@@ -418,6 +451,12 @@ internal class ProtonAlbumRepository
                     photos = if (previous.photos == photos) previous.photos else photos,
                     hasLoaded = hasLoaded,
                     syncing = syncing,
+                    listingRefused =
+                        listingRefused
+                            ?: (
+                                previous.userId == userId.id && currentAlbumUid == album.nodeUid &&
+                                    previous.listingRefused
+                            ),
                 )
             }
         }

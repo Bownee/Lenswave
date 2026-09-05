@@ -252,18 +252,30 @@ class ProtonTimelineRepositoryTest {
             val state = repository.state.value
             assertEquals(400, state.photos.size)
             assertTrue(state.refreshFailed)
+            assertTrue(state.listingRefused)
             assertFalse(state.syncing)
             assertEquals(400, cache.timelines.getValue(USER.id).size)
             assertTrue(cache.events.none { it.startsWith("reconcilePhotos") || it.startsWith("writeIndex") })
             assertTrue(failures.single().second is ProtonSuspiciousListingException)
 
+            // A later automatic refresh that fails for another reason keeps the refusal showing.
+            clients.enumerationFailure = IllegalStateException("offline")
+            repository.syncMetadata(USER, forceRemote = false)
+            assertTrue(repository.state.value.refreshFailed)
+            assertTrue(repository.state.value.listingRefused)
+            // A photo trashed in the meantime keeps it too.
+            repository.removePhotos(USER, setOf("v~p399"))
+            assertTrue(repository.state.value.listingRefused)
+            clients.enumerationFailure = null
+
             repository.syncMetadata(USER, forceRemote = true)
 
             assertEquals(100, repository.state.value.photos.size)
             assertFalse(repository.state.value.refreshFailed)
+            assertFalse(repository.state.value.listingRefused)
             assertEquals(100, cache.timelines.getValue(USER.id).size)
             // The new listing is on disk before anything it no longer names is deleted.
-            assertEquals(listOf("writeIndex:100", "reconcilePhotos:400->100"), cache.events)
+            assertEquals(listOf("removePhotos:v~p399", "writeIndex:100", "reconcilePhotos:399->100"), cache.events)
         }
 
     @Test
@@ -304,17 +316,17 @@ class ProtonTimelineRepositoryTest {
                     .getValue(ProtonMediaTag.VIDEOS)
             assertEquals(400, videos.photos.size)
             assertTrue(videos.refreshFailed)
+            assertTrue(videos.listingRefused)
             assertEquals(400, cache.tags.getValue(USER.id to ProtonMediaTag.VIDEOS).size)
             assertTrue(failures.single().second is ProtonSuspiciousListingException)
 
             repository.syncTagMetadata(USER, ProtonMediaTag.VIDEOS, forceRemote = true)
 
-            assertEquals(
-                100,
+            val refreshed =
                 repository.state.value.tags
                     .getValue(ProtonMediaTag.VIDEOS)
-                    .photos.size,
-            )
+            assertEquals(100, refreshed.photos.size)
+            assertFalse(refreshed.listingRefused)
             assertEquals(100, cache.tags.getValue(USER.id to ProtonMediaTag.VIDEOS).size)
         }
 
@@ -383,6 +395,9 @@ class ProtonTimelineRepositoryTest {
 
         /** While true, an enumeration signals [enumerating] and answers only once [release] completes. */
         var holdEnumeration = false
+
+        /** When set, an enumeration fails with it instead of listing anything. */
+        var enumerationFailure: Throwable? = null
         val enumerating = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
 
@@ -395,6 +410,7 @@ class ProtonTimelineRepositoryTest {
                     "enumerateTimeline" -> {
                         flow {
                             enumerating.complete(Unit)
+                            enumerationFailure?.let { throw it }
                             if (holdEnumeration) release.await()
                             timeline.forEach { (nodeUid, captureTime) -> emit(timelineItem(nodeUid, captureTime)) }
                         }
