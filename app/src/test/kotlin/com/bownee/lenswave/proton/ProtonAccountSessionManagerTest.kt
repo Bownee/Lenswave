@@ -28,6 +28,8 @@ class ProtonAccountSessionManagerTest {
     private val events = mutableListOf<String>()
     private val failures = mutableListOf<LenswaveOperation>()
     private var failRetains = 0
+    private var failActivations = 0
+    private val lastAccountStore = FakeLastAccountStore()
 
     @Test
     fun `a cache cleaner that throws once is retried and the account ends up active`() =
@@ -74,6 +76,52 @@ class ProtonAccountSessionManagerTest {
             assertNull(state.activeUserId)
             assertTrue(state.initialized)
             assertFalse(state.transitioning)
+        }
+
+    @Test
+    fun `the last account is preloaded ahead of the first observation, which then confirms it`() =
+        runTest {
+            lastAccountStore.stored = UserId("a")
+            val manager = manager(backgroundScope)
+            accounts.value = readyAccount("a")
+
+            manager.start()
+            runCurrent()
+
+            assertEquals(listOf("activate:a", "retain:a", "enqueue:a"), events)
+            assertEquals(UserId("a"), manager.state.value.activeUserId)
+            assertFalse(manager.state.value.preloading)
+            assertTrue(failures.isEmpty())
+        }
+
+    @Test
+    fun `a preloaded account nobody is signed in as is torn down by the first observation`() =
+        runTest {
+            lastAccountStore.stored = UserId("a")
+            val manager = manager(backgroundScope)
+
+            manager.start()
+            runCurrent()
+
+            assertEquals(listOf("activate:a", "cancel:a", "disconnect:a", "retain:null"), events)
+            assertNull(lastAccountStore.stored)
+            assertTrue(manager.state.value.initialized)
+        }
+
+    @Test
+    fun `a preload that fails is reported and the observation goes on without it`() =
+        runTest {
+            lastAccountStore.stored = UserId("a")
+            failActivations = 1
+            val manager = manager(backgroundScope)
+            accounts.value = readyAccount("a")
+
+            manager.start()
+            runCurrent()
+
+            assertEquals(listOf(LenswaveOperation.ACCOUNT_PRELOAD), failures)
+            assertEquals(listOf("activate:a", "activate:a", "retain:a", "enqueue:a"), events)
+            assertEquals(UserId("a"), manager.state.value.activeUserId)
         }
 
     @Test
@@ -150,7 +198,7 @@ class ProtonAccountSessionManagerTest {
             primaryAccount = accounts,
             transitionCoordinator =
                 ProtonAccountTransitionCoordinator(
-                    sessionLifecycle = FakeSessionLifecycle(events),
+                    sessionLifecycle = FakeSessionLifecycle(events) { failActivations-- > 0 },
                     cacheCleaner =
                         ProtonAccountCacheCleaner { userId ->
                             events += "retain:$userId"
@@ -158,6 +206,7 @@ class ProtonAccountSessionManagerTest {
                         },
                     thumbnailScheduler = FakeThumbnailScheduler(events),
                     mutationForgetter = ProtonAccountMutationForgetter {},
+                    lastAccountStore = lastAccountStore,
                 ),
             reportFailure = { operation, _ -> failures += operation },
             scope = scope,
@@ -200,13 +249,25 @@ class ProtonAccountSessionManagerTest {
 
     private class FakeSessionLifecycle(
         private val events: MutableList<String>,
+        private val failActivation: () -> Boolean = { false },
     ) : ProtonSessionLifecycle {
         override suspend fun activate(userId: UserId) {
             events += "activate:${userId.id}"
+            if (failActivation()) error("activation failed")
         }
 
         override suspend fun disconnect(userId: UserId) {
             events += "disconnect:${userId.id}"
+        }
+    }
+
+    private class FakeLastAccountStore : ProtonLastAccountStore {
+        var stored: UserId? = null
+
+        override fun read(): UserId? = stored
+
+        override fun write(userId: UserId?) {
+            stored = userId
         }
     }
 }

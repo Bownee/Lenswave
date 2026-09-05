@@ -40,6 +40,13 @@ internal data class GalleryUiInputs(
     val isRefreshing: Boolean = false,
     /** The account went away on its own (an expired session), not through the user's disconnect. */
     val signedOut: Boolean = false,
+    /**
+     * The session is still activating the previous launch's account from its cache (see
+     * [com.bownee.lenswave.proton.ProtonAccountSessionState.preloading]): a page with nothing
+     * cached waits for that before it shows the loading panel, or the panel would flash for a
+     * library that is about to appear.
+     */
+    val awaitingCache: Boolean = false,
 )
 
 internal class GalleryUiStateFactory(
@@ -64,7 +71,7 @@ internal class GalleryUiStateFactory(
         base(
             inputs = inputs,
             content = if (inputs.destination == GalleryDestination.Library) NO_SECTIONS else NO_PHOTOS,
-        )
+        ).copy(isPlaceholder = true)
 
     private fun timeline(inputs: GalleryUiInputs): GalleryUiState {
         protonUnavailable(inputs)?.let { return it }
@@ -282,6 +289,8 @@ internal class GalleryUiStateFactory(
                 // Cached metadata goes on screen at once; only a first launch waits for the sync.
                 if (inputs.hasCachedTimeline()) {
                     null
+                } else if (inputs.awaitingCache) {
+                    base(inputs)
                 } else {
                     base(
                         inputs = inputs,
@@ -319,6 +328,7 @@ internal class GalleryUiStateFactory(
         isProtonConnected = inputs.currentUserId != null,
         isRefreshing = inputs.isRefreshing,
         listingRefused = listingRefused,
+        thumbnailUserId = inputs.currentUserId ?: inputs.protonGallery.userId?.let(::UserId),
     )
 
     private fun title(destination: GalleryDestination): String =

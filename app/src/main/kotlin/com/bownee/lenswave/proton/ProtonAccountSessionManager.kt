@@ -2,6 +2,7 @@ package com.bownee.lenswave.proton
 
 import com.bownee.lenswave.LenswaveDiagnostics
 import com.bownee.lenswave.LenswaveOperation
+import dagger.Lazy
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -14,6 +15,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import me.proton.core.account.domain.entity.Account
 import me.proton.core.account.domain.entity.isReady
@@ -29,6 +33,8 @@ data class ProtonAccountSessionState(
     val activeUserId: UserId? = null,
     val initialized: Boolean = false,
     val transitioning: Boolean = false,
+    /** The previous process's account is being activated from its cache; the gallery holds its loading panel until this settles. */
+    val preloading: Boolean = false,
 )
 
 /** Owns every process-wide Proton account transition, including failure recovery. */
@@ -39,12 +45,13 @@ class ProtonAccountSessionManager internal constructor(
     private val reportFailure: (LenswaveOperation, Throwable) -> Unit,
     private val scope: CoroutineScope,
 ) {
+    /** [accountManager] stands on the session database; it is resolved when the flow is collected, so [start] can run before that database is built. */
     @Inject
     constructor(
-        accountManager: AccountManager,
+        accountManager: Lazy<AccountManager>,
         transitionCoordinator: ProtonAccountTransitionCoordinator,
     ) : this(
-        primaryAccount = accountManager.getPrimaryAccount(),
+        primaryAccount = flow { emitAll(accountManager.get().getPrimaryAccount()) },
         transitionCoordinator = transitionCoordinator,
         reportFailure = { operation, error -> LenswaveDiagnostics.reportFailure(operation, error) },
         scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
@@ -61,7 +68,27 @@ class ProtonAccountSessionManager internal constructor(
 
     fun start() {
         if (!started.compareAndSet(false, true)) return
+        // Side by side: the preload reads files while the observation waits for the database,
+        // and the coordinator serializes their transitions.
+        scope.launch { preloadLastAccount() }
         scope.launch { observeAccounts() }
+    }
+
+    /**
+     * Ahead of the first observation, which waits on the session database: a failure here
+     * costs the early listings, nothing else, so it is reported and the observation goes on.
+     */
+    private suspend fun preloadLastAccount() {
+        mutableState.update { it.copy(preloading = true) }
+        try {
+            transitionCoordinator.preloadLastAccount()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            reportFailure(LenswaveOperation.ACCOUNT_PRELOAD, error)
+        } finally {
+            mutableState.update { it.copy(preloading = false) }
+        }
     }
 
     private suspend fun observeAccounts() {
@@ -97,21 +124,18 @@ class ProtonAccountSessionManager internal constructor(
         // sweeps, so an observation that moves between the two still reaches the coordinator.
         val unchanged = nextUserId != null || accountAbsent == observedAccountAbsent
         if (observedUserId == nextUserId && unchanged && mutableState.value.initialized) {
-            mutableState.value =
-                ProtonAccountSessionState(
+            mutableState.update {
+                it.copy(
                     account = account,
                     activeUserId = nextUserId,
                     initialized = true,
+                    transitioning = false,
                 )
+            }
             return
         }
 
-        mutableState.value =
-            ProtonAccountSessionState(
-                account = account,
-                initialized = mutableState.value.initialized,
-                transitioning = true,
-            )
+        mutableState.update { it.copy(account = account, activeUserId = null, transitioning = true) }
         var retryDelayMillis = INITIAL_RETRY_MILLIS
         while (true) {
             currentCoroutineContext().ensureActive()
@@ -119,12 +143,9 @@ class ProtonAccountSessionManager internal constructor(
                 transitionCoordinator.transition(observedUserId, nextUserId, accountAbsent)
                 observedUserId = nextUserId
                 observedAccountAbsent = accountAbsent
-                mutableState.value =
-                    ProtonAccountSessionState(
-                        account = account,
-                        activeUserId = nextUserId,
-                        initialized = true,
-                    )
+                mutableState.update {
+                    it.copy(account = account, activeUserId = nextUserId, initialized = true, transitioning = false)
+                }
                 return
             } catch (error: CancellationException) {
                 throw error

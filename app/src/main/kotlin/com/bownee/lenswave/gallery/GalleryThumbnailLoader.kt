@@ -44,17 +44,18 @@ interface GalleryThumbnailImages<Image : Any> {
 
 /** The Proton thumbnail store's bitmaps as the loader's images. */
 class ProtonThumbnailImages(
-    private val source: ProtonThumbnailImageSource,
+    /** Resolved on the first load: the source stands on the Proton gateway, which the first frame does not wait for. */
+    private val source: () -> ProtonThumbnailImageSource,
 ) : GalleryThumbnailImages<Bitmap> {
     override fun peek(
         userId: UserId,
         nodeUid: String,
-    ): Bitmap? = source.peekThumbnail(userId, nodeUid)
+    ): Bitmap? = source().peekThumbnail(userId, nodeUid)
 
     override suspend fun load(
         userId: UserId,
         nodeUid: String,
-    ): Bitmap? = source.loadThumbnail(userId, nodeUid)
+    ): Bitmap? = source().loadThumbnail(userId, nodeUid)
 }
 
 /**

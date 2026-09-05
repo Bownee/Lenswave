@@ -1,6 +1,8 @@
 package com.bownee.lenswave.proton
 
 import com.bownee.lenswave.LenswaveOperation
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -69,10 +71,18 @@ internal class ProtonTimelineRepository
          * of the timeline there. A larger library publishes the grid as soon as the timeline is
          * parsed and fills the tabs right after, keeping whatever this user had published in the
          * meantime rather than an empty map.
+         *
+         * The rendition scan (a stat per stored file) and the decrypt-and-parse of the index are
+         * the two slow halves of a launch; they run side by side and meet for the hydration.
          */
-        fun loadCached(userId: UserId) {
-            val availability = cache.storedRenditions(userId.id)
-            val timeline = cache.readTimelineSnapshot(userId.id, availability)
+        suspend fun loadCached(userId: UserId) {
+            val (availability, entries) =
+                coroutineScope {
+                    val availability = async { cache.scanStoredRenditions(userId.id) }
+                    val entries = async { cache.readTimelineEntries(userId.id) }
+                    availability.await() to entries.await()
+                }
+            val timeline = entries?.map { entry -> availability.photo(entry.nodeUid, entry.captureTimeEpochSeconds) }
             val photos = timeline.orEmpty()
             val tagsFirst = photos.size <= TAGS_WITH_FIRST_PUBLISH_LIMIT
             val tagStates = if (tagsFirst) readTagStates(userId, availability) else null

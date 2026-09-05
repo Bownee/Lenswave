@@ -800,4 +800,59 @@ class GalleryUiStateFactoryTest {
 
     private fun GalleryUiState.librarySectionKeys(): List<String> =
         (content as GalleryContent.Library).sections.map { it.key }
+
+    @Test
+    fun `a session still preloading its cache shows neither the loading panel nor photos`() {
+        val state =
+            factory.create(
+                GalleryUiInputs(
+                    destination = GalleryDestination.Timeline,
+                    protonAccountStatus = ProtonAccountStatus.CONNECTING,
+                    awaitingCache = true,
+                ),
+            )
+
+        assertNull(state.emptyState)
+        assertTrue(state.visibleAssets.isEmpty())
+        assertFalse(state.isPlaceholder)
+    }
+
+    @Test
+    fun `the thumbnails come from the cached listing's user until the session names one`() {
+        val cached =
+            ProtonGalleryState(
+                userId = "cached",
+                hasLoaded = true,
+                photos =
+                    listOf(
+                        ProtonGalleryPhoto(nodeUid = "photo", captureTimeEpochSeconds = 10L, hasThumbnail = false),
+                    ),
+            )
+
+        val preloaded =
+            factory.create(
+                GalleryUiInputs(protonAccountStatus = ProtonAccountStatus.CONNECTING, protonGallery = cached),
+            )
+        val signedIn =
+            factory.create(
+                GalleryUiInputs(
+                    protonAccountStatus = ProtonAccountStatus.CONNECTED,
+                    currentUserId = UserId("signed-in"),
+                    protonGallery = cached,
+                ),
+            )
+
+        assertEquals(UserId("cached"), preloaded.thumbnailUserId)
+        assertEquals(1, preloaded.visibleAssets.size)
+        assertEquals(UserId("signed-in"), signedIn.thumbnailUserId)
+        assertNull(factory.create(GalleryUiInputs()).thumbnailUserId)
+    }
+
+    @Test
+    fun `the skeleton is marked as a placeholder and a created state is not`() {
+        val inputs = GalleryUiInputs(destination = GalleryDestination.Timeline)
+
+        assertTrue(factory.skeleton(inputs).isPlaceholder)
+        assertFalse(factory.create(inputs).isPlaceholder)
+    }
 }

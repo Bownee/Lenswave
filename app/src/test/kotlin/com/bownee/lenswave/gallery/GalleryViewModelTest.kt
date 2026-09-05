@@ -39,6 +39,7 @@ import me.proton.core.network.domain.session.Session
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -689,6 +690,24 @@ class GalleryViewModelTest {
                 viewModel.uiState.value.emptyState
                     ?.title,
             )
+        }
+
+    @Test
+    fun `a session still preloading its cache holds the loading panel back until it settles`() =
+        runTest(dispatcher) {
+            session.value = ProtonAccountSessionState(preloading = true)
+            val viewModel = viewModel()
+            backgroundScope.launch { viewModel.uiState.collect {} }
+            runCurrent()
+
+            assertNull(viewModel.uiState.value.emptyState)
+            assertFalse(viewModel.uiState.value.isProtonConnected)
+
+            session.value = ProtonAccountSessionState()
+            runCurrent()
+
+            assertNotNull(viewModel.uiState.value.emptyState)
+            assertTrue(events.isEmpty())
         }
 
     @Test

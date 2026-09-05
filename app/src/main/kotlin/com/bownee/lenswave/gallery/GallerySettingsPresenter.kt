@@ -26,7 +26,8 @@ import me.proton.core.usersettings.domain.usecase.ObserveUserSettings
  */
 internal class GallerySettingsPresenter(
     private val activity: FragmentActivity,
-    private val observeUserSettings: ObserveUserSettings,
+    /** Resolved when a dialog needs it: it stands on the session database, which the first frame does not wait for. */
+    private val observeUserSettings: () -> ObserveUserSettings,
     private val currentUserId: () -> UserId?,
     private val privacySettings: ViewerPrivacySettings,
     private val onConnectProton: () -> Unit,
@@ -131,7 +132,7 @@ internal class GallerySettingsPresenter(
         }
         activity.lifecycleScope.launch {
             val enabled =
-                runCatching { observeUserSettings(userId, false).first()?.telemetry == true }
+                runCatching { observeUserSettings()(userId, false).first()?.telemetry == true }
                     .getOrDefault(false)
             // The read suspended; the state may have been saved meanwhile (see GalleryDialogPromptPolicy).
             show(

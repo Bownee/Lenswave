@@ -23,6 +23,7 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.isNotEmpty
 import com.bownee.lenswave.R
 import com.bownee.lenswave.UiStyle
+import com.bownee.lenswave.applyBottomOverlayInsets
 import com.bownee.lenswave.dp
 import com.bownee.lenswave.proton.ProtonAlbum
 import com.bownee.lenswave.proton.ProtonMediaTag
@@ -37,7 +38,7 @@ import me.proton.core.domain.entity.UserId
 internal class GalleryScreen(
     private val activity: GalleryActivity,
     scope: CoroutineScope,
-    repository: ProtonThumbnailImageSource,
+    repository: () -> ProtonThumbnailImageSource,
     currentUserId: () -> UserId?,
     private val actions: Actions,
 ) {
@@ -47,7 +48,6 @@ internal class GalleryScreen(
         }
     val list: GalleryListView
     val adapter: GalleryListAdapter
-    val selectionBar: LinearLayout
     val settingsButton: ImageButton
 
     /** Height of the pinned header including the status-bar inset; the list starts below it. */
@@ -68,19 +68,17 @@ internal class GalleryScreen(
     private val filterChips: Map<GalleryDestination, FilterChip>
     private val galleryHeader: LinearLayout
     private val galleryFooter: View
-    private val emptyPanel: LinearLayout
-    private val emptyTitle: TextView
-    private val emptyMessage: TextView
-    private val emptyAction: Button
-    private val listingRefusedBanner: LinearLayout
+
+    // Built on first use: a launch onto a cached library shows neither, and the selection bar only on a long press.
+    private var emptyPanel: EmptyPanel? = null
+    private var listingRefusedBanner: LinearLayout? = null
+    private var selectionBar: SelectionBar? = null
 
     /** The user closed the banner; it stays closed until the flag clears and is raised again. */
     private var listingRefusedDismissed = false
     private val refreshLayout: GalleryRefreshLayout
     private val stickyDate: TextView
     private val stickyDateController: GalleryStickyDateController
-    private val selectionCount: TextView
-    private val selectionDeleteButton: Button
     private var safeArea = Insets.NONE
     private var revealedDestination: GalleryDestination? = null
 
@@ -118,15 +116,9 @@ internal class GalleryScreen(
         filterRow = header.filterRow
         filterChips = header.filterChips
 
-        val listHeader = buildListHeader()
-        galleryHeader = listHeader.container
+        galleryHeader = buildListHeader()
         // The filter chips scroll away with the content; only the title row stays pinned.
         galleryHeader.addView(filterRow, 0, UiStyle.matchWrap().apply { bottomMargin = activity.dp(6) })
-        emptyPanel = listHeader.empty.container
-        emptyTitle = listHeader.empty.title
-        emptyMessage = listHeader.empty.message
-        emptyAction = listHeader.empty.action
-        listingRefusedBanner = listHeader.listingRefusedBanner
 
         galleryFooter =
             View(activity).apply {
@@ -186,11 +178,6 @@ internal class GalleryScreen(
                 Gravity.TOP,
             ),
         )
-        val selection = buildSelectionBar()
-        selectionBar = selection.container.apply { visibility = View.GONE }
-        selectionCount = selection.count
-        selectionDeleteButton = selection.delete
-        root.addView(selectionBar, UiStyle.bottomOverlayParams(activity))
 
         list.setOnFastScrollInteractionListener { active ->
             adapter.setFastScrolling(active)
@@ -305,17 +292,19 @@ internal class GalleryScreen(
         // The date badge's start margin follows the safe area too; the next measure re-applies everything.
         appliedHeaderHeight = -1
         root.requestLayout()
+        selectionBar?.container?.applyBottomOverlayInsets(insets)
     }
 
     fun showContent() {
-        emptyPanel.visibility = View.GONE
+        emptyPanel?.container?.visibility = View.GONE
     }
 
     /** Mirrors [GalleryUiState.listingRefused]; a dismissed banner stays down until the flag clears and returns. */
     fun renderListingRefused(refused: Boolean) {
         if (!refused) listingRefusedDismissed = false
         val show = refused && !listingRefusedDismissed
-        listingRefusedBanner.visibility = if (show) View.VISIBLE else View.GONE
+        if (!show && listingRefusedBanner == null) return
+        listingRefusedBanner().visibility = if (show) View.VISIBLE else View.GONE
     }
 
     fun showEmptyState(
@@ -324,23 +313,26 @@ internal class GalleryScreen(
         action: String?,
         onAction: (() -> Unit)?,
     ) {
-        emptyPanel.visibility = View.VISIBLE
-        emptyTitle.text = title
-        emptyMessage.text = message
-        emptyAction.visibility = if (action == null) View.GONE else View.VISIBLE
-        emptyAction.text = action
-        emptyAction.setOnClickListener(if (onAction == null) null else View.OnClickListener { onAction() })
+        val panel = emptyPanel()
+        panel.container.visibility = View.VISIBLE
+        panel.title.text = title
+        panel.message.text = message
+        panel.action.visibility = if (action == null) View.GONE else View.VISIBLE
+        panel.action.text = action
+        panel.action.setOnClickListener(if (onAction == null) null else View.OnClickListener { onAction() })
     }
 
     fun renderSelection(selectedCount: Int) {
         val selecting = selectedCount > 0
-        selectionCount.text =
+        if (!selecting && selectionBar == null) return
+        val bar = selectionBar()
+        bar.count.text =
             activity.resources.getQuantityString(
                 R.plurals.selected_photo_count,
                 selectedCount,
                 selectedCount,
             )
-        selectionBar.visibility = if (selecting) View.VISIBLE else View.GONE
+        bar.container.visibility = if (selecting) View.VISIBLE else View.GONE
     }
 
     /** Mirrors the view model's manual refresh state; a finished refresh hides the spinner. */
@@ -530,43 +522,56 @@ internal class GalleryScreen(
         return StickyHeader(container, titleRow, back, pageTitle, tabSwitch, photos, albums, settings, filterRow, chips)
     }
 
-    private fun buildListHeader(): ListHeader {
-        val container =
-            LinearLayout(activity).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(0, activity.dp(2), 0, activity.dp(6))
+    private fun buildListHeader(): LinearLayout =
+        LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, activity.dp(2), 0, activity.dp(6))
+        }
+
+    /** Sits below the filter row (always the header's first child) and above the empty panel, if that exists yet. */
+    private fun listingRefusedBanner(): LinearLayout =
+        listingRefusedBanner ?: UiStyle
+            .banner(
+                activity,
+                message = activity.getString(R.string.listing_refused_message),
+                actionLabel = activity.getString(R.string.refresh),
+                dismissDescription = activity.getString(R.string.dismiss),
+                onAction = actions.onRefresh,
+                onDismiss = { listingRefusedDismissed = true },
+            ).also { banner ->
+                listingRefusedBanner = banner
+                galleryHeader.addView(
+                    banner,
+                    1,
+                    UiStyle.matchWrap().apply {
+                        marginStart = activity.dp(16)
+                        marginEnd = activity.dp(16)
+                        topMargin = activity.dp(4)
+                        bottomMargin = activity.dp(4)
+                    },
+                )
             }
-        val banner =
-            UiStyle
-                .banner(
-                    activity,
-                    message = activity.getString(R.string.listing_refused_message),
-                    actionLabel = activity.getString(R.string.refresh),
-                    dismissDescription = activity.getString(R.string.dismiss),
-                    onAction = actions.onRefresh,
-                    onDismiss = { listingRefusedDismissed = true },
-                ).apply { visibility = View.GONE }
-        container.addView(
-            banner,
-            UiStyle.matchWrap().apply {
-                marginStart = activity.dp(16)
-                marginEnd = activity.dp(16)
-                topMargin = activity.dp(4)
-                bottomMargin = activity.dp(4)
-            },
-        )
-        val empty = buildEmptyPanel()
-        container.addView(
-            empty.container,
-            UiStyle.matchWrap().apply {
-                marginStart = activity.dp(16)
-                marginEnd = activity.dp(16)
-                topMargin = activity.dp(14)
-                bottomMargin = activity.dp(12)
-            },
-        )
-        return ListHeader(container, empty, banner)
-    }
+
+    private fun emptyPanel(): EmptyPanel =
+        emptyPanel ?: buildEmptyPanel().also { panel ->
+            emptyPanel = panel
+            galleryHeader.addView(
+                panel.container,
+                UiStyle.matchWrap().apply {
+                    marginStart = activity.dp(16)
+                    marginEnd = activity.dp(16)
+                    topMargin = activity.dp(14)
+                    bottomMargin = activity.dp(12)
+                },
+            )
+        }
+
+    private fun selectionBar(): SelectionBar =
+        selectionBar ?: buildSelectionBar().also { bar ->
+            selectionBar = bar
+            root.addView(bar.container, UiStyle.bottomOverlayParams(activity))
+            bar.container.applyBottomOverlayInsets(safeArea)
+        }
 
     private fun buildEmptyPanel(): EmptyPanel {
         val icon =
@@ -800,12 +805,6 @@ internal class GalleryScreen(
         val settingsButton: ImageButton,
         val filterRow: HorizontalScrollView,
         val filterChips: Map<GalleryDestination, FilterChip>,
-    )
-
-    private data class ListHeader(
-        val container: LinearLayout,
-        val empty: EmptyPanel,
-        val listingRefusedBanner: LinearLayout,
     )
 
     private data class SelectionBar(

@@ -115,6 +115,7 @@ class GalleryViewModel internal constructor(
             ?: GalleryDestination.Timeline
     private var currentUserId: UserId? = null
     private var sessionTransitioning = false
+    private var sessionPreloading = false
 
     /** Set by [disconnectProton], so the removal that follows is not reported as a lost session. */
     private var explicitDisconnect = false
@@ -428,6 +429,7 @@ class GalleryViewModel internal constructor(
     private suspend fun handleAccountSession(state: ProtonAccountSessionState) {
         val accountStatus = accountStatus(state)
         sessionTransitioning = state.transitioning
+        sessionPreloading = state.preloading
         if (!state.initialized) {
             publishUiState(accountStatus)
             return
@@ -608,6 +610,7 @@ class GalleryViewModel internal constructor(
                 currentUserId = currentUserId,
                 accountStatus = accountStatus ?: inputs.accountStatus,
                 signedOut = signedOut,
+                awaitingCache = sessionPreloading,
             )
         }
     }
@@ -622,6 +625,7 @@ class GalleryViewModel internal constructor(
         val accountStatus: ProtonAccountStatus,
         val isRefreshing: Boolean,
         val signedOut: Boolean = false,
+        val awaitingCache: Boolean = false,
     )
 
     private fun saveDestination() {
@@ -689,6 +693,7 @@ class GalleryViewModel internal constructor(
             protonAccountStatus = local.accountStatus,
             isRefreshing = local.isRefreshing,
             signedOut = local.signedOut,
+            awaitingCache = local.awaitingCache,
         )
 
         fun restoreNavigation(state: SavedStateHandle): GalleryDestination? =

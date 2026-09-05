@@ -76,9 +76,12 @@ class LenswaveApplication : Application() {
                     StartupEntryPoint::class.java,
                 )
             // Built for their side effects: the instances are the singletons the activity will inject.
+            // First: its preload of the last account's cached listings needs no database, and the
+            // grid is waiting for exactly that. The account observation it also starts resolves
+            // the database below on its own.
+            if (startAccountSession) entryPoint.accountSessionManager().start()
             entryPoint.protonCoreDatabase()
             entryPoint.accountManager()
-            if (startAccountSession) entryPoint.accountSessionManager().start()
         }
     }
 

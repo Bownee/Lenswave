@@ -24,6 +24,12 @@ All notable changes to Lenswave. The format follows [Keep a Changelog](https://k
   connection SQLCipher opened, at 256,000 PBKDF2 rounds each; it now uses one connection and
   1,000 rounds (the passphrase is already 32 random bytes). Existing databases are re-encrypted
   once on first launch.
+- Launch: the gallery draws its first frame without waiting for the session database (the
+  native library, passphrase and key migration now run at the database's first open, and the
+  view model starts after the frame), the previous launch's account is activated from its
+  cache while Proton Core is still reading the session, the cached listing is scanned and
+  parsed in parallel, and views a launch onto a cached library never shows (the empty panel,
+  the selection bar) are built on first use.
 - The first playback of a video that was not cached yet failed with "Could not play this video";
   only the retry, served from the cache, worked. A length check mistook "length not known yet"
   for a negative length.

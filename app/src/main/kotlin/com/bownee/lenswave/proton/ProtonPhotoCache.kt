@@ -7,6 +7,8 @@ import com.bownee.lenswave.LenswaveOperation
 import com.bownee.lenswave.storage.AtomicFileStore
 import com.bownee.lenswave.storage.SecureFileStore
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -123,6 +125,13 @@ internal class ProtonPhotoCache
                 ProtonStoredRenditions(thumbnails.storedNames(userId), previews.storedNames(userId))
             }
 
+        override suspend fun scanStoredRenditions(userId: String): ProtonStoredRenditions =
+            renditions[userId] ?: coroutineScope {
+                val thumbnailNames = async { thumbnails.storedNames(userId) }
+                val previewNames = async { previews.storedNames(userId) }
+                ProtonStoredRenditions(thumbnailNames.await(), previewNames.await())
+            }.let { scanned -> renditions.computeIfAbsent(userId) { scanned } }
+
         private fun forgetRenditions(userId: String) {
             renditions.remove(userId)
         }
@@ -131,6 +140,9 @@ internal class ProtonPhotoCache
             userId: String,
             availability: ProtonStoredRenditions,
         ): List<ProtonGalleryPhoto>? = readPhotoSnapshot(userId, indexFile(userId), availability)
+
+        override fun readTimelineEntries(userId: String): List<ProtonGalleryPhoto>? =
+            readPhotoEntries(userId, indexFile(userId))
 
         override fun writeIndex(
             userId: String,

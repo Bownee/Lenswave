@@ -9,6 +9,7 @@ internal enum class LenswaveOperation(
     val tag: String,
 ) {
     ACCOUNT_OBSERVER("account-observer"),
+    ACCOUNT_PRELOAD("account-preload"),
     ACCOUNT_TRANSITION("account-transition"),
     ALBUM_SYNC("album-sync"),
     ALBUM_PHOTO_SYNC("album-photo-sync"),
