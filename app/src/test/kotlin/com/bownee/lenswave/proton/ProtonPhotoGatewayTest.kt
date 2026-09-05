@@ -261,6 +261,69 @@ class ProtonPhotoGatewayTest {
         }
 
     @Test
+    fun `a preview the store cannot decode is dropped, shown as missing and queued again at the front`() =
+        testScope.runTest {
+            val gateway = gateway()
+            gateway.activate(USER_A)
+            runCurrent()
+            assertTrue(
+                timeline.state.value.photos
+                    .single { it.nodeUid == "a1" }
+                    .hasPreview,
+            )
+            assertNull(previewQueue.pendingByNode()["a1"])
+            events.clear()
+
+            assertNull(gateway.loadPreview(USER_A, "a1", targetLongEdge = 1_000))
+
+            assertEquals(listOf("removePreview:a1"), events.toList())
+            assertFalse(
+                timeline.state.value.photos
+                    .single { it.nodeUid == "a1" }
+                    .hasPreview,
+            )
+            val entry = previewQueue.claimReady(USER_A.id, limit = 10).single { it.nodeUid == "a1" }
+            assertEquals(setOf(TIMELINE_PREVIEWS), entry.sources)
+            assertEquals(100L, entry.captureTimeEpochSeconds)
+            assertEquals(0L, entry.retryAtMillis)
+        }
+
+    @Test
+    fun `a photo without a stored preview is not invalidated when its preview load misses`() =
+        testScope.runTest {
+            val gateway = gateway()
+            gateway.activate(USER_A)
+            runCurrent()
+            previewQueue.replaceSource(USER_A.id, TIMELINE_PREVIEWS, emptyList())
+            events.clear()
+
+            assertNull(gateway.loadPreview(USER_A, "a2", targetLongEdge = 1_000))
+
+            assertTrue("a miss must not invalidate: $events", events.isEmpty())
+            assertNull(previewQueue.pendingByNode()["a2"])
+        }
+
+    @Test
+    fun `a preview that cannot be decrypted right now is neither dropped nor queued again`() =
+        testScope.runTest {
+            val gateway = gateway()
+            gateway.activate(USER_A)
+            runCurrent()
+            cache.loadPreview = { throw ProtonRenditionUnavailableException(IllegalStateException("keystore")) }
+            events.clear()
+
+            assertNull(gateway.loadPreview(USER_A, "a1", targetLongEdge = 1_000))
+
+            assertTrue("an unavailable preview must not invalidate: $events", events.isEmpty())
+            assertTrue(
+                timeline.state.value.photos
+                    .single { it.nodeUid == "a1" }
+                    .hasPreview,
+            )
+            assertNull(previewQueue.pendingByNode()["a1"])
+        }
+
+    @Test
     fun `prepareCachedOriginal stops the decrypt once the caller loses interest`() =
         testScope.runTest {
             val gateway = gateway()
@@ -431,6 +494,7 @@ class ProtonPhotoGatewayTest {
             previewQueue = previewQueue,
             clientProvider = clients,
             cache = cache,
+            renditionStore = cache,
             sessionGuard = sessionGuard,
             housekeepingScope = housekeepingScope,
         )
@@ -559,6 +623,7 @@ class ProtonPhotoGatewayTest {
         var onClearUser: (String) -> Unit = {}
         var loadThumbnail: (isActive: () -> Boolean) -> Bitmap? = { error("no thumbnail load expected") }
         var peekThumbnail: () -> Bitmap? = { null }
+        var loadPreview: () -> Bitmap? = { null }
         var readOriginal: (shouldContinue: () -> Boolean) -> File? = { null }
 
         override fun storedRenditions(userId: String): ProtonStoredRenditions =
@@ -705,12 +770,13 @@ class ProtonPhotoGatewayTest {
             userId: String,
             nodeUid: String,
             targetLongEdge: Int,
-        ): Bitmap? = null
+        ): Bitmap? = loadPreview()
 
         override fun removePreview(
             userId: String,
             nodeUid: String,
         ) {
+            events += "removePreview:$nodeUid"
             previews -= nodeUid
         }
 
