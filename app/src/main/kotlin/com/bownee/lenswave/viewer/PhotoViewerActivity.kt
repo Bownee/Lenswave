@@ -1084,6 +1084,8 @@ class PhotoViewerActivity :
     }
 
     private fun resetPhotoStateForNavigation() {
+        // Nothing may still be animating the transforms reset below, or its next frame undoes them.
+        mediaTransform.cancelMediaAnimations()
         video.stop()
         playerView.visibility = View.GONE
         clearThumbnailPreview()

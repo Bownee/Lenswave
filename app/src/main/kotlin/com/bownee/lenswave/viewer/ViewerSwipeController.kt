@@ -230,8 +230,12 @@ internal class ViewerSwipeController(
             .translationX(-offset * peekDistance())
             .setDuration(SWIPE_SETTLE_MILLIS)
             .withEndAction {
-                thumbnailPreview.animate().cancel()
-                loadingPanel.animate().cancel()
+                // The other media views slide out on animators of their own, started after this
+                // one and so still owed their last frame when this end action runs. Left running,
+                // that frame lands after commitNavigation has reset the translations and parks
+                // the view one screen to the left: for the player that put a swiped-to video's
+                // surface off screen, and the viewer showed black behind the cleared thumbnail.
+                mediaTransform.cancelMediaAnimations()
                 host.commitNavigation(adjacent)
             }.start()
         if (activeMedia !== photoView) {
