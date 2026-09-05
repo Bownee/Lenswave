@@ -213,13 +213,21 @@ internal class ProtonRenditionDownloads(
         // charger or a screen that may be gone before the batch is; the chunks not yet
         // started are dropped the moment it is.
         val mayStart = previewAdmission::previewsAllowed
-        val batchPasses = downloadChunks(pending, mayStart = mayStart, downloadChunk = ::previewPass).results
-        batchPasses.forEach { result ->
+        val batch = downloadChunks(pending, mayStart = mayStart, downloadChunk = ::previewPass)
+        batch.results.forEach { result ->
             successful += result.successfulNodeUids
             failures += result.failures
         }
-        if (ThumbnailBatchStallPolicy.isStalled(batchPasses)) {
-            return stalledBatch(LenswaveOperation.PREVIEW_DOWNLOAD, successful, pending)
+        if (ThumbnailBatchStallPolicy.isStalled(batch.results)) {
+            // Only the chunks that were asked stalled; a chunk the admission refused was never
+            // asked, and settling it as a network failure would walk it through the network
+            // retries and the backoff ladder to a drop without one request ever made.
+            return stalledBatch(
+                LenswaveOperation.PREVIEW_DOWNLOAD,
+                successful,
+                asked = pending.filterNot(batch.deferredNodeUids::contains),
+                deferred = batch.deferredNodeUids,
+            )
         }
         // Nodes the SDK skipped in a batch usually answer when asked on their own; asking now
         // keeps them out of the retry backoff.
@@ -317,11 +325,17 @@ internal class ProtonRenditionDownloads(
     private fun stalledBatch(
         operation: LenswaveOperation,
         successful: Set<String>,
-        pending: List<String>,
+        asked: List<String>,
+        deferred: Set<String> = emptySet(),
     ): ThumbnailBatchResult {
-        val failures = ThumbnailBatchStallPolicy.settleStalled(pending, successful)
-        reportState(operation, "stalled-${failures.size}-of-${pending.size}")
-        return ThumbnailBatchResult(successful, failures, stalled = true)
+        val failures = ThumbnailBatchStallPolicy.settleStalled(asked, successful)
+        reportState(operation, "stalled-${failures.size}-of-${asked.size}")
+        return ThumbnailBatchResult(
+            successful,
+            failures,
+            deferredNodeUids = deferred.filterNot(successful::contains).toSet(),
+            stalled = true,
+        )
     }
 
     /** What the chunks of one [downloadChunks] call came to, and the nodes whose chunk never started. */
@@ -510,9 +524,10 @@ internal data class ThumbnailBatchResult(
     /** Nodes whose preview rendition served as the thumbnail and was stored as a preview too. */
     val previewsStored: Set<String> = emptySet(),
     /**
-     * Nodes with no thumbnail on the server whose preview fallback never started because
-     * previews were not allowed. Neither a success nor a failure: they wait for a run that
-     * may fetch previews, and until then must not be claimed again and again.
+     * Nodes whose preview fetch never started because previews were not allowed: the preview
+     * fallback of a thumbnail Proton does not have, or the chunks of a stalled preview batch
+     * the admission refused. Neither a success nor a failure: they wait for a run that may
+     * fetch previews, and until then must not be claimed again and again.
      */
     val deferredNodeUids: Set<String> = emptySet(),
     /**

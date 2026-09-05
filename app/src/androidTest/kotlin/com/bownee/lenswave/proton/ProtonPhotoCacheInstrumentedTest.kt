@@ -63,7 +63,7 @@ class ProtonPhotoCacheInstrumentedTest {
             val bounded = cache.createOriginalTarget(userId, "bounded")
             bounded.plaintext.writeText("decrypted private content")
             val (plaintext, encrypted) = bounded
-            assertTrue(cache.commitOriginal(userId, "bounded", bounded).isFile)
+            assertTrue(cache.commitOriginal(userId, "bounded", bounded).plaintext.isFile)
             // The download's own file moved to the shared plaintext path.
             assertFalse(plaintext.exists())
             // The decrypted copy expires after 30 minutes; the encrypted original stays until the
@@ -88,12 +88,12 @@ class ProtonPhotoCacheInstrumentedTest {
         try {
             val staleDownload = store.createTarget(staleUser, "old")
             staleDownload.plaintext.writeText("old plaintext")
-            val stalePlaintext = store.commit(staleUser, "old", staleDownload)
+            val stalePlaintext = store.commit(staleUser, "old", staleDownload).plaintext
             val staleEncrypted = staleDownload.encrypted
             clock.value += 31L * 60L * 1_000L
             val freshDownload = store.createTarget(freshUser, "new")
             freshDownload.plaintext.writeText("new plaintext")
-            val freshPlaintext = store.commit(freshUser, "new", freshDownload)
+            val freshPlaintext = store.commit(freshUser, "new", freshDownload).plaintext
             val freshEncrypted = freshDownload.encrypted
 
             // A copy a player holds open outlives its TTL until the reader closes it.
@@ -131,7 +131,7 @@ class ProtonPhotoCacheInstrumentedTest {
         try {
             val download = store.createTarget(userId, "video")
             download.plaintext.writeBytes(ByteArray(3 * 1_024 * 1_024) { position -> position.toByte() })
-            val copy = store.commit(userId, "video", download)
+            val copy = store.commit(userId, "video", download).plaintext
             assertTrue(download.encrypted.isFile)
             // The copy expires, so the next read decrypts again; the photo is trashed while the
             // first segment is being written. The decrypt finishes, but nothing of it lands.

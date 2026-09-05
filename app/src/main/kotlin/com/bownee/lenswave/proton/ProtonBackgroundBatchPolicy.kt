@@ -81,6 +81,19 @@ internal object ProtonBackgroundBatchPolicy {
         }
 
     /**
+     * A batch stalls when the SDK gives no answer before the pass deadline, and the first answer
+     * of a batch is deliberately allowed the whole deadline (see
+     * [ProtonThumbnailDownloadPolicy.answerWaitMillis]): one late first answer looks exactly like
+     * a stalled SDK. A single stalled batch therefore only skips its own re-asks and fallback;
+     * the run ends once this many batches in a row stalled, which a slow but working SDK does
+     * not produce.
+     */
+    const val STALLED_BATCHES_TO_END_RUN = 2
+
+    fun endsRunAfterStall(consecutiveStalledBatches: Int): Boolean =
+        consecutiveStalledBatches >= STALLED_BATCHES_TO_END_RUN
+
+    /**
      * The longest an idle run sleeps in place. A run is a foreground service holding a wakelock,
      * so a sleep of minutes (the earlier cap) kept the phone awake for nothing, and a failing
      * tail of retries kept it awake for as long as the run limit allowed. A retry due within a

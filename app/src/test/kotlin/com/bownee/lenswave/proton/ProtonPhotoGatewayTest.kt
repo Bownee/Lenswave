@@ -24,6 +24,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
+import java.nio.ByteBuffer
 import java.nio.channels.WritableByteChannel
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
@@ -289,6 +290,38 @@ class ProtonPhotoGatewayTest {
         }
 
     @Test
+    fun `a preview that never decodes is queued again a bounded number of times and then left alone`() =
+        testScope.runTest {
+            val gateway = gateway()
+            gateway.activate(USER_A)
+            runCurrent()
+
+            repeat(ProtonRenditionInvalidationLimiter.MAX_REQUEUES) {
+                events.clear()
+                assertNull(gateway.loadPreview(USER_A, "a1", targetLongEdge = 1_000))
+                assertEquals(listOf("removePreview:a1"), events.toList())
+                assertEquals(setOf(TIMELINE_PREVIEWS), previewQueue.pendingByNode()["a1"])
+                // The worker downloads the same bytes again and stores them.
+                previewQueue.settle(USER_A.id, setOf("a1"), emptyMap())
+                cache.previews += "a1"
+                timeline.markPreviewsAvailable(USER_A, setOf("a1"))
+            }
+            events.clear()
+
+            assertNull(gateway.loadPreview(USER_A, "a1", targetLongEdge = 1_000))
+
+            // The stored preview stays, so no listing shows it as missing and nothing queues it.
+            assertTrue("past the bound nothing is invalidated: $events", events.isEmpty())
+            assertTrue(cache.previews.contains("a1"))
+            assertTrue(
+                timeline.state.value.photos
+                    .single { it.nodeUid == "a1" }
+                    .hasPreview,
+            )
+            assertNull(previewQueue.pendingByNode()["a1"])
+        }
+
+    @Test
     fun `a photo without a stored preview is not invalidated when its preview load misses`() =
         testScope.runTest {
             val gateway = gateway()
@@ -387,6 +420,46 @@ class ProtonPhotoGatewayTest {
                 assertEquals(committed, stream.file)
                 assertEquals(ProtonOriginalDownloadProgress(1_536L, 1_536L, complete = true), stream.progress.value)
                 assertTrue(events.none { it.startsWith("readOriginal") })
+            } finally {
+                directory.deleteRecursively()
+            }
+        }
+
+    @Test
+    fun `a downloaded original reaches its end before the commit and moves to its committed path after`() =
+        runBlocking {
+            val directory = createTempDirectory("lenswave-originals").toFile()
+            val part = File(directory, "video.image.part")
+            val committed = File(directory, "video.image")
+            cache.createOriginalTarget = { ProtonOriginalTarget(part, File(directory, "video.enc"), removalEpoch = 0L) }
+            clients.downloadTo = { output -> output.write(ByteBuffer.wrap(ByteArray(1_024))) }
+            lateinit var stream: ProtonOriginalStream
+            cache.commitOriginal = { download ->
+                // The transfer is over: a reader at the end of the bytes is at end-of-input while
+                // the file is still the download's own, before the encrypt has read it once more.
+                assertEquals(ProtonOriginalReadState(1_024L, complete = true), stream.awaitReadable(1_024L))
+                assertTrue(stream.progress.value.complete)
+                assertFalse(stream.isComplete)
+                assertEquals(part, stream.file)
+                assertTrue(download.plaintext.renameTo(committed))
+                events += "commitOriginal"
+                ProtonOriginalCommit(committed, encryptedStored = true)
+            }
+            cache.onOriginalStored = { target ->
+                // The size accounting runs after the stream has moved to the committed file.
+                assertTrue(stream.isComplete)
+                assertEquals(committed, stream.file)
+                events += "onOriginalStored:${target.name}"
+            }
+            try {
+                val file =
+                    withContext(Dispatchers.IO) {
+                        originals.downloadOriginalProgressively(USER_A, "a3") { ready -> stream = ready }
+                    }
+
+                assertEquals(committed, file)
+                assertEquals(listOf("commitOriginal", "onOriginalStored:video.enc"), events.toList())
+                assertEquals(ProtonOriginalDownloadProgress(1_024L, 1_024L, complete = true), stream.progress.value)
             } finally {
                 directory.deleteRecursively()
             }
@@ -580,12 +653,15 @@ class ProtonPhotoGatewayTest {
             events += "disconnect:${userId.id}"
         }
 
+        /** Writes the original's bytes into the channel; the SDK is refused unless a test scripts it. */
+        var downloadTo: (WritableByteChannel) -> Unit = { error("The SDK must not be reached") }
+
         override suspend fun downloadTo(
             userId: UserId,
             nodeUid: String,
             output: WritableByteChannel,
             onProgress: (ProgressUpdate) -> Unit,
-        ) = error("The SDK must not be reached")
+        ) = downloadTo(output)
     }
 
     /** The progressive decrypt of a cached original, scripted per test; nothing is cached by default. */
@@ -625,6 +701,9 @@ class ProtonPhotoGatewayTest {
         var peekThumbnail: () -> Bitmap? = { null }
         var loadPreview: () -> Bitmap? = { null }
         var readOriginal: (shouldContinue: () -> Boolean) -> File? = { null }
+        var createOriginalTarget: () -> ProtonOriginalTarget = { error("no download expected") }
+        var commitOriginal: (ProtonOriginalTarget) -> ProtonOriginalCommit = { error("no download expected") }
+        var onOriginalStored: (File) -> Unit = {}
 
         override fun storedRenditions(userId: String): ProtonStoredRenditions =
             ProtonStoredRenditions(thumbnails.toSet(), previews.toSet()) { nodeUid -> nodeUid }
@@ -791,18 +870,19 @@ class ProtonPhotoGatewayTest {
         override fun createOriginalTarget(
             userId: String,
             nodeUid: String,
-        ): ProtonOriginalTarget = error("no download expected")
+        ): ProtonOriginalTarget = createOriginalTarget()
 
         override fun commitOriginal(
             userId: String,
             nodeUid: String,
             download: ProtonOriginalTarget,
-        ): File = error("no download expected")
+        ): ProtonOriginalCommit = commitOriginal(download)
 
         override fun onOriginalStored(
             userId: String,
             target: File,
         ) {
+            onOriginalStored(target)
         }
 
         override fun clearUser(userId: String) {

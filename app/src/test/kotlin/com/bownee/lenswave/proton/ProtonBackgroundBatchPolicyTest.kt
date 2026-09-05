@@ -144,6 +144,16 @@ class ProtonBackgroundBatchPolicyTest {
     }
 
     @Test
+    fun `one stalled batch is a slow first answer, two in a row a stalled SDK`() {
+        assertFalse(ProtonBackgroundBatchPolicy.endsRunAfterStall(0))
+        assertFalse(ProtonBackgroundBatchPolicy.endsRunAfterStall(1))
+        assertTrue(
+            ProtonBackgroundBatchPolicy.endsRunAfterStall(ProtonBackgroundBatchPolicy.STALLED_BATCHES_TO_END_RUN),
+        )
+        assertTrue(ProtonBackgroundBatchPolicy.endsRunAfterStall(3))
+    }
+
+    @Test
     fun `idle runs wait for soon-due retries and end otherwise`() {
         val idle =
             ProtonBackgroundBatchPolicy.idle(

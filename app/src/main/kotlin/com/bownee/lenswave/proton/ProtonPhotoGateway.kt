@@ -101,6 +101,9 @@ class ProtonPhotoGateway internal constructor(
     /** Background thumbnail work; kept off the public class surface, see [ProtonThumbnailWorkGateway]. */
     internal val thumbnailWork: ProtonThumbnailWorkGateway = ThumbnailWork()
 
+    /** How often each stored preview that failed to decode has been queued again; see [loadPreview]. */
+    private val previewInvalidations = ProtonRenditionInvalidationLimiter()
+
     /**
      * The transition holds only what the grid needs: the cached listings, loaded so the grid
      * gets them as early as possible. Everything else runs afterwards as an ordinary session
@@ -122,6 +125,7 @@ class ProtonPhotoGateway internal constructor(
                         // user's directory and data key.
                         thumbnailQueue.forget(previous.id)
                         previewQueue.forget(previous.id)
+                        previewInvalidations.forget(previous.id)
                         renditionSync.finishPublishing(previous)
                         originals.forgetUser(previous)
                         cache.clearUser(previous.id)
@@ -274,7 +278,13 @@ class ProtonPhotoGateway internal constructor(
                 val wasStored = renditionStore.previewExists(userId.id, nodeUid)
                 try {
                     renditions.loadPreview(userId, nodeUid, targetLongEdge) ?: run {
-                        if (wasStored) invalidatePreviewInActiveSession(userId, nodeUid)
+                        // Bounded: a preview Proton keeps serving in a form nothing decodes
+                        // would otherwise be downloaded again on every open of the photo. Past
+                        // the bound the stored file stays, so nothing queues it again, and the
+                        // viewer keeps falling back to the thumbnail.
+                        if (wasStored && previewInvalidations.allowsRequeue(userId.id, nodeUid)) {
+                            invalidatePreviewInActiveSession(userId, nodeUid)
+                        }
                         null
                     }
                 } catch (_: ProtonRenditionUnavailableException) {
@@ -387,6 +397,7 @@ class ProtonPhotoGateway internal constructor(
                 // transfers first so none can land after the user's directory is gone.
                 thumbnailQueue.forget(userId.id)
                 previewQueue.forget(userId.id)
+                previewInvalidations.forget(userId.id)
                 renditionSync.finishPublishing(userId)
                 originals.forgetUser(userId)
                 cache.clearUser(userId.id)
