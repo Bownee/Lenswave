@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import me.proton.core.domain.entity.UserId
+import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -58,6 +59,18 @@ class ViewerMutationCoordinator internal constructor(
     private val inFlight = MutableStateFlow<Set<String>>(emptySet())
     private val pending = MutableStateFlow<List<Outcome>>(emptyList())
 
+    /**
+     * Bumped by [forgetAll]; a mutation captures it on start and only queues its outcome while it
+     * is unchanged, so a call of the account that went never answers into the next account's queue.
+     */
+    private val epoch = AtomicLong()
+
+    /**
+     * Orders an outcome's append against [forgetAll]: StateFlow compares values, not identity,
+     * so an update racing a clear of an already empty queue could otherwise commit over it.
+     */
+    private val epochLock = Any()
+
     /** Outcomes nobody has consumed yet, oldest first. */
     internal val outcomes: StateFlow<List<Outcome>> = pending.asStateFlow()
 
@@ -91,14 +104,30 @@ class ViewerMutationCoordinator internal constructor(
     }
 
     /**
-     * Drops every queued outcome and every in-flight mark. For an account transition: the
-     * outcomes belong to photos of the account that is going, and no viewer of the next account
-     * must find its buttons held by them. A call still running ends with a session change and
-     * would re-queue a failed outcome; clearing after the transition's disconnect avoids that.
+     * Takes several outcomes in one step, for a consumer that drains the queue: consuming them
+     * one by one emits an intermediate list per outcome, and a collector of [outcomes] re-enters
+     * mid-drain with the outcomes it has not yet been handed.
+     */
+    internal fun consumeAll(outcomes: Collection<Outcome>) {
+        if (outcomes.isEmpty()) return
+        pending.update { queued -> queued - outcomes }
+    }
+
+    /**
+     * Drops every queued outcome and every in-flight mark, and disowns every call still running.
+     * For an account transition: the outcomes belong to photos of the account that is going, and
+     * no viewer of the next account must find its buttons held by them. A call still running
+     * ends with a session change once the transition disconnects, but only after this returns;
+     * its outcome would land in a queue that no longer belongs to it, so the epoch it started in
+     * is closed here and [run] drops an outcome from a closed epoch. Its in-flight mark is
+     * cleared here rather than by the call, which frees the photo for the next account at once.
      */
     override fun forgetAll() {
-        pending.value = emptyList()
-        inFlight.value = emptySet()
+        synchronized(epochLock) {
+            epoch.incrementAndGet()
+            pending.value = emptyList()
+            inFlight.value = emptySet()
+        }
     }
 
     private fun run(
@@ -107,12 +136,18 @@ class ViewerMutationCoordinator internal constructor(
     ): Boolean {
         // One atomic step claims the photo, so two callers racing here cannot both start.
         if (stableId in inFlight.getAndUpdate { running -> running + stableId }) return false
+        val startedIn = epoch.get()
         scope.launch {
             try {
                 val outcome = mutation()
-                pending.update { queued -> queued + outcome }
+                synchronized(epochLock) {
+                    if (epoch.get() == startedIn) pending.update { queued -> queued + outcome }
+                }
             } finally {
-                inFlight.update { running -> running - stableId }
+                // A disowned call's mark went with forgetAll; the photo may since be claimed anew.
+                synchronized(epochLock) {
+                    if (epoch.get() == startedIn) inFlight.update { running -> running - stableId }
+                }
             }
         }
         return true

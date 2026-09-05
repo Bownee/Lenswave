@@ -31,4 +31,27 @@ class ViewerPlaybackPausePolicyTest {
         assertFalse(ViewerPlaybackPausePolicy.savedPlayWhenReady(playWhenReady = false, pausedWhilePlaying = false))
         assertTrue(ViewerPlaybackPausePolicy.savedPlayWhenReady(playWhenReady = true, pausedWhilePlaying = false))
     }
+
+    @Test
+    fun `a video that becomes ready while the viewer is stopped waits for onStart`() {
+        // Ready after onStop: shown paused, and the deferred start is what onStart resumes.
+        assertFalse(ViewerPlaybackPausePolicy.playsOnShow(intendedPlaying = true, started = false))
+        val pausedWhilePlaying = ViewerPlaybackPausePolicy.defersStart(intendedPlaying = true, started = false)
+        assertTrue(pausedWhilePlaying)
+        assertTrue(ViewerPlaybackPausePolicy.savedPlayWhenReady(playWhenReady = false, pausedWhilePlaying))
+        assertTrue(ViewerPlaybackPausePolicy.resumesOnReturn(pausedWhilePlaying))
+    }
+
+    @Test
+    fun `a video shown on screen plays at once and defers nothing`() {
+        assertTrue(ViewerPlaybackPausePolicy.playsOnShow(intendedPlaying = true, started = true))
+        assertFalse(ViewerPlaybackPausePolicy.defersStart(intendedPlaying = true, started = true))
+    }
+
+    @Test
+    fun `a restored paused video stays paused whether or not the viewer is on screen`() {
+        assertFalse(ViewerPlaybackPausePolicy.playsOnShow(intendedPlaying = false, started = true))
+        assertFalse(ViewerPlaybackPausePolicy.playsOnShow(intendedPlaying = false, started = false))
+        assertFalse(ViewerPlaybackPausePolicy.defersStart(intendedPlaying = false, started = false))
+    }
 }

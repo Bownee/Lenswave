@@ -315,15 +315,21 @@ class PhotoViewerActivity :
      * one that finished while recreating. Outcomes of photos outside its window are left in the
      * coordinator for the gallery (see [ViewerOutcomePolicy]); an outcome taken here is recorded
      * in the result before anything else, so the gallery's refresh cannot be lost to a finish.
+     *
+     * A finishing viewer takes nothing: it stays STARTED until it is gone, but a result set after
+     * finish() never reaches the gallery, so an outcome consumed then would be lost. Left in the
+     * queue, the gallery's own collector takes it once the viewer has closed.
      */
     private fun observeMutationOutcomes() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 mutationCoordinator.outcomes.collect { outcomes ->
-                    outcomes
-                        .filter { outcome ->
-                            ViewerOutcomePolicy.consumes(outcome.stableId, request.stableId, navigationRequests)
-                        }.forEach(::applyMutationOutcome)
+                    for (outcome in outcomes) {
+                        if (isFinishing) break
+                        if (ViewerOutcomePolicy.consumes(outcome.stableId, request.stableId, navigationRequests)) {
+                            applyMutationOutcome(outcome)
+                        }
+                    }
                 }
             }
         }
@@ -554,6 +560,8 @@ class PhotoViewerActivity :
 
                         override fun clearThumbnailPreview() = this@PhotoViewerActivity.clearThumbnailPreview()
 
+                        override fun reloadMedia() = loadPhoto()
+
                         override fun handleLoadFailure(
                             error: Throwable,
                             fallbackMessage: String,
@@ -675,13 +683,16 @@ class PhotoViewerActivity :
                     } else {
                         async(Dispatchers.IO) { runCatching { originalMedia.prepareCachedOriginal(userId, nodeUid) } }
                     }
+                // A photo's thumbnail read races the cached-original probe instead of holding it
+                // up: a prefetched neighbour, the common case after a swipe, hits the probe in a
+                // few milliseconds and its thumbnail would only flash before the picture. The read
+                // installs the thumbnail only while no cached original has been found and the
+                // screen still wants a stand-in; it lives outside the try so a failed load can
+                // cancel it before the retry panel it would otherwise cover goes up.
+                var cachedOriginalFound = false
+                var thumbnailLoad: Job? = null
                 try {
-                    // A photo's thumbnail read races the cached-original probe instead of holding
-                    // it up: a prefetched neighbour, the common case after a swipe, hits the probe
-                    // in a few milliseconds and its thumbnail would only flash before the picture.
-                    // The read installs the thumbnail only while no cached original has been found.
-                    var cachedOriginalFound = false
-                    val thumbnailLoad =
+                    thumbnailLoad =
                         when {
                             thumbnailShown -> {
                                 null
@@ -697,6 +708,13 @@ class PhotoViewerActivity :
                                     val bitmap = readThumbnail(requestedPhoto)
                                     if (cachedOriginalFound || bitmap == null) return@launch
                                     if (!PhotoPreviewPolicy.canShow(requestedPhoto.stableId, request.stableId, true)) {
+                                        return@launch
+                                    }
+                                    if (!PhotoPreviewPolicy.wantsStandIn(
+                                            photoReady,
+                                            retryButton.isVisible,
+                                        )
+                                    ) {
                                         return@launch
                                     }
                                     installThumbnailPreview(requestedPhoto, bitmap)
@@ -739,11 +757,13 @@ class PhotoViewerActivity :
                     // A cancellation subtype, but not this job's: the account changed underneath
                     // the read (a viewer relaunched from recents after a sign-out, say). Left to
                     // the branch below it would end the job with the spinner still up and no retry.
+                    thumbnailLoad?.cancel()
                     if (request.stableId != requestedPhoto.stableId) return@launch
                     handlePhotoLoadFailure(error, getString(R.string.could_not_open_proton_photo_signed_out))
                 } catch (error: CancellationException) {
                     throw error
                 } catch (error: Throwable) {
+                    thumbnailLoad?.cancel()
                     if (request.stableId != requestedPhoto.stableId) return@launch
                     if (!retryButton.isVisible) {
                         handlePhotoLoadFailure(error, getString(R.string.could_not_download_proton_photo))
@@ -879,7 +899,8 @@ class PhotoViewerActivity :
                     targetLongEdge = max(metrics.widthPixels, metrics.heightPixels),
                 )
             } ?: return
-        if (request.stableId != requestedPhoto.stableId || photoReady) return
+        if (request.stableId != requestedPhoto.stableId) return
+        if (!PhotoPreviewPolicy.wantsStandIn(photoReady, retryButton.isVisible)) return
         // The preview goes into the photo view itself so zoom and pan work right away; the
         // original later takes over the same geometry. Any spinner scheduled for an empty
         // screen goes, and the thumbnail underneath is no longer needed.

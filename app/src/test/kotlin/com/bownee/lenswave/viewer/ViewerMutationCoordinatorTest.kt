@@ -8,6 +8,7 @@ import com.bownee.lenswave.proton.ProtonSessionChangedException
 import com.bownee.lenswave.proton.ProtonTrashResult
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
@@ -104,13 +105,61 @@ class ViewerMutationCoordinatorTest {
 
             assertTrue(coordinator.outcomes.value.isEmpty())
             assertFalse(coordinator.isInFlight("s1"))
-            // The forgotten call still answers; its late outcome is a new one the viewer can consume.
+            // The forgotten call still answers, into an epoch that is closed: the outcome belongs
+            // to the account that went and never reaches the next account's queue.
             mutations.trashAnswers.single().complete(ProtonTrashResult(trashedCount = 1, failedCount = 0))
             runCurrent()
+            assertTrue(coordinator.outcomes.value.isEmpty())
+            assertFalse(coordinator.isInFlight("s1"))
+        }
+
+    @Test
+    fun `a disowned call does not release a photo the next account has claimed`() =
+        runTest(dispatcher) {
+            val coordinator = coordinator()
+            coordinator.trash(UserId("u"), request)
+            runCurrent()
+
+            coordinator.forgetAll()
+            assertTrue("the photo is free at once", coordinator.setFavorite(UserId("v"), request, favorite = true))
+            runCurrent()
+            mutations.trashAnswers.single().complete(ProtonTrashResult(trashedCount = 1, failedCount = 0))
+            runCurrent()
+
+            assertTrue("the new claim survives the old call ending", coordinator.isInFlight("s1"))
+            assertTrue(coordinator.outcomes.value.isEmpty())
+            mutations.favoriteAnswers.single().complete(ProtonFavoriteResult(updatedCount = 1))
+            runCurrent()
             assertEquals(
-                listOf(ViewerMutationCoordinator.Outcome.Trashed("s1", succeeded = true)),
+                listOf(ViewerMutationCoordinator.Outcome.FavoriteSet("s1", favorite = true, succeeded = true)),
                 coordinator.outcomes.value,
             )
+            assertFalse(coordinator.isInFlight("s1"))
+        }
+
+    @Test
+    fun `consuming several outcomes at once emits a single queue`() =
+        runTest(dispatcher) {
+            val coordinator = coordinator()
+            val other = PhotoRequest("s2", "n2", "u", 0L, "two.jpg")
+            coordinator.setFavorite(UserId("u"), request, favorite = true)
+            coordinator.setFavorite(UserId("u"), other, favorite = true)
+            coordinator.trash(UserId("u"), PhotoRequest("s3", "n3", "u", 0L, "three.jpg"))
+            runCurrent()
+            mutations.favoriteAnswers.forEach { answer -> answer.complete(ProtonFavoriteResult(updatedCount = 1)) }
+            mutations.trashAnswers.single().complete(ProtonTrashResult(trashedCount = 1, failedCount = 0))
+            runCurrent()
+            val queued = coordinator.outcomes.value
+            assertEquals(3, queued.size)
+            val seen = mutableListOf<List<ViewerMutationCoordinator.Outcome>>()
+            val collector = backgroundScope.launch { coordinator.outcomes.collect(seen::add) }
+            runCurrent()
+
+            coordinator.consumeAll(queued.take(2))
+            runCurrent()
+
+            assertEquals(listOf(queued, queued.drop(2)), seen)
+            collector.cancel()
         }
 
     private fun TestScope.coordinator() =

@@ -59,6 +59,9 @@ internal class ViewerVideoController(
 
         fun clearThumbnailPreview()
 
+        /** Loads the current media from scratch; for a complete original whose plaintext copy is gone. */
+        fun reloadMedia()
+
         fun handleLoadFailure(
             error: Throwable,
             fallbackMessage: String,
@@ -81,14 +84,32 @@ internal class ViewerVideoController(
     /** True while the player reports STATE_BUFFERING for the current media. */
     private var buffering = false
 
+    /** True while a reader of the current download is blocked at bytes that have not arrived. */
+    private var waitingForBytes = false
+
     /** Applied by the next [show], so a recreated viewer resumes where the user was. */
     private var pendingPlayback: ViewerPlaybackState? = null
 
-    /** True when [pause] stopped a playing video; the saved state should still say "playing". */
+    /**
+     * True when [pause] stopped a playing video, or a video was shown while the viewer was
+     * stopped; the saved state should still say "playing" and [resume] starts it.
+     */
     private var pausedWhilePlaying = false
+
+    /** True between the Activity's onStart and onStop; a video shown outside that window does not start. */
+    private var started = false
 
     /** The media the player was last asked to show; null once [stop] has cleared it. */
     private var activeStableId: String? = null
+
+    /** True while every byte of the current media is on disk: a cached original, or a download that completed. */
+    private var streamComplete = false
+
+    /**
+     * The media a vanished copy was reloaded for, so it is reloaded once; cleared when a
+     * different media is shown (see [ViewerVideoReloadPolicy]).
+     */
+    private var reloadedStableId: String? = null
 
     /**
      * Counts every [show]; the current value tags the media item so an event the player queued for
@@ -144,6 +165,13 @@ internal class ViewerVideoController(
                 // A stale error: prepare() for a newer item has already cleared it from the player.
                 val activePlayer = player ?: return
                 if (!isCurrentShow(activePlayer) || activePlayer.playerError !== error) return
+                // A complete original whose plaintext copy the TTL sweep took during a long
+                // pause: loading again decrypts a fresh copy, once.
+                if (ViewerVideoReloadPolicy.reloads(error, streamComplete, reloadedStableId == requestedStableId)) {
+                    reloadedStableId = requestedStableId
+                    host.reloadMedia()
+                    return
+                }
                 host.handleLoadFailure(error, context.getString(R.string.could_not_play_video))
             }
         }
@@ -163,12 +191,24 @@ internal class ViewerVideoController(
         host.showLoadingPanelImmediately()
         progressJob =
             scope.launch {
+                // A reader parked on bytes still to come is a stall the player may not report
+                // as buffering yet; the panel comes back for it the same way. Both collectors
+                // end together when the download completes, when neither can change again.
+                launch {
+                    stream.waitingForBytes.collect { waiting ->
+                        if (host.currentStableId != requestedStableId) return@collect
+                        waitingForBytes = waiting
+                        refreshProgressPanel(requestedStableId)
+                    }
+                }
                 stream.progress.collect { downloadProgress ->
                     if (host.currentStableId != requestedStableId) return@collect
                     latestProgress = downloadProgress
+                    streamComplete = downloadProgress.complete
                     refreshProgressPanel(requestedStableId)
                     if (!ViewerVideoProgressPolicy.keepObserving(downloadProgress.complete)) {
                         progressJob = null
+                        waitingForBytes = false
                         cancel()
                     }
                 }
@@ -185,7 +225,7 @@ internal class ViewerVideoController(
         val downloadProgress = latestProgress ?: return
         if (host.currentStableId != requestedStableId) return
         val mediaReady = host.mediaReady
-        if (ViewerVideoProgressPolicy.panelVisible(mediaReady, buffering, downloadProgress.complete)) {
+        if (ViewerVideoProgressPolicy.panelVisible(mediaReady, buffering, waitingForBytes, downloadProgress.complete)) {
             if (mediaReady) host.showLoadingPanelImmediately()
             updateDownloadProgress(downloadProgress)
         } else if (mediaReady) {
@@ -193,19 +233,24 @@ internal class ViewerVideoController(
         }
     }
 
-    /** Pauses for the viewer leaving the screen; call from the Activity's onStop. */
+    /**
+     * Pauses for the viewer leaving the screen; call from the Activity's onStop. A video that
+     * becomes ready after this, from a download still in flight, is shown paused (see [show]).
+     */
     fun pause() {
+        started = false
         val active = player ?: return
         if (ViewerPlaybackPausePolicy.remembersPlaying(active.playWhenReady)) pausedWhilePlaying = true
         active.pause()
     }
 
     /**
-     * The viewer is back on screen: a video [pause] stopped goes on playing, and the mark is
-     * spent either way. Left set, it would make a rotation start a video the user had since
-     * paused. Call from the Activity's onStart.
+     * The viewer is back on screen: a video [pause] stopped, or one shown while stopped, goes on
+     * playing, and the mark is spent either way. Left set, it would make a rotation start a
+     * video the user had since paused. Call from the Activity's onStart.
      */
     fun resume() {
+        started = true
         val resumes = ViewerPlaybackPausePolicy.resumesOnReturn(pausedWhilePlaying)
         pausedWhilePlaying = false
         if (resumes) player?.play()
@@ -244,6 +289,8 @@ internal class ViewerVideoController(
         progressJob = null
         latestProgress = null
         buffering = false
+        waitingForBytes = false
+        streamComplete = false
         activeStableId = null
         pausedWhilePlaying = false
         player?.let { active ->
@@ -281,6 +328,9 @@ internal class ViewerVideoController(
         playerView.alpha = 0f
         val activePlayer = ensurePlayer()
         activeStableId = requestedStableId
+        // A file on disk is complete from the start; a progressive stream reports it later.
+        streamComplete = dataSourceFactory == null
+        if (reloadedStableId != requestedStableId) reloadedStableId = null
         showGeneration++
         val mediaItem =
             MediaItem
@@ -299,7 +349,11 @@ internal class ViewerVideoController(
         pendingPlayback = null
         if (restored != null) activePlayer.seekTo(restored.positionMillis)
         activePlayer.prepare()
-        activePlayer.playWhenReady = restored?.playWhenReady ?: true
+        // Off screen there is nothing to pause yet, so the start itself waits for resume():
+        // a progressive download that readies after onStop must not play in the background.
+        val intendedPlaying = restored?.playWhenReady ?: true
+        activePlayer.playWhenReady = ViewerPlaybackPausePolicy.playsOnShow(intendedPlaying, started)
+        pausedWhilePlaying = ViewerPlaybackPausePolicy.defersStart(intendedPlaying, started)
     }
 
     private fun ensurePlayer(): ExoPlayer =
