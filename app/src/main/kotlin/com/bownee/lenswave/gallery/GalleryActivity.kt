@@ -170,6 +170,7 @@ class GalleryActivity :
                 privacySettings = viewerPrivacySettings,
                 onConnectProton = ::connectProton,
                 onDisconnectProton = viewModel::disconnectProton,
+                onScreenshotPolicyChanged = ::applyScreenshotPolicy,
             )
         deletionCoordinator = GalleryDeletionCoordinator(activity = this)
         buildInterface()
@@ -188,7 +189,7 @@ class GalleryActivity :
 
     override fun onResume() {
         super.onResume()
-        // The setting is toggled from this screen's own menu; it takes effect without a recreation.
+        // The menu toggle applies the flag itself; this catches a change made while paused (the viewer shares the setting).
         applyScreenshotPolicy()
         viewerLaunched = false
         // The collector below saw these while the viewer was still launched; now they are the gallery's.
