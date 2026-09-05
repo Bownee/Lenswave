@@ -16,6 +16,7 @@ import kotlinx.coroutines.sync.withPermit
 import me.proton.core.domain.entity.UserId
 import me.proton.drive.sdk.entity.AlbumNode
 import me.proton.drive.sdk.entity.NodeUid
+import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -53,6 +54,9 @@ internal class ProtonAlbumRepository
         private val albumPhotoIndex = ProtonNodeUidIndex(ProtonGalleryPhoto::nodeUid)
         private val mutableAlbumsState = MutableStateFlow(ProtonAlbumsState())
         private val mutableAlbumPhotosState = MutableStateFlow(ProtonAlbumPhotosState())
+
+        /** Bumped by every [loadCachedAlbum]; a read that is no longer the latest is dropped. */
+        private val albumLoads = AtomicLong()
         val albumsState: StateFlow<ProtonAlbumsState> = mutableAlbumsState.asStateFlow()
         val albumPhotosState: StateFlow<ProtonAlbumPhotosState> = mutableAlbumPhotosState.asStateFlow()
 
@@ -77,8 +81,12 @@ internal class ProtonAlbumRepository
             userId: UserId,
             album: ProtonAlbumReference,
         ) {
+            // Opens are not serialized, so a slow read for one album can finish after a fast
+            // one for the album opened next; only the latest open may publish.
+            val load = albumLoads.incrementAndGet()
             val photos = cache.readAlbumPhotosSnapshot(userId.id, album.nodeUid)
             mutableAlbumPhotosState.update { previous ->
+                if (albumLoads.get() != load) return@update previous
                 val loaded = photos.orEmpty()
                 ProtonAlbumPhotosState(
                     userId = userId.id,

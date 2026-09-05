@@ -229,6 +229,24 @@ class ProtonAlbumRepositoryTest {
         }
 
     @Test
+    fun `a slow read for an album opened earlier cannot overwrite the album opened after it`() =
+        runTest {
+            cache.albumPhotos[USER.id to "al1"] = listOf(photo("x", 2L))
+            cache.albumPhotos[USER.id to "al2"] = listOf(photo("y", 1L))
+            // While the first album's index is still being read, the user opens the second one.
+            cache.onReadAlbumPhotos = { albumUid ->
+                if (albumUid == "al1") repository.loadCachedAlbum(USER, ProtonAlbumReference("al2", "Second"))
+            }
+
+            repository.loadCachedAlbum(USER, ProtonAlbumReference("al1", "First"))
+
+            val published = repository.albumPhotosState.value
+            assertEquals("al2", published.albumUid)
+            assertEquals(listOf("y"), published.photos.map(ProtonGalleryPhoto::nodeUid))
+            assertTrue(published.hasLoaded)
+        }
+
+    @Test
     fun `the capture time of a photo in the open album is known, one in a closed album is not`() =
         runTest {
             cache.albumPhotos[USER.id to "al1"] = listOf(photo("x", 2L))
@@ -352,6 +370,9 @@ class ProtonAlbumRepositoryTest {
         var albumsReadable = true
         var onRemove: () -> Unit = {}
 
+        /** Runs while an album-photo index is being read, before the result is handed back. */
+        var onReadAlbumPhotos: (albumUid: String) -> Unit = {}
+
         override fun storedRenditions(userId: String): ProtonStoredRenditions = ProtonStoredRenditions.NONE
 
         override fun readAlbumsSnapshot(
@@ -371,7 +392,11 @@ class ProtonAlbumRepositoryTest {
             userId: String,
             albumUid: String,
             availability: ProtonStoredRenditions,
-        ): List<ProtonGalleryPhoto>? = albumPhotos[userId to albumUid]?.map { it }
+        ): List<ProtonGalleryPhoto>? {
+            val photos = albumPhotos[userId to albumUid]?.map { it }
+            onReadAlbumPhotos(albumUid)
+            return photos
+        }
 
         override fun writeAlbumPhotos(
             userId: String,
