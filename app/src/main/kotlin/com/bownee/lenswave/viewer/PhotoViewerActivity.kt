@@ -47,6 +47,7 @@ import com.bownee.lenswave.proton.ProtonPreviewOrientation
 import com.bownee.lenswave.proton.ProtonSessionChangedException
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -54,6 +55,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import me.proton.core.domain.entity.UserId
+import java.io.File
 import java.time.ZoneId
 import java.util.Locale
 import javax.inject.Inject
@@ -145,7 +147,14 @@ class PhotoViewerActivity :
     private var previewStableId: String? = null
     private var navigationFallback: NavigationFallback? = null
     private var photoLoadJob: Job? = null
-    private var prefetchJob: Job? = null
+
+    /**
+     * The neighbour's cached original being decrypted ahead of a swipe, and which photo it is
+     * for. A swipe onto that very photo keeps the job and awaits it instead of cancelling it,
+     * which would delete the partial plaintext and start the decrypt over.
+     */
+    private var prefetchJob: Deferred<Result<File?>>? = null
+    private var prefetchStableId: String? = null
     private var loadingPanelRunnable: Runnable? = null
 
     /** Set in onDestroy; posted work that outlives the Activity checks it and does nothing. */
@@ -515,7 +524,8 @@ class PhotoViewerActivity :
 
                         override fun activeMediaView(): View = this@PhotoViewerActivity.activeMediaView()
 
-                        override fun beginNavigation() = this@PhotoViewerActivity.beginNavigation()
+                        override fun beginNavigation(target: PhotoRequest) =
+                            this@PhotoViewerActivity.beginNavigation(target)
 
                         override fun commitNavigation(adjacent: PhotoRequest) =
                             this@PhotoViewerActivity.commitNavigation(adjacent)
@@ -677,11 +687,25 @@ class PhotoViewerActivity :
                 // Preparing it starts at once so it overlaps the thumbnail read rather than
                 // waiting behind it. Failures are carried as a Result so they surface through the
                 // catch below instead of failing this whole job through structured concurrency.
+                // A prefetch already decrypting this very photo is awaited rather than raced: its
+                // own probe would find the plaintext half-written and start a second decrypt.
+                val prefetched =
+                    prefetchJob?.takeIf { ViewerPrefetchPolicy.isFor(prefetchStableId, requestedPhoto.stableId) }
                 val cachedOriginalPreparation =
                     if (requestedPhoto.mediaKind == MediaKind.VIDEO) {
                         null
                     } else {
-                        async(Dispatchers.IO) { runCatching { originalMedia.prepareCachedOriginal(userId, nodeUid) } }
+                        async(Dispatchers.IO) {
+                            // A prefetch cancelled or failed underneath only means "probe yourself";
+                            // its cancellation is not this load's, which ensureActive re-checks.
+                            val fromPrefetch = prefetched?.let { runCatching { it.await() }.getOrNull()?.getOrNull() }
+                            ensureActive()
+                            if (fromPrefetch != null) {
+                                Result.success(fromPrefetch)
+                            } else {
+                                runCatching { originalMedia.prepareCachedOriginal(userId, nodeUid) }
+                            }
+                        }
                     }
                 // A photo's thumbnail read races the cached-original probe instead of holding it
                 // up: a prefetched neighbour, the common case after a swipe, hits the probe in a
@@ -1005,14 +1029,18 @@ class PhotoViewerActivity :
     }
 
     /** Called by the swipe controller before the current media slides away. */
-    private fun beginNavigation() {
+    private fun beginNavigation(target: PhotoRequest) {
         val previousRequest = request
         photoTransitioning = true
         photoLoadJob?.cancel()
-        // The neighbour being prepared may not be the one the user is heading for; the new
-        // photo's own prefetch restarts it in the direction of travel once it is on screen.
-        prefetchJob?.cancel()
-        prefetchJob = null
+        // A prefetch of the very photo the user is heading for is kept for loadPhoto to await;
+        // one of the other neighbour is dropped, and the new photo's own prefetch restarts it in
+        // the direction of travel once it is on screen.
+        if (!ViewerPrefetchPolicy.isFor(prefetchStableId, target.stableId)) {
+            prefetchJob?.cancel()
+            prefetchJob = null
+            prefetchStableId = null
+        }
         cancelLoadingPanelDelay()
         navigationFallback = NavigationFallback(previousRequest, resolvedUri)
         setActionsEnabled(false)
@@ -1146,8 +1174,9 @@ class PhotoViewerActivity :
         val offset = if (swipe.lastNavigationOffset == 0) 1 else swipe.lastNavigationOffset
         val neighbour = swipe.adjacentTo(stableId, offset)?.takeIf { it.mediaKind != MediaKind.VIDEO } ?: return
         prefetchJob?.cancel()
+        prefetchStableId = neighbour.stableId
         prefetchJob =
-            lifecycleScope.launch(Dispatchers.IO) {
+            lifecycleScope.async(Dispatchers.IO) {
                 // The decrypt watches this job between chunks, so a cancellation from
                 // beginNavigation stops it promptly whether it has started or not.
                 ensureActive()

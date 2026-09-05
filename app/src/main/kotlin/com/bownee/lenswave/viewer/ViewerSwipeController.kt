@@ -34,8 +34,11 @@ internal class ViewerSwipeController(
 
         fun activeMediaView(): View
 
-        /** Called before the slide-out animation: raise `photoTransitioning`, remember the fallback. */
-        fun beginNavigation()
+        /**
+         * Called before the slide-out animation towards [target]: raise `photoTransitioning`,
+         * remember the fallback, keep a prefetch of [target] and drop any other.
+         */
+        fun beginNavigation(target: PhotoRequest)
 
         /**
          * Called once the current media has slid away: make [adjacent] the current request, reset
@@ -212,7 +215,7 @@ internal class ViewerSwipeController(
         }
         lastNavigationOffset = Integer.signum(offset)
 
-        host.beginNavigation()
+        host.beginNavigation(adjacent)
         mediaTransform.cancelMediaAnimations()
         if (peekPreview.isVisible && peekStableId == adjacent.stableId) {
             peekPreview
