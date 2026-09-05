@@ -3,9 +3,9 @@ package com.bownee.lenswave.viewer
 import com.bownee.lenswave.gallery.GalleryAsset
 import com.bownee.lenswave.gallery.GalleryAssetMemo
 import com.bownee.lenswave.gallery.GalleryDestination
+import com.bownee.lenswave.gallery.ProtonGalleryReader
 import com.bownee.lenswave.proton.ProtonAccountSessionManager
 import com.bownee.lenswave.proton.ProtonAccountSessionState
-import com.bownee.lenswave.proton.ProtonGalleryReader
 import com.bownee.lenswave.proton.ProtonSessionChangedException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.StateFlow

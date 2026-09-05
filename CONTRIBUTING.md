@@ -11,7 +11,7 @@
 This is what CI runs on every pull request. Run it before pushing:
 
 ```shell
-./gradlew ktlintCheck testDebugUnitTest jacocoDebugCoverageVerification :app:lintDebug assembleDebug
+./gradlew ktlintCheck testDebugUnitTest jacocoDebugCoverageVerification lintDebug assembleDebug
 ```
 
 `ktlintCheck` fails on formatting drift; `./gradlew ktlintFormat` fixes it in place.
@@ -47,13 +47,13 @@ run on every push to main and on release tags. Run the command above locally whe
 All versions live in `gradle/libs.versions.toml`. Two generated files pin what actually resolves and
 are enforced strictly:
 
-- `gradle.lockfile` in every module and `settings-gradle.lockfile` (Gradle dependency locking)
+- `app/gradle.lockfile` and `settings-gradle.lockfile` (Gradle dependency locking)
 - `gradle/verification-metadata.xml` (SHA-256 checksums for every artifact)
 
 After changing any dependency, regenerate both in one go and commit the result:
 
 ```shell
-./gradlew --write-locks --write-verification-metadata sha256 testDebugUnitTest :app:lintDebug assembleDebug --no-configuration-cache
+./gradlew --write-locks --write-verification-metadata sha256 testDebugUnitTest lintDebug assembleDebug --no-configuration-cache
 ```
 
 Dependabot opens version bumps but cannot regenerate these files, so every dependency PR needs this

@@ -2,8 +2,8 @@ package com.bownee.lenswave.viewer
 
 import com.bownee.lenswave.gallery.PhotoDeletionExecutor
 import com.bownee.lenswave.gallery.PhotoMutationResult
+import com.bownee.lenswave.gallery.ProtonPhotoMutations
 import com.bownee.lenswave.proton.ProtonFavoriteResult
-import com.bownee.lenswave.proton.ProtonPhotoMutations
 import com.bownee.lenswave.proton.ProtonTrashResult
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi

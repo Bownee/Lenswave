@@ -42,8 +42,8 @@ import com.bownee.lenswave.gallery.GalleryUiState
 import com.bownee.lenswave.gallery.GalleryUpdatePresenter
 import com.bownee.lenswave.gallery.GalleryViewModel
 import com.bownee.lenswave.gallery.LibraryAction
+import com.bownee.lenswave.gallery.ProtonThumbnailImageSource
 import com.bownee.lenswave.proton.ProtonAlbum
-import com.bownee.lenswave.proton.ProtonThumbnailImageSource
 import com.bownee.lenswave.update.AppUpdateChecker
 import com.bownee.lenswave.update.UpdateAvailableDialogFragment
 import com.bownee.lenswave.viewer.PhotoViewerActivity
