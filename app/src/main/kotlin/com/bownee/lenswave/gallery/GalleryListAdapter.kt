@@ -550,7 +550,7 @@ class GalleryListAdapter(
         }
     }
 
-    private companion object {
+    internal companion object {
         const val TYPE_DATE_HEADER = 0
         const val TYPE_SECTION_HEADING = 1
         const val TYPE_PHOTOS = 2

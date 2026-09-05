@@ -55,6 +55,10 @@ internal class GalleryScreen(
 
     /** The header height the views below it were last laid out for; -1 forces the next measure to apply it again. */
     private var appliedHeaderHeight = -1
+
+    /** Pixels of the pinned header scrolled out of view, see [GalleryHeaderScrollPolicy]. */
+    private var headerHidden = 0
+    private val scrollTracker = GalleryListScrollTracker()
     var onHeaderHeightChanged: ((Int) -> Unit)? = null
 
     private val stickyHeader: LinearLayout
@@ -77,6 +81,7 @@ internal class GalleryScreen(
     /** The user closed the banner; it stays closed until the flag clears and is raised again. */
     private var listingRefusedDismissed = false
     private val refreshLayout: GalleryRefreshLayout
+    private val statusBarScrim: View
     private val stickyDate: TextView
     private val stickyDateController: GalleryStickyDateController
     private var safeArea = Insets.NONE
@@ -117,8 +122,6 @@ internal class GalleryScreen(
         filterChips = header.filterChips
 
         galleryHeader = buildListHeader()
-        // The filter chips scroll away with the content; only the title row stays pinned.
-        galleryHeader.addView(filterRow, 0, UiStyle.matchWrap().apply { bottomMargin = activity.dp(6) })
 
         galleryFooter =
             View(activity).apply {
@@ -145,11 +148,14 @@ internal class GalleryScreen(
                 addView(list, UiStyle.matchParentFrame())
             }
         root.addView(refreshLayout, UiStyle.matchParentFrame())
+        // Under the status bar whatever the header does: the photos scroll beneath the clock, not into it.
+        statusBarScrim = View(activity).apply { setBackgroundColor(UiStyle.withAlpha(UiStyle.background, 244)) }
+        root.addView(statusBarScrim, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, Gravity.TOP))
 
         stickyDate =
             UiStyle.label(activity, sizeSp = 12.5f, medium = true).apply {
                 gravity = Gravity.CENTER
-                setPadding(activity.dp(12), 0, activity.dp(12), 0)
+                setPadding(activity.dp(STICKY_DATE_PADDING_DP), 0, activity.dp(STICKY_DATE_PADDING_DP), 0)
                 background =
                     UiStyle.rounded(
                         activity,
@@ -168,7 +174,15 @@ internal class GalleryScreen(
                 Gravity.TOP or Gravity.START,
             ),
         )
-        stickyDateController = GalleryStickyDateController(list, adapter, stickyDate)
+        stickyDateController =
+            GalleryStickyDateController(
+                list,
+                adapter,
+                stickyDate,
+                headerHidden = { headerHidden },
+                onScrollStateChanged = ::onListScrollStateChanged,
+            )
+        list.onScrolled = ::onListScrolled
 
         root.addView(
             stickyHeader,
@@ -272,6 +286,55 @@ internal class GalleryScreen(
         }
     }
 
+    private fun onListScrolled() {
+        val firstVisible = list.firstVisiblePosition
+        val scrolledDown = scrollTracker.scrolled(firstVisible, list.childCount) { index -> list.getChildAt(index).top }
+        val atTop = firstVisible == 0 && list.isNotEmpty() && list.getChildAt(0).top >= list.paddingTop
+        val hidden = GalleryHeaderScrollPolicy.hiddenAfter(headerHidden, scrolledDown, stickyHeader.height, atTop)
+        setHeaderHidden(hidden, animate = false)
+    }
+
+    private fun onListScrollStateChanged(state: Int) {
+        if (state != AbsListView.OnScrollListener.SCROLL_STATE_IDLE) return
+        setHeaderHidden(GalleryHeaderScrollPolicy.settled(headerHidden, stickyHeader.height), animate = true)
+    }
+
+    /** Brings the header fully back at once; a new page starts with it shown. */
+    fun showHeader() {
+        scrollTracker.reset()
+        setHeaderHidden(0, animate = false)
+    }
+
+    private fun setHeaderHidden(
+        hidden: Int,
+        animate: Boolean,
+    ) {
+        if (hidden == headerHidden && !animate) return
+        headerHidden = hidden
+        // The badge stops under the status bar, whose scrim stays; the clock must not land on it.
+        val badgeHidden = hidden.coerceAtMost((stickyHeader.height - safeArea.top).coerceAtLeast(0))
+        slide(stickyHeader, -hidden.toFloat(), animate)
+        slide(stickyDate, -badgeHidden.toFloat(), animate)
+        stickyDateController.schedule()
+    }
+
+    private fun slide(
+        view: View,
+        offset: Float,
+        animate: Boolean,
+    ) {
+        view.animate().cancel()
+        if (animate) {
+            view
+                .animate()
+                .translationY(offset)
+                .setDuration(HEADER_SETTLE_MILLIS)
+                .start()
+        } else {
+            view.translationY = offset
+        }
+    }
+
     /** Scrolls back to the top, jumping most of the way first so long lists do not crawl. */
     fun scrollToTop() {
         if (list.firstVisiblePosition > SCROLL_TO_TOP_JUMP_ROWS) list.setSelection(SCROLL_TO_TOP_JUMP_ROWS)
@@ -281,14 +344,13 @@ internal class GalleryScreen(
     /** Applies the window's safe area to the pinned header and everything laid out under it. */
     fun applySafeArea(insets: Insets) {
         safeArea = insets
-        stickyHeader.setPadding(
-            activity.dp(16) + insets.left,
-            activity.dp(6) + insets.top,
-            activity.dp(16) + insets.right,
-            activity.dp(8),
-        )
+        statusBarScrim.layoutParams =
+            (statusBarScrim.layoutParams as FrameLayout.LayoutParams).apply { height = insets.top }
+        // The rows carry the horizontal inset, not the header: the chips scroll edge to edge under it.
+        stickyHeader.setPadding(0, activity.dp(2) + insets.top, 0, activity.dp(6))
+        titleRow.setPadding(activity.dp(16) + insets.left, 0, activity.dp(16) + insets.right, 0)
         galleryHeader.setPadding(insets.left, activity.dp(2), insets.right, activity.dp(6))
-        filterRow.setPadding(activity.dp(16), 0, activity.dp(16), 0)
+        filterRow.setPadding(activity.dp(16) + insets.left, 0, activity.dp(16) + insets.right, 0)
         // The date badge's start margin follows the safe area too; the next measure re-applies everything.
         appliedHeaderHeight = -1
         root.requestLayout()
@@ -344,14 +406,14 @@ internal class GalleryScreen(
     private fun startsPull(touchY: Float): Boolean {
         val filterRowBounds =
             if (filterRow.isShown) {
-                val top = galleryHeader.top + filterRow.top
+                val top = filterRow.top - headerHidden
                 top until top + filterRow.height
             } else {
                 null
             }
         return GalleryPullToRefreshPolicy.startsPull(
             touchY,
-            stickyHeader.height,
+            stickyHeader.height - headerHidden,
             filterRowBounds,
             gapBelowFilterRow = pullGapBelowChips,
         )
@@ -369,7 +431,8 @@ internal class GalleryScreen(
         refreshLayout.setProgressViewOffset(false, headerHeight, headerHeight + activity.dp(REFRESH_SPINNER_END_DP))
         (stickyDate.layoutParams as FrameLayout.LayoutParams).apply {
             topMargin = headerHeight + activity.dp(8)
-            marginStart = activity.dp(8) +
+            // The text lines up with the date rows: their edge padding less the badge's own.
+            marginStart = activity.dp(GalleryListAdapter.EDGE_DP - STICKY_DATE_PADDING_DP) +
                 if (root.layoutDirection == View.LAYOUT_DIRECTION_RTL) {
                     safeArea.right
                 } else {
@@ -413,7 +476,7 @@ internal class GalleryScreen(
             },
         )
         val pageTitle =
-            UiStyle.label(activity, sizeSp = 20f, medium = true).apply {
+            UiStyle.label(activity, sizeSp = NAVIGATION_TEXT_SP, medium = true).apply {
                 maxLines = 1
                 ellipsize = TextUtils.TruncateAt.END
                 visibility = View.GONE
@@ -459,12 +522,13 @@ internal class GalleryScreen(
                     activity,
                     R.drawable.ic_settings,
                     activity.getString(R.string.settings),
-                    sizeDp = TITLE_ROW_HEIGHT_DP,
-                    iconDp = 20,
+                    sizeDp = SETTINGS_BUTTON_DP,
+                    iconDp = 18,
                 ).apply { setOnClickListener { actions.onSettings() } }
+        // Smaller than the row; the row's vertical gravity keeps it centred on the navigation.
         titleRow.addView(
             settings,
-            LinearLayout.LayoutParams(activity.dp(TITLE_ROW_HEIGHT_DP), activity.dp(TITLE_ROW_HEIGHT_DP)),
+            LinearLayout.LayoutParams(activity.dp(SETTINGS_BUTTON_DP), activity.dp(SETTINGS_BUTTON_DP)),
         )
 
         val chips = linkedMapOf<GalleryDestination, FilterChip>()
@@ -518,6 +582,8 @@ internal class GalleryScreen(
                 setBackgroundColor(UiStyle.withAlpha(UiStyle.background, 244))
                 isClickable = true
                 addView(titleRow, UiStyle.matchWrap())
+                // The chips are pinned with the navigation and slide out with it, see [onListScrolled].
+                addView(filterRow, UiStyle.matchWrap().apply { topMargin = activity.dp(2) })
             }
         return StickyHeader(container, titleRow, back, pageTitle, tabSwitch, photos, albums, settings, filterRow, chips)
     }
@@ -681,7 +747,7 @@ internal class GalleryScreen(
         label: String,
     ) : FrameLayout(context) {
         private val labelView =
-            UiStyle.label(context, label, 20f, medium = true).apply {
+            UiStyle.label(context, label, NAVIGATION_TEXT_SP, medium = true).apply {
                 gravity = Gravity.CENTER
             }
 
@@ -817,6 +883,10 @@ internal class GalleryScreen(
         /** Height of the floating selection bar including padding, used to keep the list clear of it. */
         const val SELECTION_BAR_HEIGHT_DP = 60
         private const val TITLE_ROW_HEIGHT_DP = 40
+        private const val SETTINGS_BUTTON_DP = 34
+        private const val NAVIGATION_TEXT_SP = 18f
+        private const val STICKY_DATE_PADDING_DP = 12
+        private const val HEADER_SETTLE_MILLIS = 150L
         private const val CHIP_HEIGHT_DP = 38
         private const val REFRESH_SPINNER_END_DP = 56
 

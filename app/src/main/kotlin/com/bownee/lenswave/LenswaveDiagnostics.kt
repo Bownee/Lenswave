@@ -18,6 +18,7 @@ internal enum class LenswaveOperation(
     APP_UPDATE_SNOOZE("app-update-snooze"),
     CACHE_CLEAR("cache-clear"),
     CACHE_SNAPSHOT_READ("cache-snapshot-read"),
+    CACHE_INDEX_CONVERT("cache-index-convert"),
     DOWNLOAD_QUEUE_PERSIST("download-queue-persist"),
     ORIGINAL_CACHE_STORE("original-cache-store"),
     ORIGINAL_DOWNLOAD("original-download"),

@@ -65,12 +65,11 @@ internal class ProtonTimelineRepository
         val state: StateFlow<ProtonGalleryState> = mutableState.asStateFlow()
 
         /**
-         * Publishes the cached timeline and tag listings. A library up to
-         * [TAGS_WITH_FIRST_PUBLISH_LIMIT] photos hydrates its tags first and publishes once, so
-         * re-activating never blanks the Videos and Favorites tabs; the tag files are a fraction
-         * of the timeline there. A larger library publishes the grid as soon as the timeline is
-         * parsed and fills the tabs right after, keeping whatever this user had published in the
-         * meantime rather than an empty map.
+         * Publishes the cached timeline, then the tag listings. The grid goes on screen as soon
+         * as the timeline is hydrated; the tag files, a fraction of it, follow a few milliseconds
+         * later and replace whatever this user had published in the meantime (an activation
+         * follows a reset, so that is an empty map, and a tag page is blank for those
+         * milliseconds rather than the timeline waiting for files it does not show).
          *
          * The rendition scan (a stat per stored file) and the decrypt-and-parse of the index are
          * the two slow halves of a launch; they run side by side and meet for the hydration.
@@ -84,14 +83,11 @@ internal class ProtonTimelineRepository
                 }
             val timeline = entries?.map { entry -> availability.photo(entry.nodeUid, entry.captureTimeEpochSeconds) }
             val photos = timeline.orEmpty()
-            val tagsFirst = photos.size <= TAGS_WITH_FIRST_PUBLISH_LIMIT
-            val tagStates = if (tagsFirst) readTagStates(userId, availability) else null
             emit(userId = userId, photos = photos, hasLoaded = timeline != null, syncing = false) { previous ->
-                tagStates ?: if (previous.userId == userId.id) previous.tags else emptyMap()
+                if (previous.userId == userId.id) previous.tags else emptyMap()
             }
-            if (tagsFirst) return
-            val lateTagStates = readTagStates(userId, availability)
-            updateState(userId) { state -> state.copy(tags = lateTagStates) }
+            val tagStates = readTagStates(userId, availability)
+            updateState(userId) { state -> state.copy(tags = tagStates) }
         }
 
         private fun readTagStates(
@@ -606,7 +602,6 @@ internal class ProtonTimelineRepository
 
         private companion object {
             /** Below this the tag files parse in a few milliseconds, so the first publish can wait for them. */
-            const val TAGS_WITH_FIRST_PUBLISH_LIMIT = 5_000
 
             fun photoIndex() = ProtonNodeUidIndex(ProtonGalleryPhoto::nodeUid)
         }

@@ -418,6 +418,7 @@ class GalleryActivity :
             if (destinationChanged) {
                 // The list still shows the previous page here, so its position can be captured.
                 saveScrollPosition()
+                screen.showHeader()
                 pendingScrollRestore = state.destination
                 pendingSelectionRestore = true
             } else if (spanChanged) {
