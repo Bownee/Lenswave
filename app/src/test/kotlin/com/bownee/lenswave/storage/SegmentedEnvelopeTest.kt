@@ -3,6 +3,7 @@ package com.bownee.lenswave.storage
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Test
 import java.io.ByteArrayInputStream
@@ -228,6 +229,19 @@ class SegmentedEnvelopeTest {
     }
 
     @Test
+    fun reportsThePlaintextTotalAfterEveryVerifiedSegment() {
+        val encrypted = encrypt(pattern(SEGMENT * 2 + 10))
+        val totals = mutableListOf<Long>()
+        val output = ByteArrayOutputStream()
+
+        SegmentedEnvelope.decrypt(key, ByteArrayInputStream(encrypted), output, onBytesWritten = totals::add)
+
+        assertEquals(listOf(SEGMENT.toLong(), 2L * SEGMENT, 2L * SEGMENT + 10), totals)
+        // Each total was reported only once its bytes had been written.
+        assertEquals(totals.last(), output.size().toLong())
+    }
+
+    @Test
     fun segmentIvIsTheNonceFollowedByTheCounter() {
         val nonce = ByteArray(SegmentedEnvelope.NONCE_BYTES) { (it + 1).toByte() }
 
@@ -272,6 +286,25 @@ class SegmentedEnvelopeTest {
                 SegmentedEnvelope.MAX_SEGMENT_BYTES + 1,
             )
         }
+    }
+
+    @Test
+    fun plaintextLengthFollowsFromTheEnvelopeLength() {
+        listOf(0, 1, SEGMENT - 1, SEGMENT, SEGMENT + 10, SEGMENT * 3, SEGMENT * 2 + SEGMENT / 2).forEach { size ->
+            val encrypted = encrypt(pattern(size))
+            assertEquals(size.toLong(), SegmentedEnvelope.plaintextLength(encrypted.size.toLong(), SEGMENT))
+        }
+    }
+
+    @Test
+    fun plaintextLengthIsNullForALengthNoEnvelopeHas() {
+        // Shorter than the header and one tag, a final segment shorter than its tag, a segment
+        // size out of range.
+        assertNull(SegmentedEnvelope.plaintextLength((HEADER + TAG - 1).toLong(), SEGMENT))
+        assertNull(SegmentedEnvelope.plaintextLength((HEADER + (SEGMENT + TAG) + TAG - 1).toLong(), SEGMENT))
+        assertNull(SegmentedEnvelope.plaintextLength((HEADER + (SEGMENT + TAG)).toLong(), SEGMENT))
+        assertNull(SegmentedEnvelope.plaintextLength((HEADER + TAG).toLong(), 0))
+        assertNull(SegmentedEnvelope.plaintextLength((HEADER + TAG).toLong(), SegmentedEnvelope.MAX_SEGMENT_BYTES + 1))
     }
 
     @Test

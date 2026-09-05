@@ -1,6 +1,7 @@
 package com.bownee.lenswave.gallery
 
 import com.bownee.lenswave.R
+import com.bownee.lenswave.proton.ProtonAlbum
 import com.bownee.lenswave.proton.ProtonAlbumPhotosState
 import com.bownee.lenswave.proton.ProtonAlbumsState
 import com.bownee.lenswave.proton.ProtonGalleryState
@@ -92,7 +93,7 @@ internal class GalleryUiStateFactory(
                     )
                 }
             }
-        return base(inputs, content, emptyState)
+        return base(inputs, content, emptyState, inputs.protonGallery.listingRefused)
     }
 
     private fun tag(
@@ -127,47 +128,14 @@ internal class GalleryUiStateFactory(
                     )
                 }
             }
-        return base(inputs, content, emptyState)
+        return base(inputs, content, emptyState, state.listingRefused)
     }
 
     private fun library(inputs: GalleryUiInputs): GalleryUiState {
         val albums = inputs.protonAlbums
-        val sections =
-            buildList {
-                when (inputs.protonAccountStatus) {
-                    ProtonAccountStatus.DISCONNECTED -> {
-                        add(
-                            LibrarySection(
-                                key = "proton",
-                                title = "",
-                                items =
-                                    listOf(
-                                        entry(
-                                            key = "connect-proton",
-                                            label = text.string(R.string.connect_proton),
-                                            iconRes = R.drawable.ic_cloud,
-                                            action = LibraryAction.Request(GalleryEmptyAction.CONNECT_PROTON),
-                                        ),
-                                    ),
-                            ),
-                        )
-                    }
-
-                    ProtonAccountStatus.CONNECTING,
-                    ProtonAccountStatus.CONNECTED,
-                    -> {
-                        // The tab itself is titled Albums, so the grid needs no heading of its own.
-                        if (albums.albums.isNotEmpty()) {
-                            add(
-                                LibrarySection(
-                                    key = "albums",
-                                    title = "",
-                                    items = albums.albums.map(LibraryItem::Album),
-                                ),
-                            )
-                        }
-                    }
-                }
+        val content =
+            memo.library(albums.albums, inputs.protonAccountStatus) {
+                GalleryContent.Library(librarySections(albums.albums, inputs.protonAccountStatus))
             }
         // Mirrors the media-type filters: an empty panel once the list has loaded and is empty.
         val emptyState =
@@ -200,10 +168,52 @@ internal class GalleryUiStateFactory(
             }
         return base(
             inputs = inputs,
-            content = GalleryContent.Library(sections),
+            content = content,
             emptyState = emptyState,
+            listingRefused = albums.listingRefused,
         )
     }
+
+    private fun librarySections(
+        albums: List<ProtonAlbum>,
+        accountStatus: ProtonAccountStatus,
+    ): List<LibrarySection> =
+        buildList {
+            when (accountStatus) {
+                ProtonAccountStatus.DISCONNECTED -> {
+                    add(
+                        LibrarySection(
+                            key = "proton",
+                            title = "",
+                            items =
+                                listOf(
+                                    entry(
+                                        key = "connect-proton",
+                                        label = text.string(R.string.connect_proton),
+                                        iconRes = R.drawable.ic_cloud,
+                                        action = LibraryAction.Request(GalleryEmptyAction.CONNECT_PROTON),
+                                    ),
+                                ),
+                        ),
+                    )
+                }
+
+                ProtonAccountStatus.CONNECTING,
+                ProtonAccountStatus.CONNECTED,
+                -> {
+                    // The tab itself is titled Albums, so the grid needs no heading of its own.
+                    if (albums.isNotEmpty()) {
+                        add(
+                            LibrarySection(
+                                key = "albums",
+                                title = "",
+                                items = albums.map(LibraryItem::Album),
+                            ),
+                        )
+                    }
+                }
+            }
+        }
 
     private fun entry(
         key: String,
@@ -241,7 +251,7 @@ internal class GalleryUiStateFactory(
                     )
                 }
             }
-        return base(inputs, content, emptyState)
+        return base(inputs, content, emptyState, albumState.listingRefused)
     }
 
     private fun protonUnavailable(inputs: GalleryUiInputs): GalleryUiState? =
@@ -299,6 +309,7 @@ internal class GalleryUiStateFactory(
         inputs: GalleryUiInputs,
         content: GalleryContent = NO_PHOTOS,
         emptyState: GalleryEmptyState? = null,
+        listingRefused: Boolean = false,
     ) = GalleryUiState(
         destination = inputs.destination,
         title = title(inputs.destination),
@@ -307,6 +318,7 @@ internal class GalleryUiStateFactory(
         currentUserId = inputs.currentUserId,
         isProtonConnected = inputs.currentUserId != null,
         isRefreshing = inputs.isRefreshing,
+        listingRefused = listingRefused,
     )
 
     private fun title(destination: GalleryDestination): String =

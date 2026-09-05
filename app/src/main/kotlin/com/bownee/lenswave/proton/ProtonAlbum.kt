@@ -25,6 +25,8 @@ data class ProtonAlbumsState(
     val hasLoaded: Boolean = false,
     val syncing: Boolean = false,
     val refreshFailed: Boolean = false,
+    /** See [ProtonGalleryState.listingRefused]. */
+    val listingRefused: Boolean = false,
 )
 
 data class ProtonAlbumPhotosState(
@@ -35,4 +37,6 @@ data class ProtonAlbumPhotosState(
     val hasLoaded: Boolean = false,
     val syncing: Boolean = false,
     val refreshFailed: Boolean = false,
+    /** See [ProtonGalleryState.listingRefused]. */
+    val listingRefused: Boolean = false,
 )

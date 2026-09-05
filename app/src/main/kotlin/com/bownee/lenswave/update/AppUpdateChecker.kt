@@ -5,6 +5,10 @@ import com.bownee.lenswave.LenswaveDiagnostics
 import com.bownee.lenswave.LenswaveDispatchers
 import com.bownee.lenswave.LenswaveOperation
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -25,6 +29,37 @@ class AppUpdateChecker
         private val dispatchers: LenswaveDispatchers,
     ) {
         private val checkMutex = Mutex()
+
+        // The startup check runs in this singleton's scope, not the activity's: a rotation while it
+        // is in flight recreates the activity, which awaits the same check instead of starting or
+        // skipping one.
+        private val startupScope = CoroutineScope(SupervisorJob() + dispatchers.io)
+        private val startupMutex = Mutex()
+        private var startupCheck: Deferred<AvailableUpdate?>? = null
+
+        @Volatile private var startupUpdateShown = false
+
+        /**
+         * The result of the process's one startup check. The caller that receives the update owns
+         * showing it and calls [markStartupUpdateShown] once it has taken it over; from then on
+         * every caller (a recreated activity, once the dialog has been shown or snoozed) gets null.
+         * Nothing is marked here: a caller cancelled between receiving the update and storing it
+         * would otherwise lose the prompt for the whole process.
+         */
+        internal suspend fun awaitStartupUpdate(currentVersionName: String): AvailableUpdate? {
+            val check =
+                startupMutex.withLock {
+                    startupCheck
+                        ?: startupScope.async { findAvailableUpdate(currentVersionName) }.also { startupCheck = it }
+                }
+            val update = check.await() ?: return null
+            return if (startupUpdateShown) null else update
+        }
+
+        /** The update from [awaitStartupUpdate] is in the caller's hands; later callers receive null. */
+        internal fun markStartupUpdateShown() {
+            startupUpdateShown = true
+        }
 
         internal suspend fun findAvailableUpdate(currentVersionName: String): AvailableUpdate? =
             try {

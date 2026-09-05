@@ -13,6 +13,7 @@ import com.bownee.lenswave.proton.ProtonAlbumPhotosState
 import com.bownee.lenswave.proton.ProtonAlbumReference
 import com.bownee.lenswave.proton.ProtonAlbumsState
 import com.bownee.lenswave.proton.ProtonGalleryState
+import com.bownee.lenswave.proton.ProtonSessionChangedException
 import com.bownee.lenswave.proton.ProtonThumbnailScheduler
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -108,6 +109,9 @@ class GalleryViewModel internal constructor(
     private var manualRefreshGeneration = 0
     private var lastPeriodicCheckMillis: Long? = null
 
+    /** When the last refresh of the page on screen completed; every navigation refreshes, so it follows the page. */
+    private var lastRefreshCompletedMillis: Long? = null
+
     /**
      * Where each page was scrolled to. Owned here so a configuration change keeps every page's
      * position; the current page's position is also written to the saved state, so a process
@@ -183,6 +187,7 @@ class GalleryViewModel internal constructor(
     init {
         restoreScrollPosition(savedStateHandle)?.let { position -> scrollPositions.save(destination, position) }
         observeAccountSession()
+        observeAlbums()
     }
 
     /** Records where [pageDestination] is scrolled to; the current page's position also goes to the saved state. */
@@ -250,6 +255,10 @@ class GalleryViewModel internal constructor(
                 val result = deletionExecutor.trashProton(userId, nodeUids)
                 setSelection(emptySet())
                 mutableMutationEvents.trySend(GalleryMutationEvent.Trashed(result.successfulCount, result.failedCount))
+            } catch (_: ProtonSessionChangedException) {
+                // A CancellationException subtype the session guard throws when the account changes
+                // mid-call: the photos were not trashed, and the selection bar must hear that.
+                mutableMutationEvents.trySend(GalleryMutationEvent.TrashFailed)
             } catch (error: CancellationException) {
                 throw error
             } catch (_: Throwable) {
@@ -286,14 +295,21 @@ class GalleryViewModel internal constructor(
     /**
      * Keeps the visible section current while the gallery is on screen. The caller scopes it
      * to the started lifecycle, so it pauses in the background and resumes with an immediate
-     * check when the last one is overdue. Each check is a quiet, non-forced refresh: the
-     * repository re-enumerates only once the cached listing is older than its freshness limit.
+     * check when the last one is overdue. A check asks for a quiet, non-forced refresh only when
+     * the last completed refresh is old enough for the repository to enumerate again (see
+     * [GalleryPeriodicSyncPolicy.shouldRefresh]); otherwise it does nothing.
      */
     suspend fun runPeriodicSync() {
         while (true) {
             delay(GalleryPeriodicSyncPolicy.delayUntilNextCheckMillis(lastPeriodicCheckMillis, clock.nowMillis()))
-            lastPeriodicCheckMillis = clock.nowMillis()
-            if (currentUserId != null && !sessionTransitioning) requestRefresh(manual = false)
+            val now = clock.nowMillis()
+            lastPeriodicCheckMillis = now
+            if (currentUserId != null &&
+                !sessionTransitioning &&
+                GalleryPeriodicSyncPolicy.shouldRefresh(lastRefreshCompletedMillis, now)
+            ) {
+                requestRefresh(manual = false)
+            }
         }
     }
 
@@ -319,6 +335,26 @@ class GalleryViewModel internal constructor(
         viewModelScope.launch {
             accountSession.collectLatest(::handleAccountSession)
         }
+    }
+
+    private fun observeAlbums() {
+        viewModelScope.launch {
+            protonRepository.albumsState.collect(::leaveMissingAlbum)
+        }
+    }
+
+    /**
+     * A restored album page whose album the loaded list no longer has (deleted on another
+     * device) returns to the album list instead of showing "album is empty" under a stale name.
+     */
+    private fun leaveMissingAlbum(albums: ProtonAlbumsState) {
+        val userId = currentUserId ?: return
+        if (albums.userId != userId.id) return
+        val fallback =
+            GalleryNavigationPolicy.withoutAlbum(destination, albums.hasLoaded) { nodeUid ->
+                albums.albums.any { album -> album.nodeUid == nodeUid }
+            } ?: return
+        selectDestination(fallback)
     }
 
     private suspend fun handleAccountSession(state: ProtonAccountSessionState) {
@@ -355,6 +391,8 @@ class GalleryViewModel internal constructor(
         }
         publishUiState(accountStatus)
         if (userChanged && nextUserId != null) {
+            // The album list may already be loaded for this user; the collector saw it before the user was known.
+            leaveMissingAlbum(protonRepository.albumsState.value)
             if (requestMissingProtonMetadata(nextUserId)) return
             protonThumbnailScheduler.restart(nextUserId)
         }
@@ -446,7 +484,31 @@ class GalleryViewModel internal constructor(
                 protonThumbnailScheduler.enqueue(userId)
             }
         }
+        // The repositories swallow a failed sync and publish refreshFailed instead; stamping it as
+        // completed would keep the periodic tick quiet for a full freshness limit while offline.
+        if (!refreshFailed(selectedDestination)) lastRefreshCompletedMillis = clock.nowMillis()
     }
+
+    /** Whether the section a refresh of [selectedDestination] syncs is now published as failed. */
+    private fun refreshFailed(selectedDestination: GalleryDestination): Boolean =
+        when (selectedDestination) {
+            GalleryDestination.Timeline -> {
+                protonRepository.state.value.refreshFailed
+            }
+
+            is GalleryDestination.Tag -> {
+                protonRepository.state.value.tags[selectedDestination.tag]
+                    ?.refreshFailed ?: false
+            }
+
+            GalleryDestination.Library -> {
+                protonRepository.albumsState.value.refreshFailed
+            }
+
+            is GalleryDestination.AlbumPhotos -> {
+                protonRepository.albumPhotosState.value.refreshFailed
+            }
+        }
 
     /**
      * Puts the album's cached photos on screen before its sync runs. [openAlbum] does this on

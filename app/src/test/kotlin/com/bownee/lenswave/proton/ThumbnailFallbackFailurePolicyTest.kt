@@ -55,4 +55,41 @@ class ThumbnailFallbackFailurePolicyTest {
             ThumbnailFallbackFailurePolicy.settle(ThumbnailFailureKind.UNANSWERED, ThumbnailFailureKind.OTHER),
         )
     }
+
+    @Test
+    fun aConnectionLostUnderEitherPassLeavesTheNodeUncharged() {
+        assertEquals(
+            ThumbnailFailureKind.TRANSIENT_NETWORK,
+            ThumbnailFallbackFailurePolicy.settle(
+                ThumbnailFailureKind.UNANSWERED,
+                ThumbnailFailureKind.TRANSIENT_NETWORK,
+            ),
+        )
+        assertEquals(
+            ThumbnailFailureKind.TRANSIENT_NETWORK,
+            ThumbnailFallbackFailurePolicy.settle(ThumbnailFailureKind.TRANSIENT_NETWORK, ThumbnailFailureKind.OTHER),
+        )
+        assertEquals(
+            ThumbnailFailureKind.TRANSIENT_NETWORK,
+            ThumbnailFallbackFailurePolicy.settle(
+                ThumbnailFailureKind.TRANSIENT_NETWORK,
+                ThumbnailFailureKind.NOT_FOUND,
+            ),
+        )
+    }
+
+    @Test
+    fun deferredNodesAreSettledNeitherAsFailuresNorAsSuccesses() {
+        val failures =
+            mapOf(
+                "deferred" to ThumbnailFailureKind.NOT_FOUND,
+                "failed" to ThumbnailFailureKind.OTHER,
+            )
+
+        assertEquals(
+            mapOf("failed" to ThumbnailFailureKind.OTHER),
+            ThumbnailFallbackFailurePolicy.withoutDeferred(failures, setOf("deferred", "never-asked")),
+        )
+        assertEquals(failures, ThumbnailFallbackFailurePolicy.withoutDeferred(failures, emptySet()))
+    }
 }

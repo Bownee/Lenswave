@@ -50,7 +50,8 @@ class ProtonPhotoCacheInstrumentedTest {
             activeTarget.writeText("in progress")
             cache.reconcilePhotos(userId, emptyList(), listOf("active"))
             assertTrue(activeTarget.exists())
-            cache.reconcilePhotos(userId, emptyList(), emptyList())
+            // A reconcile that changes nothing sweeps nothing; the removal has to be visible to it.
+            cache.reconcilePhotos(userId, cachedNodeUids = listOf("active"), remoteNodeUids = emptyList())
             assertFalse(activeTarget.exists())
 
             val (plaintext, encrypted) = cache.createOriginalTarget(userId, "bounded")
@@ -63,6 +64,49 @@ class ProtonPhotoCacheInstrumentedTest {
             assertTrue(encrypted.exists())
         } finally {
             cache.clearUser(userId)
+            context.testRoot.deleteRecursively()
+        }
+    }
+
+    @Test fun expiredDecryptedCopiesOfEveryUserAreSweptWhileFreshOnesAndOriginalsStay() {
+        val context = isolatedContext()
+        val clock = FakeClock(System.currentTimeMillis())
+        val secureFiles = SecureFileStore(File(context.filesDir, "secure-keys"))
+        val openCopies = ProtonDecryptedCopyRegistry()
+        val store = ProtonOriginalStore(context, secureFiles, clock, openCopies)
+        val staleUser = "stale-${UUID.randomUUID()}"
+        val freshUser = "fresh-${UUID.randomUUID()}"
+        try {
+            val (stalePlaintext, staleEncrypted) = store.createTarget(staleUser, "old")
+            stalePlaintext.writeText("old plaintext")
+            store.commit(staleUser, "old", stalePlaintext, staleEncrypted)
+            clock.value += 31L * 60L * 1_000L
+            val (freshPlaintext, freshEncrypted) = store.createTarget(freshUser, "new")
+            freshPlaintext.writeText("new plaintext")
+            store.commit(freshUser, "new", freshPlaintext, freshEncrypted)
+
+            // A copy a player holds open outlives its TTL until the reader closes it.
+            val playing = ProtonOriginalStream(stalePlaintext, openCopies).apply { complete() }
+            playing.readerOpened()
+            store.sweepExpiredDecryptedCopies()
+            assertTrue(stalePlaintext.exists())
+            assertEquals(stalePlaintext, store.read(staleUser, "old"))
+            playing.readerClosed()
+
+            store.sweepExpiredDecryptedCopies()
+
+            // Only the copy past its TTL goes, whichever user it belongs to; the fresh copy and
+            // both encrypted originals stay, so the stale one simply decrypts again on read.
+            assertFalse(stalePlaintext.exists())
+            assertTrue(freshPlaintext.exists())
+            assertTrue(staleEncrypted.exists())
+            assertTrue(freshEncrypted.exists())
+            assertEquals("old plaintext", store.read(staleUser, "old")?.readText())
+        } finally {
+            store.clear(staleUser)
+            store.clear(freshUser)
+            secureFiles.deleteKey(ProtonStorageLayout.mediaScope(staleUser))
+            secureFiles.deleteKey(ProtonStorageLayout.mediaScope(freshUser))
             context.testRoot.deleteRecursively()
         }
     }
@@ -267,7 +311,7 @@ class ProtonPhotoCacheInstrumentedTest {
             clock,
             ProtonThumbnailStore(context, secureFiles, clock),
             ProtonPreviewStore(context, secureFiles, clock),
-            ProtonOriginalStore(context, secureFiles, clock),
+            ProtonOriginalStore(context, secureFiles, clock, ProtonDecryptedCopyRegistry()),
         )
 
     private class IsolatedCacheContext(

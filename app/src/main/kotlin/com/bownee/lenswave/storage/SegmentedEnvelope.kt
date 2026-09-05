@@ -76,12 +76,14 @@ internal object SegmentedEnvelope {
      * plaintext byte count. [shouldContinue] is asked before every segment; once it returns false
      * the decrypt stops with a [CopyInterruptedException] and only whole verified segments have
      * been written. Any damage to the file surfaces as [IllegalArgumentException] or
-     * [javax.crypto.AEADBadTagException].
+     * [javax.crypto.AEADBadTagException]. [onBytesWritten] is told the plaintext total after
+     * every segment has been written, so a reader can follow the file as it grows.
      */
     fun decrypt(
         key: SecretKey,
         input: InputStream,
         output: OutputStream,
+        onBytesWritten: (totalBytes: Long) -> Unit = {},
         shouldContinue: () -> Boolean = { true },
     ): Long {
         val header = ByteArray(Int.SIZE_BYTES + NONCE_BYTES)
@@ -104,9 +106,30 @@ internal object SegmentedEnvelope {
             val produced = cipher.doFinal(ciphertext, 0, read, plaintext, 0)
             output.write(plaintext, 0, produced)
             total += produced
+            onBytesWritten(total)
             if (final) return total
             index = nextIndex(index)
         }
+    }
+
+    /**
+     * The plaintext bytes an envelope of [envelopeBytes] (from its segment size field to its last
+     * tag) holds when its segments are [segmentBytes] long, or null when no envelope of that
+     * layout has that length. Every full segment carries one tag, and the final segment, always
+     * shorter than a full one, carries the last; so a length that leaves less than a tag after
+     * the full segments is not an envelope. Lets a reader size its progress before decrypting.
+     */
+    fun plaintextLength(
+        envelopeBytes: Long,
+        segmentBytes: Int,
+    ): Long? {
+        if (segmentBytes !in 1..MAX_SEGMENT_BYTES) return null
+        val body = envelopeBytes - Int.SIZE_BYTES - NONCE_BYTES
+        val fullSegmentBytes = segmentBytes.toLong() + TAG_BYTES
+        val fullSegments = body / fullSegmentBytes
+        val finalBytes = body - fullSegments * fullSegmentBytes
+        if (body < TAG_BYTES || finalBytes < TAG_BYTES) return null
+        return fullSegments * segmentBytes + (finalBytes - TAG_BYTES)
     }
 
     /** The 96-bit IV of segment [index]: the file nonce followed by the big-endian counter. */
@@ -141,7 +164,7 @@ internal object SegmentedEnvelope {
     }
 
     /** Fills [buffer] unless the stream ends first; returns the bytes read. */
-    private fun readFully(
+    fun readFully(
         input: InputStream,
         buffer: ByteArray,
     ): Int {

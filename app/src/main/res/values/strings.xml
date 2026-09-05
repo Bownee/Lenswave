@@ -54,6 +54,9 @@
     <string name="could_not_load_album">Could not load this album</string>
     <string name="could_not_load_albums">Could not load albums</string>
     <string name="check_connection_refresh">Check your connection and use Refresh to try again.</string>
+    <string name="listing_refused_message">Some changes could not be applied. Refresh to update.</string>
+    <string name="refresh">Refresh</string>
+    <string name="dismiss">Dismiss</string>
     <string name="album_empty">Album is empty</string>
     <string name="album_photos_appear_here">Photos added to %1$s will appear here.</string>
     <plurals name="photo_count">
@@ -77,6 +80,7 @@
     <string name="disconnect_proton_message">Cached Proton media will be cryptographically erased from this device.</string>
     <string name="proton_unlock_failed">Proton could not unlock the account keys</string>
     <string name="could_not_download_proton_photo">Could not download this Proton photo</string>
+    <string name="could_not_open_proton_photo_signed_out">Your Proton session ended. Sign in again to open this photo.</string>
     <string name="could_not_display_photo">Could not display this photo</string>
     <string name="no_more_photos_loaded">No more photos are loaded here. Go back to the gallery to keep browsing.</string>
     <string name="error">Error</string>
@@ -94,6 +98,7 @@
     <string name="thumbnail_download_notification_progress">Stored: %1$d · Remaining: %2$d</string>
     <string name="preview_download_notification_progress">Downloading previews %1$d of %2$d</string>
     <string name="thumbnail_download_notification_pause">Pause</string>
+    <string name="thumbnail_download_notification_yielding">Waiting for the photo you opened to finish</string>
     <string name="could_not_move_photos_to_proton_trash">Could not move photos to Proton Trash</string>
     <plurals name="move_to_proton_trash_count">
         <item quantity="one">Move %1$d photo to Proton Trash?</item>
@@ -115,7 +120,7 @@
     <string name="privacy_disconnected_message">Lenswave disables Proton Core observability. Lenswave periodically contacts GitHub at startup to check for updates.</string>
     <string name="privacy_connected_message">Lenswave disables Proton Core observability. Proton account telemetry is controlled by the setting below and applies to your Proton account. Lenswave periodically contacts GitHub at startup to check for updates.</string>
     <string name="allow_proton_telemetry">Allow Proton account telemetry</string>
-    <string name="block_screenshots_in_viewer">Block screenshots in the viewer</string>
+    <string name="block_screenshots">Block screenshots and screen recording</string>
     <string name="save">Save</string>
     <string name="privacy_setting_saved">Privacy setting saved</string>
     <string name="privacy_setting_failed">Could not update the Proton privacy setting</string>

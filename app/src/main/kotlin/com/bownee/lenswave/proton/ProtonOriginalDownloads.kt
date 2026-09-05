@@ -3,12 +3,15 @@ package com.bownee.lenswave.proton
 import com.bownee.lenswave.LenswaveDiagnostics
 import com.bownee.lenswave.LenswaveOperation
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.isActive
 import me.proton.core.domain.entity.UserId
 import me.proton.drive.sdk.entity.NodeUid
 import java.io.File
@@ -32,6 +35,8 @@ internal class ProtonOriginalDownloads
         private val clientProvider: ProtonPhotosClientProvider,
         private val cache: ProtonMediaCache,
         private val transferCoordinator: ProtonTransferCoordinator,
+        private val materializer: ProtonOriginalMaterializer,
+        private val openCopies: ProtonDecryptedCopyRegistry,
     ) {
         /** Resolved names, including "Proton has none" so a missing name is asked for once. */
         private val originalFileNames = ConcurrentHashMap<String, ResolvedName>()
@@ -61,10 +66,7 @@ internal class ProtonOriginalDownloads
             nodeUid: String,
             onReady: suspend (ProtonOriginalStream) -> Unit,
         ): File {
-            cache.readOriginal(userId.id, nodeUid)?.let { cached ->
-                onReady(ProtonOriginalStream(cached).apply { complete() })
-                return cached
-            }
+            materializeCachedOriginal(userId, nodeUid, onReady)?.let { return it }
             var streamed = false
             val file =
                 shareDownload(userId, nodeUid) {
@@ -77,9 +79,78 @@ internal class ProtonOriginalDownloads
                     }
                 }
             // A transfer another caller started has no stream of ours; it is complete by now.
-            if (!streamed) onReady(ProtonOriginalStream(file).apply { complete() })
+            if (!streamed) onReady(completeStream(file))
             return file
         }
+
+        /**
+         * The cached original decrypted while the player already reads it, or null when nothing
+         * is cached. A cached video used to be decrypted in full before the player saw a byte;
+         * now [onReady] runs as soon as the first segment has verified, with a stream that
+         * follows the decrypt segment by segment and completes with the renamed final file. A
+         * copy that is already on disk is handed over complete.
+         *
+         * The decrypt runs in its own coroutine so [onReady] can suspend while it continues. A
+         * caller that leaves (or an [onReady] that refuses, because the viewer moved on) cancels
+         * the scope, the decrypt stops between segments and the partial plaintext is removed. A
+         * decrypt that fails after the stream was handed out fails the stream and returns null,
+         * so the caller fetches the original again and hands the player a fresh stream.
+         */
+        private suspend fun materializeCachedOriginal(
+            userId: UserId,
+            nodeUid: String,
+            onReady: suspend (ProtonOriginalStream) -> Unit,
+        ): File? =
+            coroutineScope {
+                val ready = CompletableDeferred<ProtonOriginalStream?>()
+                val decrypt =
+                    async {
+                        var stream: ProtonOriginalStream? = null
+                        try {
+                            val file =
+                                materializer.materialize(
+                                    userId.id,
+                                    nodeUid,
+                                    shouldContinue = { isActive },
+                                    onStarted = { plaintext, expectedBytes ->
+                                        stream =
+                                            ProtonOriginalStream(plaintext, openCopies).also { started ->
+                                                // Sized from the encrypted file, so the panel shows a
+                                                // percentage rather than a bare byte count.
+                                                started.updateProgress(downloadedBytes = 0L, totalBytes = expectedBytes)
+                                            }
+                                    },
+                                    onBytesWritten = { total ->
+                                        stream?.let { started ->
+                                            started.availableBytes(total)
+                                            ready.complete(started)
+                                        }
+                                    },
+                                )
+                            if (file == null) {
+                                stream?.fail(IllegalStateException("Cached original could not be decrypted"))
+                            } else {
+                                stream?.complete(file)
+                            }
+                            file
+                        } catch (error: Throwable) {
+                            stream?.fail(error)
+                            throw error
+                        } finally {
+                            // No segment ever arrived: the copy was on disk already, absent or bad.
+                            ready.complete(null)
+                        }
+                    }
+                val stream = ready.await()
+                if (stream != null) onReady(stream)
+                val file = decrypt.await()
+                if (file != null && stream == null) onReady(completeStream(file))
+                file
+            }
+
+        /** A stream over a plaintext copy that is already whole; its readers still hold the copy against the sweep. */
+        private fun completeStream(file: File): ProtonOriginalStream =
+            ProtonOriginalStream(file, openCopies).apply { complete() }
 
         private suspend fun downloadProgressivelyInForeground(
             userId: UserId,
@@ -87,7 +158,7 @@ internal class ProtonOriginalDownloads
             onReady: suspend (ProtonOriginalStream) -> Unit,
         ): File {
             val (temporary, target) = cache.createOriginalTarget(userId.id, nodeUid)
-            val stream = ProtonOriginalStream(temporary)
+            val stream = ProtonOriginalStream(temporary, openCopies)
             return try {
                 onReady(stream)
                 FileOutputStream(temporary).use { output ->

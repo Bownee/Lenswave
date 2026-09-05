@@ -16,6 +16,9 @@ internal class ProtonStoredRenditions(
     private val previewNames: Set<String>,
     private val fileNameOf: (nodeUid: String) -> String = AtomicFileStore::safeName,
 ) {
+    /** How many thumbnails are stored; a cached listing that cannot be read is judged against this. */
+    val thumbnailCount: Int get() = thumbnailNames.size
+
     fun hasThumbnail(nodeUid: String): Boolean = fileNameOf(nodeUid) in thumbnailNames
 
     fun hasPreview(nodeUid: String): Boolean = fileNameOf(nodeUid) in previewNames

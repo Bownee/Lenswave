@@ -2,6 +2,8 @@ package com.bownee.lenswave.viewer
 
 import com.bownee.lenswave.gallery.PhotoDeletionExecutor
 import com.bownee.lenswave.gallery.ProtonPhotoMutations
+import com.bownee.lenswave.proton.ProtonAccountMutationForgetter
+import com.bownee.lenswave.proton.ProtonSessionChangedException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -9,9 +11,11 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import me.proton.core.domain.entity.UserId
+import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -20,13 +24,17 @@ import javax.inject.Singleton
  * one is in flight neither cancels the request after the server has acted on it nor loses its
  * result. Outcomes wait in [outcomes] until the viewer on screen has [consume]d them, and
  * [isInFlight] lets a recreated viewer show the pending state of the photo it reopens.
+ *
+ * Every started mutation ends in exactly one queued outcome: the viewer disables its buttons on
+ * start and only re-enables them on the outcome, so a call that ends any other way would leave
+ * them disabled for good.
  */
 @Singleton
 class ViewerMutationCoordinator internal constructor(
     private val photoMutations: ProtonPhotoMutations,
     private val deletionExecutor: PhotoDeletionExecutor,
     private val scope: CoroutineScope,
-) {
+) : ProtonAccountMutationForgetter {
     @Inject
     constructor(
         photoMutations: ProtonPhotoMutations,
@@ -50,6 +58,18 @@ class ViewerMutationCoordinator internal constructor(
 
     private val inFlight = MutableStateFlow<Set<String>>(emptySet())
     private val pending = MutableStateFlow<List<Outcome>>(emptyList())
+
+    /**
+     * Bumped by [forgetAll]; a mutation captures it on start and only queues its outcome while it
+     * is unchanged, so a call of the account that went never answers into the next account's queue.
+     */
+    private val epoch = AtomicLong()
+
+    /**
+     * Orders an outcome's append against [forgetAll]: StateFlow compares values, not identity,
+     * so an update racing a clear of an already empty queue could otherwise commit over it.
+     */
+    private val epochLock = Any()
 
     /** Outcomes nobody has consumed yet, oldest first. */
     internal val outcomes: StateFlow<List<Outcome>> = pending.asStateFlow()
@@ -83,27 +103,66 @@ class ViewerMutationCoordinator internal constructor(
         pending.update { queued -> queued - outcome }
     }
 
+    /**
+     * Takes several outcomes in one step, for a consumer that drains the queue: consuming them
+     * one by one emits an intermediate list per outcome, and a collector of [outcomes] re-enters
+     * mid-drain with the outcomes it has not yet been handed.
+     */
+    internal fun consumeAll(outcomes: Collection<Outcome>) {
+        if (outcomes.isEmpty()) return
+        pending.update { queued -> queued - outcomes }
+    }
+
+    /**
+     * Drops every queued outcome and every in-flight mark, and disowns every call still running.
+     * For an account transition: the outcomes belong to photos of the account that is going, and
+     * no viewer of the next account must find its buttons held by them. A call still running
+     * ends with a session change once the transition disconnects, but only after this returns;
+     * its outcome would land in a queue that no longer belongs to it, so the epoch it started in
+     * is closed here and [run] drops an outcome from a closed epoch. Its in-flight mark is
+     * cleared here rather than by the call, which frees the photo for the next account at once.
+     */
+    override fun forgetAll() {
+        synchronized(epochLock) {
+            epoch.incrementAndGet()
+            pending.value = emptyList()
+            inFlight.value = emptySet()
+        }
+    }
+
     private fun run(
         stableId: String,
         mutation: suspend () -> Outcome,
     ): Boolean {
-        if (stableId in inFlight.value) return false
-        inFlight.update { running -> running + stableId }
+        // One atomic step claims the photo, so two callers racing here cannot both start.
+        if (stableId in inFlight.getAndUpdate { running -> running + stableId }) return false
+        val startedIn = epoch.get()
         scope.launch {
             try {
                 val outcome = mutation()
-                pending.update { queued -> queued + outcome }
+                synchronized(epochLock) {
+                    if (epoch.get() == startedIn) pending.update { queued -> queued + outcome }
+                }
             } finally {
-                inFlight.update { running -> running - stableId }
+                // A disowned call's mark went with forgetAll; the photo may since be claimed anew.
+                synchronized(epochLock) {
+                    if (epoch.get() == startedIn) inFlight.update { running -> running - stableId }
+                }
             }
         }
         return true
     }
 
-    /** A failed call is an outcome, not an exception: the viewer reports it and moves on. */
+    /**
+     * A failed call is an outcome, not an exception: the viewer reports it and moves on. A
+     * session change is a cancellation subtype, but not this coroutine's own; left to propagate
+     * it would end the call with no outcome at all.
+     */
     private suspend fun runMutation(mutation: suspend () -> Boolean): Boolean =
         try {
             mutation()
+        } catch (_: ProtonSessionChangedException) {
+            false
         } catch (error: CancellationException) {
             throw error
         } catch (_: Throwable) {

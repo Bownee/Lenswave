@@ -1,10 +1,10 @@
 package com.bownee.lenswave.gallery
 
-import android.app.AlertDialog
 import android.view.Menu
 import android.view.View
 import android.widget.PopupMenu
 import android.widget.Toast
+import androidx.fragment.app.DialogFragment
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.lifecycleScope
 import com.bownee.lenswave.BuildConfig
@@ -18,8 +18,10 @@ import me.proton.core.usersettings.domain.usecase.PerformUpdateTelemetry
 
 /**
  * The settings popup: connect/disconnect Proton, the privacy and telemetry dialog, app version.
- * The popup and dialogs are plain window-backed views, so they are kept here and dismissed in
- * [dispose] rather than left to leak the activity they were created on.
+ * The popup is a window-backed view anchored to a button, so it is kept here and dismissed in
+ * [dispose]; the dialogs are fragments ([PrivacySettingsDialogFragment],
+ * [DisconnectProtonDialogFragment]) that the fragment manager restores across a rotation, and
+ * the hosting activity forwards their answers to [saveTelemetryPreference] and [onDisconnectProton].
  */
 internal class GallerySettingsPresenter(
     private val activity: FragmentActivity,
@@ -29,9 +31,13 @@ internal class GallerySettingsPresenter(
     private val privacySettings: ViewerPrivacySettings,
     private val onConnectProton: () -> Unit,
     private val onDisconnectProton: () -> Unit,
+    /** The screenshot setting changed; the window flag must follow at once (see [showMenu]). */
+    private val onScreenshotPolicyChanged: () -> Unit,
 ) {
     private var popup: PopupMenu? = null
-    private var dialog: AlertDialog? = null
+
+    /** A dialog that arrived after onSaveInstanceState; [showPendingDialog] retries it on resume. */
+    private var pendingDialog: Pair<DialogFragment, String>? = null
 
     fun showMenu(anchor: View) {
         popup?.dismiss()
@@ -43,7 +49,7 @@ internal class GallerySettingsPresenter(
                     menu.add(Menu.NONE, SETTINGS_DISCONNECT_PROTON, 0, R.string.disconnect_proton)
                 }
                 menu.add(Menu.NONE, SETTINGS_PRIVACY, 1, R.string.privacy_and_data)
-                menu.add(Menu.NONE, SETTINGS_BLOCK_SCREENSHOTS, 2, R.string.block_screenshots_in_viewer).apply {
+                menu.add(Menu.NONE, SETTINGS_BLOCK_SCREENSHOTS, 2, R.string.block_screenshots).apply {
                     isCheckable = true
                     isChecked = privacySettings.blockScreenshots
                 }
@@ -56,10 +62,28 @@ internal class GallerySettingsPresenter(
                     ).isEnabled = false
                 setOnMenuItemClickListener { item ->
                     when (item.itemId) {
-                        SETTINGS_CONNECT_PROTON -> onConnectProton()
-                        SETTINGS_DISCONNECT_PROTON -> confirmDisconnectProton()
-                        SETTINGS_PRIVACY -> showPrivacySettings()
-                        SETTINGS_BLOCK_SCREENSHOTS -> privacySettings.blockScreenshots = !item.isChecked
+                        SETTINGS_CONNECT_PROTON -> {
+                            onConnectProton()
+                        }
+
+                        SETTINGS_DISCONNECT_PROTON -> {
+                            show(
+                                DisconnectProtonDialogFragment(),
+                                DisconnectProtonDialogFragment.TAG,
+                            )
+                        }
+
+                        SETTINGS_PRIVACY -> {
+                            showPrivacySettings()
+                        }
+
+                        SETTINGS_BLOCK_SCREENSHOTS -> {
+                            // Applied now, not on the next resume: a popup toggle never pauses the
+                            // activity, and pressing Home right after enabling it would otherwise
+                            // store an unsecured recents snapshot.
+                            privacySettings.blockScreenshots = !item.isChecked
+                            onScreenshotPolicyChanged()
+                        }
                     }
                     true
                 }
@@ -68,31 +92,43 @@ internal class GallerySettingsPresenter(
             }
     }
 
-    /** Dismisses whatever is open; call from the activity's onDestroy. */
+    /** Dismisses the popup; call from the activity's onDestroy. The dialog fragments follow the activity on their own. */
     fun dispose() {
         popup?.dismiss()
         popup = null
-        dialog?.dismiss()
-        dialog = null
+        pendingDialog = null
     }
 
-    private fun show(builder: AlertDialog.Builder) {
-        dialog?.dismiss()
-        dialog =
-            builder
-                .setOnDismissListener { dialog = null }
-                .show()
+    /** Call from onResume: shows a dialog that was held back because the state was saved when it was ready. */
+    fun showPendingDialog() {
+        val (fragment, tag) = pendingDialog ?: return
+        pendingDialog = null
+        show(fragment, tag)
     }
+
+    /** The answer from [PrivacySettingsDialogFragment]; the account may have gone while the dialog was up. */
+    fun saveTelemetryPreference(enabled: Boolean) {
+        val userId = currentUserId()
+        activity.lifecycleScope.launch {
+            val updated = userId != null && runCatching { updateTelemetry(userId, enabled) }.isSuccess
+            Toast
+                .makeText(
+                    activity,
+                    if (updated) R.string.privacy_setting_saved else R.string.privacy_setting_failed,
+                    Toast.LENGTH_LONG,
+                ).show()
+        }
+    }
+
+    /** The answer from [DisconnectProtonDialogFragment]. */
+    fun disconnectProtonConfirmed() = onDisconnectProton()
 
     private fun showPrivacySettings() {
         val userId = currentUserId()
         if (userId == null) {
             show(
-                AlertDialog
-                    .Builder(activity)
-                    .setTitle(R.string.privacy_and_data)
-                    .setMessage(R.string.privacy_disconnected_message)
-                    .setPositiveButton(android.R.string.ok, null),
+                PrivacySettingsDialogFragment.create(connected = false, telemetryEnabled = false),
+                PrivacySettingsDialogFragment.TAG,
             )
             return
         }
@@ -100,41 +136,33 @@ internal class GallerySettingsPresenter(
             val enabled =
                 runCatching { observeUserSettings(userId, false).first()?.telemetry == true }
                     .getOrDefault(false)
-            var desired = enabled
+            // The read suspended; the state may have been saved meanwhile (see GalleryDialogPromptPolicy).
             show(
-                AlertDialog
-                    .Builder(activity)
-                    .setTitle(R.string.privacy_and_data)
-                    .setMessage(R.string.privacy_connected_message)
-                    .setMultiChoiceItems(
-                        arrayOf(activity.getString(R.string.allow_proton_telemetry)),
-                        booleanArrayOf(enabled),
-                    ) { _, _, checked -> desired = checked }
-                    .setNegativeButton(R.string.cancel, null)
-                    .setPositiveButton(R.string.save) { _, _ ->
-                        activity.lifecycleScope.launch {
-                            val updated = runCatching { updateTelemetry(userId, desired) }.isSuccess
-                            Toast
-                                .makeText(
-                                    activity,
-                                    if (updated) R.string.privacy_setting_saved else R.string.privacy_setting_failed,
-                                    Toast.LENGTH_LONG,
-                                ).show()
-                        }
-                    },
+                PrivacySettingsDialogFragment.create(connected = true, telemetryEnabled = enabled),
+                PrivacySettingsDialogFragment.TAG,
             )
         }
     }
 
-    private fun confirmDisconnectProton() {
-        show(
-            AlertDialog
-                .Builder(activity)
-                .setTitle(R.string.disconnect_proton_question)
-                .setMessage(R.string.disconnect_proton_message)
-                .setNegativeButton(R.string.cancel, null)
-                .setPositiveButton(R.string.disconnect) { _, _ -> onDisconnectProton() },
-        )
+    private fun show(
+        fragment: DialogFragment,
+        tag: String,
+    ) {
+        val fragmentManager = activity.supportFragmentManager
+        val decision =
+            GalleryDialogPromptPolicy.decide(
+                stateSaved = fragmentManager.isStateSaved,
+                dialogShowing = fragmentManager.findFragmentByTag(tag) != null,
+            )
+        when (decision) {
+            GalleryDialogPromptPolicy.Decision.SHOW -> fragment.show(fragmentManager, tag)
+
+            // The telemetry read suspended past onSaveInstanceState (a Home press while it ran):
+            // the answer is kept and shown on resume rather than dropped without a word.
+            GalleryDialogPromptPolicy.Decision.WAIT -> pendingDialog = fragment to tag
+
+            GalleryDialogPromptPolicy.Decision.DROP -> Unit
+        }
     }
 
     private companion object {

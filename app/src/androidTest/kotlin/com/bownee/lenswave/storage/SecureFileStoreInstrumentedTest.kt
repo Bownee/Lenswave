@@ -83,6 +83,37 @@ class SecureFileStoreInstrumentedTest {
         }
     }
 
+    @Test
+    fun legacyWholeFileRecordIsVerifiedBeforeAnyPlaintextIsCommitted() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val store = SecureFileStore(context)
+        val scope = "instrumentation-${UUID.randomUUID()}"
+        val directory = File(context.cacheDir, scope).apply { mkdirs() }
+        val legacy = File(directory, "legacy")
+        val decrypted = File(directory, "decrypted")
+        val bytes = ByteArray(200_000) { (it * 5).toByte() }
+
+        try {
+            // A small payload is one whole-file GCM record, the layout of a version 2 original.
+            store.write(scope, legacy, bytes, "test write failed")
+            store.decryptFile(scope, legacy, decrypted)
+            assertArrayEquals(bytes, decrypted.readBytes())
+
+            decrypted.delete()
+            val damaged = legacy.readBytes()
+            damaged[damaged.size / 2] = (damaged[damaged.size / 2].toInt() xor 0x10).toByte()
+            legacy.writeBytes(damaged)
+            // The platform cipher stream could report a failed tag as end of stream; the store
+            // finishes the record explicitly, so nothing truncated reaches the target.
+            assertTrue(runCatching { store.decryptFile(scope, legacy, decrypted) }.isFailure)
+            assertFalse(decrypted.exists())
+            assertTrue(directory.listFiles().orEmpty().none { it.name.endsWith(".part") })
+        } finally {
+            directory.deleteRecursively()
+            store.deleteKey(scope)
+        }
+    }
+
     private fun ByteArray.containsSubsequence(value: ByteArray): Boolean {
         if (value.isEmpty()) return true
         return indices.any { start ->

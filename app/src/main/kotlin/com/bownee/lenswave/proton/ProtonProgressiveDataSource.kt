@@ -11,6 +11,7 @@ import androidx.media3.datasource.DataSourceException
 import androidx.media3.datasource.DataSpec
 import com.bownee.lenswave.LenswaveDiagnostics
 import com.bownee.lenswave.LenswaveOperation
+import java.io.FileNotFoundException
 import java.io.RandomAccessFile
 import kotlin.math.min
 
@@ -21,6 +22,7 @@ internal class ProtonProgressiveDataSource(
 ) : BaseDataSource(false) {
     private var input: RandomAccessFile? = null
     private var opened = false
+    private var holdsReader = false
     private var readPosition = 0L
     private var bytesRemaining = C.LENGTH_UNSET.toLong()
 
@@ -40,7 +42,15 @@ internal class ProtonProgressiveDataSource(
             LenswaveDiagnostics.reportState(LenswaveOperation.VIDEO_PLAYBACK, STATE_OPEN_BEYOND_END, 1, 1)
             throw DataSourceException(PlaybackException.ERROR_CODE_IO_READ_POSITION_OUT_OF_RANGE)
         }
-        input = RandomAccessFile(stream.file, "r").apply { seek(dataSpec.position) }
+        stream.readerOpened()
+        holdsReader = true
+        input =
+            try {
+                openInput().apply { seek(dataSpec.position) }
+            } catch (error: Throwable) {
+                releaseReader()
+                throw error
+            }
         readPosition = dataSpec.position
         bytesRemaining = remaining
         opened = true
@@ -60,7 +70,10 @@ internal class ProtonProgressiveDataSource(
             val state = stream.awaitReadable(readPosition)
             val available = state.availableBytes - readPosition
             if (available <= 0L && state.complete) return C.RESULT_END_OF_INPUT
-            if (available <= 0L) continue
+            if (available <= 0L) {
+                stream.awaitChange(READ_RETRY_WAIT_MILLIS)
+                continue
+            }
             val requested =
                 min(length.toLong(), available)
                     .let { availableLength ->
@@ -74,6 +87,9 @@ internal class ProtonProgressiveDataSource(
             val read = source.read(buffer, offset, requested)
             if (read < 0) {
                 if (state.complete) return C.RESULT_END_OF_INPUT
+                // The stream reported bytes the file does not show yet; a bounded wait on the
+                // stream's condition instead of a spin until the writer catches up.
+                stream.awaitChange(READ_RETRY_WAIT_MILLIS)
                 continue
             }
             readPosition += read
@@ -83,13 +99,41 @@ internal class ProtonProgressiveDataSource(
         }
     }
 
+    /**
+     * A decrypt in progress writes into a temporary file that is renamed once it has verified.
+     * An open descriptor survives the rename, but an open that lands in between finds the
+     * temporary gone; the stream is about to complete then, so the open waits for it and takes
+     * the final file. The file of a stream that is already complete does not move any more: a
+     * path that is gone was swept or removed, which is [ProtonOriginalCopyMissingException].
+     */
+    private fun openInput(): RandomAccessFile =
+        try {
+            RandomAccessFile(stream.file, "r")
+        } catch (missing: FileNotFoundException) {
+            if (stream.isComplete) throw ProtonOriginalCopyMissingException(missing)
+            val committed = stream.awaitCompletion()
+            try {
+                RandomAccessFile(committed, "r")
+            } catch (stillMissing: FileNotFoundException) {
+                throw ProtonOriginalCopyMissingException(stillMissing)
+            }
+        }
+
     override fun getUri(): Uri = Uri.fromFile(stream.file)
 
     override fun close() {
         closeInput()
+        releaseReader()
         if (opened) {
             opened = false
             transferEnded()
+        }
+    }
+
+    private fun releaseReader() {
+        if (holdsReader) {
+            holdsReader = false
+            stream.readerClosed()
         }
     }
 
@@ -109,5 +153,6 @@ internal class ProtonProgressiveDataSource(
 
     private companion object {
         const val STATE_OPEN_BEYOND_END = "open-beyond-end"
+        const val READ_RETRY_WAIT_MILLIS = 20L
     }
 }

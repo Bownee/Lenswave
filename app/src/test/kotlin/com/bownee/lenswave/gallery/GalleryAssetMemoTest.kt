@@ -1,5 +1,6 @@
 package com.bownee.lenswave.gallery
 
+import com.bownee.lenswave.proton.ProtonAlbum
 import com.bownee.lenswave.proton.ProtonGalleryPhoto
 import com.bownee.lenswave.proton.ProtonMediaTag
 import com.bownee.lenswave.proton.ProtonTagState
@@ -86,6 +87,28 @@ class GalleryAssetMemoTest {
     }
 
     @Test
+    fun `the library page keeps its instance while the album list and account status do`() {
+        val albums = listOf(album("a"))
+        var builds = 0
+        val build = {
+            builds++
+            GalleryContent.Library(listOf(LibrarySection("albums", "", albums.map(LibraryItem::Album))))
+        }
+
+        val first = memo.library(albums, ProtonAccountStatus.CONNECTED, build)
+
+        assertSame(first, memo.library(albums, ProtonAccountStatus.CONNECTED, build))
+        assertEquals(1, builds)
+        assertNotSame("a new status rebuilds", first, memo.library(albums, ProtonAccountStatus.CONNECTING, build))
+        assertNotSame(
+            "a new list rebuilds",
+            first,
+            memo.library(listOf(album("a")), ProtonAccountStatus.CONNECTED, build),
+        )
+        assertEquals(3, builds)
+    }
+
+    @Test
     fun `switching between two photo lists and back reuses both pages`() {
         val tagIndex = memo.tagIndex(emptyMap())
         val timeline = listOf(image, video, undated)
@@ -102,4 +125,16 @@ class GalleryAssetMemoTest {
         assertSame(timelinePage, memo.photos(timeline, tagIndex))
         assertNotSame(filteredPage, memo.photos(filtered, tagIndex))
     }
+
+    private fun album(nodeUid: String) =
+        ProtonAlbum(
+            nodeUid = nodeUid,
+            name = "Album $nodeUid",
+            photoCount = 1L,
+            coverPhotoNodeUid = null,
+            createdAtEpochSeconds = 0L,
+            lastActivityEpochSeconds = 0L,
+            hasCoverThumbnail = false,
+            isShared = false,
+        )
 }

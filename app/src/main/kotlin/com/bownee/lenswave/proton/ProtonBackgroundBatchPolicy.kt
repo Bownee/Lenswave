@@ -34,7 +34,9 @@ internal object ProtonBackgroundBatchPolicy {
      * worker alive; [ProtonThumbnailQueueStep.Idle.retryAfterMillis] says how soon the earliest
      * backed-off entry across both queues can be claimed again. Previews that wait for the
      * charger ([allowPreviews] false) are not pending work for this run but are flagged as
-     * deferred so the caller can schedule a charging run.
+     * deferred so the caller can schedule a charging run; so are thumbnails that can only be
+     * had as previews ([thumbnailsAwaitingPreviews]), which the thumbnail queue's pending
+     * state already leaves out while previews are not allowed.
      */
     fun idle(
         thumbnailsPending: Boolean,
@@ -42,6 +44,7 @@ internal object ProtonBackgroundBatchPolicy {
         thumbnailRetryDelayMillis: Long? = null,
         previewRetryDelayMillis: Long? = null,
         allowPreviews: Boolean = true,
+        thumbnailsAwaitingPreviews: Boolean = false,
     ): ProtonThumbnailQueueStep.Idle =
         ProtonThumbnailQueueStep.Idle(
             hasPending = thumbnailsPending || (allowPreviews && previewsPending),
@@ -50,7 +53,7 @@ internal object ProtonBackgroundBatchPolicy {
                     thumbnailRetryDelayMillis,
                     previewRetryDelayMillis.takeIf { allowPreviews },
                 ).minOrNull(),
-            previewsDeferred = !allowPreviews && previewsPending,
+            previewsDeferred = !allowPreviews && (previewsPending || thumbnailsAwaitingPreviews),
         )
 
     /**

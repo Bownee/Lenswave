@@ -24,6 +24,8 @@ import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import com.bownee.lenswave.LenswaveDiagnostics
+import com.bownee.lenswave.LenswaveOperation
 import com.bownee.lenswave.R
 import com.bownee.lenswave.UiStyle
 import com.bownee.lenswave.applyBottomOverlayInsets
@@ -41,6 +43,8 @@ import com.bownee.lenswave.gallery.StoredGalleryNavigation
 import com.bownee.lenswave.gallery.TrashConfirmationDialogFragment
 import com.bownee.lenswave.metadata.PhotoMetadataHints
 import com.bownee.lenswave.metadata.PhotoMetadataReader
+import com.bownee.lenswave.proton.ProtonPreviewOrientation
+import com.bownee.lenswave.proton.ProtonSessionChangedException
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -122,6 +126,10 @@ class PhotoViewerActivity :
 
     /** The gallery's full list, when it is still in the process and lines up with [navigationRequests]. */
     private var navigationSource: PhotoNavigationSources.Source? = null
+
+    /** The token the intent carried, cleared when the viewer finishes whether or not its list was adopted. */
+    private val intentNavigationToken: Long
+        get() = intent.getLongExtra(EXTRA_NAVIGATION_TOKEN, PhotoNavigationSources.NO_TOKEN)
     private val navigationWindow: PhotoNavigationWindowPolicy.Window?
         get() =
             navigationStart.takeIf { it >= 0 }?.let {
@@ -155,9 +163,7 @@ class PhotoViewerActivity :
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // Set before any content: a secure window keeps the photos out of screenshots and recordings.
-        if (privacySettings.blockScreenshots) {
-            window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
-        }
+        applySecureWindowFlag()
         restoreNavigation(savedInstanceState)
         restoreNavigationSource()
         // A restored window may already have its edge near; the same check a swipe makes.
@@ -304,11 +310,27 @@ class PhotoViewerActivity :
         setResult(Activity.RESULT_OK, resultIntent.putExtra(extra, true))
     }
 
-    /** Applies the outcome of every favourite or trash call, including one that finished while recreating. */
+    /**
+     * Applies the outcome of every favourite or trash call on a photo of this viewer, including
+     * one that finished while recreating. Outcomes of photos outside its window are left in the
+     * coordinator for the gallery (see [ViewerOutcomePolicy]); an outcome taken here is recorded
+     * in the result before anything else, so the gallery's refresh cannot be lost to a finish.
+     *
+     * A finishing viewer takes nothing: it stays STARTED until it is gone, but a result set after
+     * finish() never reaches the gallery, so an outcome consumed then would be lost. Left in the
+     * queue, the gallery's own collector takes it once the viewer has closed.
+     */
     private fun observeMutationOutcomes() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                mutationCoordinator.outcomes.collect { outcomes -> outcomes.forEach(::applyMutationOutcome) }
+                mutationCoordinator.outcomes.collect { outcomes ->
+                    for (outcome in outcomes) {
+                        if (isFinishing) break
+                        if (ViewerOutcomePolicy.consumes(outcome.stableId, request.stableId, navigationRequests)) {
+                            applyMutationOutcome(outcome)
+                        }
+                    }
+                }
             }
         }
     }
@@ -351,8 +373,33 @@ class PhotoViewerActivity :
         swipe.release()
         photoView.close()
         video.release()
-        if (isFinishing) navigationSource?.let { PhotoNavigationSources.clear(it.token) }
+        if (isFinishing) {
+            // The intent's list goes whether or not it was adopted: a window that no longer lined
+            // up, or a source rebuilt after a process death, would otherwise leave the gallery's
+            // full list retained until RETAINED_SOURCES pushes it out.
+            PhotoNavigationSources.clear(intentNavigationToken)
+            navigationSource?.let { PhotoNavigationSources.clear(it.token) }
+        }
         super.onDestroy()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        video.resume()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // A toggle in the settings takes effect on the way back, without recreating the viewer.
+        applySecureWindowFlag()
+    }
+
+    private fun applySecureWindowFlag() {
+        if (privacySettings.blockScreenshots) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        }
     }
 
     override fun onStop() {
@@ -456,7 +503,7 @@ class PhotoViewerActivity :
                 screen = screen,
                 mediaTransform = mediaTransform,
                 scope = lifecycleScope,
-                loadThumbnail = { photo -> thumbnailSource.loadThumbnail(UserId(photo.userId), photo.nodeUid) },
+                loadThumbnail = ::readThumbnail,
                 peekThumbnail = { photo -> thumbnailSource.peekThumbnail(UserId(photo.userId), photo.nodeUid) },
                 host =
                     object : ViewerSwipeController.Host {
@@ -500,6 +547,8 @@ class PhotoViewerActivity :
                             loadingPanel.visibility = View.VISIBLE
                         }
 
+                        override fun hideLoadingPanel() = this@PhotoViewerActivity.hideLoadingPanel()
+
                         override fun onVideoReady(requestedStableId: String) {
                             navigationFallback = null
                             photoReady = true
@@ -510,6 +559,8 @@ class PhotoViewerActivity :
                         }
 
                         override fun clearThumbnailPreview() = this@PhotoViewerActivity.clearThumbnailPreview()
+
+                        override fun reloadMedia() = loadPhoto()
 
                         override fun handleLoadFailure(
                             error: Throwable,
@@ -530,7 +581,7 @@ class PhotoViewerActivity :
      * keeps the window it was restored with.
      */
     private fun restoreNavigationSource() {
-        val source = PhotoNavigationSources.find(intent.getLongExtra(EXTRA_NAVIGATION_TOKEN, -1L)) ?: return
+        val source = PhotoNavigationSources.find(intentNavigationToken) ?: return
         val window = navigationWindow ?: return
         val linesUp =
             window.end <= source.assets.size &&
@@ -632,14 +683,55 @@ class PhotoViewerActivity :
                     } else {
                         async(Dispatchers.IO) { runCatching { originalMedia.prepareCachedOriginal(userId, nodeUid) } }
                     }
-                if (!thumbnailShown) loadProtonThumbnail(requestedPhoto)
-                // Photos load the original quietly behind the preview; the spinner only appears
-                // when there is nothing at all to show. Videos keep their download progress.
-                if (requestedPhoto.mediaKind == MediaKind.VIDEO || !thumbnailPreview.isVisible) scheduleLoadingPanel()
+                // A photo's thumbnail read races the cached-original probe instead of holding it
+                // up: a prefetched neighbour, the common case after a swipe, hits the probe in a
+                // few milliseconds and its thumbnail would only flash before the picture. The read
+                // installs the thumbnail only while no cached original has been found and the
+                // screen still wants a stand-in; it lives outside the try so a failed load can
+                // cancel it before the retry panel it would otherwise cover goes up.
+                var cachedOriginalFound = false
+                var thumbnailLoad: Job? = null
                 try {
+                    thumbnailLoad =
+                        when {
+                            thumbnailShown -> {
+                                null
+                            }
+
+                            cachedOriginalPreparation == null -> {
+                                loadProtonThumbnail(requestedPhoto)
+                                null
+                            }
+
+                            else -> {
+                                launch {
+                                    val bitmap = readThumbnail(requestedPhoto)
+                                    if (cachedOriginalFound || bitmap == null) return@launch
+                                    if (!PhotoPreviewPolicy.canShow(requestedPhoto.stableId, request.stableId, true)) {
+                                        return@launch
+                                    }
+                                    if (!PhotoPreviewPolicy.wantsStandIn(
+                                            photoReady,
+                                            retryButton.isVisible,
+                                        )
+                                    ) {
+                                        return@launch
+                                    }
+                                    installThumbnailPreview(requestedPhoto, bitmap)
+                                }
+                            }
+                        }
+                    // Photos load the original quietly behind the preview; the spinner only appears
+                    // when there is nothing at all to show, and a thumbnail arriving within the
+                    // delay withdraws it. Videos keep their download progress.
+                    if (requestedPhoto.mediaKind == MediaKind.VIDEO || !thumbnailPreview.isVisible) {
+                        scheduleLoadingPanel()
+                    }
                     val cachedOriginal = cachedOriginalPreparation?.await()?.getOrThrow()
                     if (request.stableId != requestedPhoto.stableId) return@launch
                     if (cachedOriginal != null) {
+                        cachedOriginalFound = true
+                        thumbnailLoad?.cancel()
                         showMedia(Uri.fromFile(cachedOriginal))
                         return@launch
                     }
@@ -661,9 +753,17 @@ class PhotoViewerActivity :
                         }
                     if (request.stableId != requestedPhoto.stableId) return@launch
                     if (requestedPhoto.mediaKind != MediaKind.VIDEO) showMedia(Uri.fromFile(file))
+                } catch (error: ProtonSessionChangedException) {
+                    // A cancellation subtype, but not this job's: the account changed underneath
+                    // the read (a viewer relaunched from recents after a sign-out, say). Left to
+                    // the branch below it would end the job with the spinner still up and no retry.
+                    thumbnailLoad?.cancel()
+                    if (request.stableId != requestedPhoto.stableId) return@launch
+                    handlePhotoLoadFailure(error, getString(R.string.could_not_open_proton_photo_signed_out))
                 } catch (error: CancellationException) {
                     throw error
                 } catch (error: Throwable) {
+                    thumbnailLoad?.cancel()
                     if (request.stableId != requestedPhoto.stableId) return@launch
                     if (!retryButton.isVisible) {
                         handlePhotoLoadFailure(error, getString(R.string.could_not_download_proton_photo))
@@ -684,7 +784,7 @@ class PhotoViewerActivity :
     private fun resolveDisplayName(requestedPhoto: PhotoRequest) {
         lifecycleScope.launch {
             val name =
-                withContext(Dispatchers.IO) {
+                optionalGatewayRead(LenswaveOperation.ORIGINAL_NAME_LOAD) {
                     originalMedia.getOriginalFileName(UserId(requestedPhoto.userId), requestedPhoto.nodeUid)
                 }.orEmpty()
             if (name.isBlank()) return@launch
@@ -705,6 +805,28 @@ class PhotoViewerActivity :
     }
 
     /**
+     * Runs a gateway read whose result the viewer can do without (a thumbnail, a preview, a file
+     * name). The gateway signals an account change with [ProtonSessionChangedException], a
+     * [CancellationException] subtype that is not this coroutine's own cancellation: swallowed
+     * here it reads as "nothing to show", where it would otherwise end the coroutine silently.
+     * Any other failure is a failure of the read, not of the viewer, and is reported the same way.
+     */
+    private suspend fun <T> optionalGatewayRead(
+        operation: LenswaveOperation,
+        read: suspend () -> T?,
+    ): T? =
+        try {
+            read()
+        } catch (_: ProtonSessionChangedException) {
+            null
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            LenswaveDiagnostics.reportFailure(operation, error)
+            null
+        }
+
+    /**
      * Shows the thumbnail without leaving the main thread when it is already on screen from the
      * swipe's peek or decoded in the thumbnail cache. Returns false when it must be read from
      * disk through [loadProtonThumbnail].
@@ -721,12 +843,14 @@ class PhotoViewerActivity :
         return true
     }
 
+    /** The thumbnail from the store, or null when there is none or the session ended; never throws for the read. */
+    private suspend fun readThumbnail(photo: PhotoRequest): Bitmap? =
+        optionalGatewayRead(LenswaveOperation.RENDITION_READ) {
+            thumbnailSource.loadThumbnail(UserId(photo.userId), photo.nodeUid)
+        }
+
     private suspend fun loadProtonThumbnail(requestedPhoto: PhotoRequest) {
-        val bitmap =
-            thumbnailSource.loadThumbnail(
-                UserId(requestedPhoto.userId),
-                requestedPhoto.nodeUid,
-            )
+        val bitmap = readThumbnail(requestedPhoto)
         if (!PhotoPreviewPolicy.canShow(
                 requestedPhoto.stableId,
                 request.stableId,
@@ -768,19 +892,22 @@ class PhotoViewerActivity :
     private suspend fun showCachedProtonPreview(requestedPhoto: PhotoRequest) {
         val metrics = resources.displayMetrics
         val bitmap =
-            originalMedia.loadPreview(
-                UserId(requestedPhoto.userId),
-                requestedPhoto.nodeUid,
-                targetLongEdge = max(metrics.widthPixels, metrics.heightPixels),
-            ) ?: return
-        if (request.stableId != requestedPhoto.stableId || photoReady) return
+            optionalGatewayRead(LenswaveOperation.RENDITION_READ) {
+                originalMedia.loadPreview(
+                    UserId(requestedPhoto.userId),
+                    requestedPhoto.nodeUid,
+                    targetLongEdge = max(metrics.widthPixels, metrics.heightPixels),
+                )
+            } ?: return
+        if (request.stableId != requestedPhoto.stableId) return
+        if (!PhotoPreviewPolicy.wantsStandIn(photoReady, retryButton.isVisible)) return
         // The preview goes into the photo view itself so zoom and pan work right away; the
         // original later takes over the same geometry. Any spinner scheduled for an empty
         // screen goes, and the thumbnail underneath is no longer needed.
         hideLoadingPanel()
         photoView.animate().cancel()
         photoView.visibility = View.VISIBLE
-        photoView.showPlaceholder(bitmap)
+        photoView.showPlaceholder(bitmap, ProtonPreviewOrientation.of(bitmap))
         if (thumbnailPreview.isVisible) photoView.translationX = thumbnailPreview.translationX
         photoView.alpha = 1f
         clearThumbnailPreview()
@@ -1266,7 +1393,10 @@ class PhotoViewerActivity :
         /**
          * [destination] names the gallery page [navigation] came from, so a viewer restored after
          * a process death can rebuild the list from the page's cache (see
-         * [PhotoNavigationSourceProvider]).
+         * [PhotoNavigationSourceProvider]). [currentIndex] is where the gallery found [photo] in
+         * [navigation]; when it is in range and names that photo the list is not searched, which
+         * on a timeline of tens of thousands of entries is a scan the tap would otherwise pay for.
+         * Any other value falls back to the search.
          */
         fun createIntent(
             context: Context,
@@ -1274,10 +1404,11 @@ class PhotoViewerActivity :
             userId: UserId,
             navigation: List<GalleryAsset> = listOf(photo),
             destination: GalleryDestination? = null,
+            currentIndex: Int = -1,
         ): Intent {
             val request = PhotoRequest.from(photo, userId.id)
-            val currentIndex = navigation.indexOfFirst { it.stableId == photo.stableId }.coerceAtLeast(0)
-            val window = PhotoNavigationWindowPolicy.initial(currentIndex, navigation.size)
+            val index = PhotoNavigationWindowPolicy.currentIndex(navigation, photo.stableId, currentIndex)
+            val window = PhotoNavigationWindowPolicy.initial(index, navigation.size)
             // The intent carries a small window, parcelled directly; the full list stays in the
             // process and the viewer grows the window from it while the user swipes.
             return request.writeTo(Intent(context, PhotoViewerActivity::class.java)).apply {

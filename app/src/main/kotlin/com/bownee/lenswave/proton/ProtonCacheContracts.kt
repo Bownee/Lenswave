@@ -53,6 +53,7 @@ internal interface ProtonTimelineCache {
         remoteNodeUids: Collection<String>,
     )
 
+    /** Drops [nodeUids] from the timeline and tag indexes and deletes their renditions; album indexes are [ProtonAlbumCache]'s. */
     fun removePhotos(
         userId: String,
         nodeUids: Collection<String>,
@@ -87,6 +88,12 @@ internal interface ProtonAlbumCache {
     fun reconcileAlbums(
         userId: String,
         remoteAlbumUids: Collection<String>,
+    )
+
+    /** Drops [nodeUids] from every album-photo index and refreshes the counts in the albums index. */
+    fun removeAlbumPhotos(
+        userId: String,
+        nodeUids: Collection<String>,
     )
 
     fun thumbnailExists(
@@ -192,14 +199,11 @@ interface ProtonSessionCache {
     /** Never throws: files that resist deletion are reported and swept on the next account transition. */
     fun clearUser(userId: String)
 
-    /**
-     * The cheap part of activation: plaintext copies left behind by a previous process are wiped
-     * before anything can materialize a new one next to them.
-     */
-    fun prepareUser(userId: String)
-
     /** Expiry and size-cap housekeeping; safe to run while the session is in use. */
     fun trimUser(userId: String)
+
+    /** Deletes every plaintext copy past its TTL, for any user; run when the app leaves the screen. */
+    fun sweepExpiredDecryptedCopies()
 }
 
 /** Persistence for the download queues; each [ProtonQueueName] maps to its own file per user. */

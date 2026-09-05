@@ -23,6 +23,9 @@ class ProtonNodeUidIndexTest {
         assertNull(index.find(items, "missing"))
         assertTrue(index.contains(items, "b"))
         assertFalse(index.contains(items, "missing"))
+        assertEquals(0, index.position(items, "a"))
+        assertEquals(1, index.position(items, "b"))
+        assertNull(index.position(items, "missing"))
     }
 
     @Test

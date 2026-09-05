@@ -1,13 +1,14 @@
 package com.bownee.lenswave.gallery
 
+import com.bownee.lenswave.proton.ProtonAlbum
 import com.bownee.lenswave.proton.ProtonGalleryPhoto
 import com.bownee.lenswave.proton.ProtonMediaTag
 import com.bownee.lenswave.proton.ProtonTagState
 import java.util.EnumSet
 
 /**
- * Remembers the last tag index and the last two mapped-and-sorted photo pages by the identity of
- * the lists they were built from.
+ * Remembers the last tag index, the last two mapped-and-sorted photo pages and the last library
+ * page by the identity of the lists they were built from.
  *
  * The repository state flows carry the same list instances across emissions that only change a
  * flag (syncing, refreshFailed, ...), and the view model publishes for local changes such as
@@ -28,6 +29,8 @@ internal class GalleryAssetMemo {
     @Volatile private var assetsEntry: AssetsEntry? = null
 
     @Volatile private var previousAssetsEntry: AssetsEntry? = null
+
+    @Volatile private var libraryEntry: LibraryEntry? = null
 
     fun tagIndex(tags: Map<ProtonMediaTag, ProtonTagState>): Map<String, Set<ProtonMediaTag>> {
         val entry = tagIndexEntry
@@ -58,6 +61,33 @@ internal class GalleryAssetMemo {
         assetsEntry = AssetsEntry(photos, tagIndex, content)
         return content
     }
+
+    /**
+     * The library page for [albums] under [accountStatus]; the same instance while both are, so a
+     * publish that only changed a flag keeps the rendered content and the render is a reference
+     * check. [build] runs only on a miss.
+     */
+    fun library(
+        albums: List<ProtonAlbum>,
+        accountStatus: ProtonAccountStatus,
+        build: () -> GalleryContent.Library,
+    ): GalleryContent.Library {
+        val current = libraryEntry
+        if (current != null && current.albums === albums &&
+            current.accountStatus == accountStatus
+        ) {
+            return current.content
+        }
+        val content = build()
+        libraryEntry = LibraryEntry(albums, accountStatus, content)
+        return content
+    }
+
+    private class LibraryEntry(
+        val albums: List<ProtonAlbum>,
+        val accountStatus: ProtonAccountStatus,
+        val content: GalleryContent.Library,
+    )
 
     private class TagIndexEntry(
         val source: Map<ProtonMediaTag, ProtonTagState>,

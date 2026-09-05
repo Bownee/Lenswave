@@ -25,11 +25,13 @@ internal class ProtonSnapshotSync internal constructor(
      * - Fresh snapshot: only [publishFresh] runs.
      * - Otherwise: [publishSyncing], then [enumerate], [commit], the sync timestamp is written,
      *   then [publishResult] with what [commit] returned (usually the enumerated value; a commit
-     *   may narrow it). Those three run inside [commitGate], so a repository can hold the lock
+     *   may narrow it). Those three run inside [commitGate], so a repository holds the lock
      *   that serializes them against its other mutations without holding it across the
      *   enumeration.
      * - Cancellation anywhere after the freshness check: [publishCancelled], then rethrow.
-     * - Any other failure: it is reported under [operation], then [publishFailed].
+     * - Any other failure: it is reported under [operation], then [publishFailed] with it, so a
+     *   repository can tell a refused listing (see [ProtonSuspiciousListingException]) from a
+     *   refresh that merely failed.
      */
     suspend fun <T> sync(
         userId: String,
@@ -44,8 +46,8 @@ internal class ProtonSnapshotSync internal constructor(
         commit: (T) -> T,
         publishResult: (T) -> Unit,
         publishCancelled: () -> Unit,
-        publishFailed: () -> Unit,
-        commitGate: suspend (commit: suspend () -> Unit) -> Unit = { gated -> gated() },
+        publishFailed: (error: Throwable) -> Unit,
+        commitGate: suspend (commit: suspend () -> Unit) -> Unit,
     ) {
         try {
             val shouldEnumerate =
@@ -72,7 +74,7 @@ internal class ProtonSnapshotSync internal constructor(
             throw error
         } catch (error: Throwable) {
             reportFailure(operation, error)
-            publishFailed()
+            publishFailed(error)
         }
     }
 }

@@ -55,4 +55,25 @@ class GalleryNavigationPolicyTest {
         assertEquals(GalleryDestination.Library, GalleryNavigationPolicy.withoutAccount(GalleryDestination.Library))
         subPages.forEach { assertEquals(GalleryDestination.Library, GalleryNavigationPolicy.withoutAccount(it)) }
     }
+
+    @Test
+    fun `an album page falls back to the album list once the loaded list no longer has its album`() {
+        assertEquals(
+            GalleryDestination.Library,
+            GalleryNavigationPolicy.withoutAlbum(album, albumsLoaded = true) { false },
+        )
+        assertNull(
+            "the album is still listed",
+            GalleryNavigationPolicy.withoutAlbum(album, albumsLoaded = true) {
+                it ==
+                    "album"
+            },
+        )
+        assertNull(
+            "the list has not loaded yet",
+            GalleryNavigationPolicy.withoutAlbum(album, albumsLoaded = false) { false },
+        )
+        assertNull(GalleryNavigationPolicy.withoutAlbum(GalleryDestination.Library, albumsLoaded = true) { false })
+        assertNull(GalleryNavigationPolicy.withoutAlbum(filter, albumsLoaded = true) { false })
+    }
 }

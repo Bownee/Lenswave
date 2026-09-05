@@ -15,9 +15,8 @@ import com.bownee.lenswave.update.UpdateAvailableDialogFragment
 import kotlinx.coroutines.launch
 
 /**
- * Checks for a newer release at startup and shows the update dialog as soon as the fragment
- * manager can take it (see [GalleryUpdatePromptPolicy]), carrying an unshown version across
- * configuration changes. The hosting activity must implement [UpdateAvailableDialogFragment.Listener]
+ * Shows the startup update check's result as soon as the fragment manager can take it (see
+ * [GalleryUpdatePromptPolicy]), carrying an unshown version across configuration changes. The hosting activity must implement [UpdateAvailableDialogFragment.Listener]
  * and forward its callbacks here.
  */
 internal class GalleryUpdatePresenter(
@@ -34,10 +33,18 @@ internal class GalleryUpdatePresenter(
         pendingVersionName?.let { outState.putString(STATE_PENDING_UPDATE_VERSION, it) }
     }
 
+    /**
+     * Called from every onCreate: the check itself runs once per process in [AppUpdateChecker]'s
+     * scope, so an activity recreated while it is in flight awaits the same result, and one
+     * recreated after the dialog was shown receives nothing.
+     */
     fun checkForUpdate() {
         activity.lifecycleScope.launch {
-            val update = appUpdateChecker.findAvailableUpdate(BuildConfig.VERSION_NAME) ?: return@launch
+            val update = appUpdateChecker.awaitStartupUpdate(BuildConfig.VERSION_NAME) ?: return@launch
+            // Stored first, then marked: nothing suspends in between, so a cancellation cannot leave
+            // the process with the update marked as shown and no activity holding it.
             pendingVersionName = update.versionName
+            appUpdateChecker.markStartupUpdateShown()
             showPendingUpdate()
         }
     }

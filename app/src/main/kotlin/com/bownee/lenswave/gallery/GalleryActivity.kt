@@ -6,6 +6,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.Bundle
+import android.view.WindowManager
+import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
@@ -22,6 +24,7 @@ import com.bownee.lenswave.R
 import com.bownee.lenswave.applyBottomOverlayInsets
 import com.bownee.lenswave.configureEdgeToEdgeWindow
 import com.bownee.lenswave.dp
+import com.bownee.lenswave.gallery.GalleryAlbumTile
 import com.bownee.lenswave.gallery.GalleryAsset
 import com.bownee.lenswave.gallery.GalleryAuthCoordinator
 import com.bownee.lenswave.gallery.GalleryContent
@@ -47,6 +50,7 @@ import com.bownee.lenswave.proton.ProtonAlbum
 import com.bownee.lenswave.update.AppUpdateChecker
 import com.bownee.lenswave.update.UpdateAvailableDialogFragment
 import com.bownee.lenswave.viewer.PhotoViewerActivity
+import com.bownee.lenswave.viewer.ViewerMutationCoordinator
 import com.bownee.lenswave.viewer.ViewerPrivacySettings
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.Dispatchers
@@ -67,7 +71,9 @@ import javax.inject.Inject
 class GalleryActivity :
     FragmentActivity(),
     UpdateAvailableDialogFragment.Listener,
-    TrashConfirmationDialogFragment.Listener {
+    TrashConfirmationDialogFragment.Listener,
+    PrivacySettingsDialogFragment.Listener,
+    DisconnectProtonDialogFragment.Listener {
     @Inject lateinit var accountManager: AccountManager
 
     @Inject lateinit var authOrchestrator: AuthOrchestrator
@@ -81,6 +87,8 @@ class GalleryActivity :
     @Inject lateinit var appUpdateChecker: AppUpdateChecker
 
     @Inject lateinit var viewerPrivacySettings: ViewerPrivacySettings
+
+    @Inject lateinit var mutationCoordinator: ViewerMutationCoordinator
 
     private val viewModel: GalleryViewModel by lazy {
         ViewModelProvider(this)[GalleryViewModel::class.java]
@@ -102,10 +110,13 @@ class GalleryActivity :
 
     // The panel starts hidden, which is what a null empty state renders, so the first render can skip it.
     private var renderedEmptyState: GalleryEmptyState? = null
+    private var renderedListingRefused = false
 
     // Day headers depend on the device zone; a zone or clock change bumps this so the rows are regrouped.
     private val groupingGeneration = MutableStateFlow(0)
     private var renderedGrouping = 0
+    private var dayLabels: GalleryGrouping.DayLabels? = null
+    private var dayLabelsGeneration = 0
     private val timeChangeReceiver =
         object : BroadcastReceiver() {
             override fun onReceive(
@@ -115,6 +126,7 @@ class GalleryActivity :
                 groupingGeneration.update { generation -> generation + 1 }
             }
         }
+    private var timeChangeReceiverRegistered = false
     private var pendingScrollRestore: GalleryDestination? = null
     private var pendingSelectionRestore = false
     private var viewerLaunched = false
@@ -139,6 +151,8 @@ class GalleryActivity :
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Set before any content: the thumbnails are the same photos the viewer keeps out of screenshots.
+        applyScreenshotPolicy()
         updatePresenter = GalleryUpdatePresenter(activity = this, appUpdateChecker = appUpdateChecker)
         updatePresenter.restore(savedInstanceState)
         configureEdgeToEdgeWindow()
@@ -157,6 +171,7 @@ class GalleryActivity :
                 privacySettings = viewerPrivacySettings,
                 onConnectProton = ::connectProton,
                 onDisconnectProton = viewModel::disconnectProton,
+                onScreenshotPolicyChanged = ::applyScreenshotPolicy,
             )
         deletionCoordinator = GalleryDeletionCoordinator(activity = this)
         buildInterface()
@@ -169,27 +184,41 @@ class GalleryActivity :
         authCoordinator.register()
         registerTimeChangeReceiver()
         observeGalleryState()
-        if (savedInstanceState == null && LenswaveApplication.isAppUpdateStartupEnabled()) {
-            updatePresenter.checkForUpdate()
-        }
+        // Every instance asks; the checker runs the check once per process and hands its result out once.
+        if (LenswaveApplication.isAppUpdateStartupEnabled()) updatePresenter.checkForUpdate()
     }
 
     override fun onResume() {
         super.onResume()
+        // The menu toggle applies the flag itself; this catches a change made while paused (the viewer shares the setting).
+        applyScreenshotPolicy()
         viewerLaunched = false
+        // The collector below saw these while the viewer was still launched; now they are the gallery's.
+        consumeViewerOutcomes(mutationCoordinator.outcomes.value)
         viewModel.resumeThumbnailDownloads()
         updatePresenter.showPendingUpdate()
+        settingsPresenter.showPendingDialog()
     }
 
     override fun onDestroy() {
         if (this::screen.isInitialized) screen.dispose()
-        settingsPresenter.dispose()
-        unregisterReceiver(timeChangeReceiver)
-        authCoordinator.unregister()
+        if (this::settingsPresenter.isInitialized) settingsPresenter.dispose()
+        if (timeChangeReceiverRegistered) unregisterReceiver(timeChangeReceiver)
+        if (this::authCoordinator.isInitialized) authCoordinator.unregister()
         super.onDestroy()
     }
 
-    /** System broadcasts reach a non-exported receiver; the platform resets the default zone before sending. */
+    /** Mirrors [ViewerPrivacySettings.blockScreenshots] into the window's secure flag. */
+    private fun applyScreenshotPolicy() {
+        val secure = WindowManager.LayoutParams.FLAG_SECURE
+        if (viewerPrivacySettings.blockScreenshots) window.addFlags(secure) else window.clearFlags(secure)
+    }
+
+    /**
+     * System broadcasts reach a non-exported receiver; the platform resets the default zone before
+     * sending. The flag keeps onDestroy from unregistering a receiver an onCreate that failed
+     * before this point never registered.
+     */
     private fun registerTimeChangeReceiver() {
         val filter =
             IntentFilter().apply {
@@ -197,6 +226,7 @@ class GalleryActivity :
                 addAction(Intent.ACTION_TIME_CHANGED)
             }
         ContextCompat.registerReceiver(this, timeChangeReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+        timeChangeReceiverRegistered = true
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -218,6 +248,10 @@ class GalleryActivity :
     override fun onUpdateSnoozed(versionName: String) = updatePresenter.onUpdateSnoozed(versionName)
 
     override fun onTrashConfirmed(nodeUids: List<String>) = viewModel.trashPhotos(nodeUids)
+
+    override fun onTelemetryPreferenceSaved(enabled: Boolean) = settingsPresenter.saveTelemetryPreference(enabled)
+
+    override fun onDisconnectProtonConfirmed() = settingsPresenter.disconnectProtonConfirmed()
 
     private fun buildInterface() {
         screen =
@@ -267,6 +301,26 @@ class GalleryActivity :
                 }
             }
         }
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                mutationCoordinator.outcomes.collect(::consumeViewerOutcomes)
+            }
+        }
+    }
+
+    /**
+     * Takes the viewer's mutation outcomes nobody consumed (see [GalleryViewerOutcomePolicy]): a
+     * favourite or trash the user started in the viewer and backed out of before it finished.
+     * While a viewer launched from here is up, its own collector owns them.
+     */
+    private fun consumeViewerOutcomes(outcomes: List<ViewerMutationCoordinator.Outcome>) {
+        if (!GalleryViewerOutcomePolicy.consumesNow(viewerLaunched, outcomes)) return
+        val summary = GalleryViewerOutcomePolicy.summarize(outcomes)
+        // One update for the whole drain, so the collector is not re-entered with a partial list.
+        mutationCoordinator.consumeAll(outcomes)
+        if (summary.refresh) viewModel.refreshAfterMutation()
+        if (summary.failedFavorite) Toast.makeText(this, R.string.could_not_update_favorite, Toast.LENGTH_LONG).show()
+        if (summary.failedTrash) Toast.makeText(this, R.string.could_not_move_to_proton_trash, Toast.LENGTH_LONG).show()
     }
 
     /**
@@ -287,7 +341,7 @@ class GalleryActivity :
         notificationPermissionPrompter.requestIfNeeded(protonConnected = state.isProtonConnected)
         updateThumbnailCacheIdentity(state.currentUserId)
         if (contentChanged || destinationChanged) {
-            val rows = buildRows(state.content)
+            val rows = buildRows(state.content, grouping)
             if (destinationChanged) {
                 // The list still shows the previous page here, so its position can be captured.
                 saveScrollPosition()
@@ -305,6 +359,10 @@ class GalleryActivity :
             restorePendingSelection(state)
         }
         renderEmptyState(state.emptyState)
+        if (renderedListingRefused != state.listingRefused) {
+            renderedListingRefused = state.listingRefused
+            screen.renderListingRefused(state.listingRefused)
+        }
         updateNavigationControls()
     }
 
@@ -338,26 +396,57 @@ class GalleryActivity :
         } ?: screen.showContent()
     }
 
-    /** Long photo pages are grouped on a worker thread; short ones inline so the first frame is complete. */
-    private suspend fun buildRows(content: GalleryContent): GalleryRowSet =
+    /**
+     * Photo pages are grouped on a worker thread: the cost scales with the number of day groups
+     * (a label each on a cold cache) as much as with the assets, and neither is known up front.
+     * The empty page and the small library page are built inline.
+     */
+    private suspend fun buildRows(
+        content: GalleryContent,
+        grouping: Int,
+    ): GalleryRowSet =
         when (content) {
             is GalleryContent.Library -> {
-                GalleryRowSet.of(GalleryGrouping.createLibraryRows(content.sections))
+                GalleryRowSet.of(GalleryGrouping.createLibraryRows(content.sections, describeAlbum = ::describeAlbum))
             }
 
             is GalleryContent.Photos -> {
+                if (content.assets.isEmpty()) return GalleryRowSet.EMPTY
                 val unknownDateLabel = getString(R.string.unknown_date)
-                if (content.assets.size <= INLINE_ROW_BUILD_LIMIT) {
-                    GalleryRowSet.of(GalleryGrouping.createRows(content.assets, unknownDateLabel = unknownDateLabel))
-                } else {
-                    withContext(Dispatchers.Default) {
-                        GalleryRowSet.of(
-                            GalleryGrouping.createRows(content.assets, unknownDateLabel = unknownDateLabel),
-                        )
-                    }
+                val dayLabels = dayLabelsFor(grouping)
+                withContext(Dispatchers.Default) {
+                    GalleryRowSet.of(
+                        GalleryGrouping.createRows(
+                            content.assets,
+                            unknownDateLabel = unknownDateLabel,
+                            dayLabels = dayLabels,
+                        ),
+                    )
                 }
             }
         }
+
+    /** The texts an album cell shows, resolved once per row build instead of on every bind. */
+    private fun describeAlbum(album: ProtonAlbum): GalleryAlbumTile {
+        val name = album.name.ifBlank { getString(R.string.untitled_album) }
+        val photoCount = resources.getQuantityString(R.plurals.photo_count, album.photoCount.toInt(), album.photoCount)
+        val details = if (album.isShared) getString(R.string.shared_album_details, photoCount) else photoCount
+        return GalleryAlbumTile(
+            album = album,
+            name = name,
+            details = details,
+            contentDescription = getString(R.string.album_accessibility, name, details),
+        )
+    }
+
+    /** Day labels are cached across renders and dropped when the grouping generation moves on. */
+    private fun dayLabelsFor(grouping: Int): GalleryGrouping.DayLabels {
+        if (dayLabels == null || dayLabelsGeneration != grouping) {
+            dayLabels = GalleryGrouping.DayLabels()
+            dayLabelsGeneration = grouping
+        }
+        return requireNotNull(dayLabels)
+    }
 
     private fun updateThumbnailCacheIdentity(userId: UserId?) {
         val identity = GalleryThumbnailCacheIdentity(userId)
@@ -428,18 +517,29 @@ class GalleryActivity :
         settingsPresenter.showMenu(screen.settingsButton)
     }
 
-    /** A second tap before the viewer is up must not open a second viewer; the guard lifts on resume. */
-    private fun openPhoto(photo: GalleryAsset) {
+    /**
+     * A second tap before the viewer is up must not open a second viewer; the guard lifts on resume.
+     * [index] is the tapped photo's position in [GalleryUiState.visibleAssets], known to the cell that
+     * was tapped; a page that changed under the tap is caught by checking the asset at that index.
+     */
+    private fun openPhoto(
+        photo: GalleryAsset,
+        index: Int,
+    ) {
         val userId = currentUiState.currentUserId ?: return
         if (viewerLaunched) return
         viewerLaunched = true
+        val assets = currentUiState.visibleAssets
+        // Verified here so createIntent can trust the index instead of searching the whole list.
+        val tapped = assets.getOrNull(index)?.takeIf { it.stableId == photo.stableId } ?: photo
         viewerLauncher.launch(
             PhotoViewerActivity.createIntent(
                 this,
-                photo,
+                tapped,
                 userId,
-                currentUiState.visibleAssets,
+                assets,
                 currentUiState.destination,
+                currentIndex = index,
             ),
         )
     }
@@ -482,18 +582,17 @@ class GalleryActivity :
         )
     }
 
+    /**
+     * A page without rows is still loading unless its empty panel is up: restoring into it would
+     * clamp the saved position to the top and lose it. The guard rests on the adapter alone, not
+     * on the identity of the empty content instance the factory happens to publish.
+     */
     private fun restorePendingScrollPosition(state: GalleryUiState) {
         val destination = pendingScrollRestore ?: return
         if (destination != state.destination) return
-        val savedPosition = viewModel.scrollPositions.positionFor(destination)
-        if (savedPosition != null &&
-            savedPosition.firstVisiblePosition > 0 &&
-            adapter.count == 0 &&
-            state.emptyState == null
-        ) {
-            return
-        }
+        if (adapter.count == 0 && state.emptyState == null) return
 
+        val savedPosition = viewModel.scrollPositions.positionFor(destination)
         pendingScrollRestore = null
         screen.restoreScrollPosition(
             savedPosition ?: GalleryScrollPosition(firstVisiblePosition = 0, topOffset = 0),
@@ -518,11 +617,15 @@ class GalleryActivity :
 
     /** The handle travels between the pinned header and the navigation bar with the same gap at both ends. */
     private fun updateFastScrollTrack() {
-        val gap = resources.getDimensionPixelSize(R.dimen.gallery_fast_scroll_edge_margin)
-        list.setFastScrollEdgeInsets(top = screen.headerHeight + gap, bottom = safeBottom + gap)
+        list.setFastScrollEdgeInsets(
+            top = screen.headerHeight + fastScrollEdgeGap,
+            bottom =
+                safeBottom + fastScrollEdgeGap,
+        )
     }
 
-    private companion object {
-        const val INLINE_ROW_BUILD_LIMIT = 300
+    /** Resolved once: the header relayouts that call [updateFastScrollTrack] must not each hit the resources. */
+    private val fastScrollEdgeGap: Int by lazy(LazyThreadSafetyMode.NONE) {
+        resources.getDimensionPixelSize(R.dimen.gallery_fast_scroll_edge_margin)
     }
 }

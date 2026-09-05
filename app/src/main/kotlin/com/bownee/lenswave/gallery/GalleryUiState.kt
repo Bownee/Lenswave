@@ -62,6 +62,11 @@ data class GalleryUiState(
     val currentUserId: UserId? = null,
     val isProtonConnected: Boolean = false,
     val isRefreshing: Boolean = false,
+    /**
+     * The listing on screen is known to be behind the server: a refresh was refused or failed
+     * while cached content is shown. The gallery offers a banner with a manual refresh.
+     */
+    val listingRefused: Boolean = false,
 ) {
     val visibleAssets: List<GalleryAsset>
         get() = (content as? GalleryContent.Photos)?.assets.orEmpty()

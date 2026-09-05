@@ -13,7 +13,9 @@ import me.proton.core.domain.entity.UserId
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -112,6 +114,104 @@ class GalleryUiStateFactoryTest {
                 .startsWith(R.string.connect_proton_photos.toString()),
         )
         assertFalse(state.isProtonConnected)
+    }
+
+    @Test
+    fun `a failed refresh over cached photos raises the listing-refused flag instead of a panel`() {
+        val photo = ProtonGalleryPhoto(nodeUid = "p1", captureTimeEpochSeconds = 1L, hasThumbnail = true)
+        val state =
+            factory.create(
+                GalleryUiInputs(
+                    destination = GalleryDestination.Timeline,
+                    protonAccountStatus = ProtonAccountStatus.CONNECTED,
+                    protonGallery = ProtonGalleryState(photos = listOf(photo), hasLoaded = true, listingRefused = true),
+                ),
+            )
+
+        assertTrue(state.listingRefused)
+        assertNull(state.emptyState)
+        assertEquals(1, state.visibleAssets.size)
+    }
+
+    @Test
+    fun `the listing-refused flag is off without a failure, without content, and for a skeleton`() {
+        val photo = ProtonGalleryPhoto(nodeUid = "p1", captureTimeEpochSeconds = 1L, hasThumbnail = true)
+        val loaded =
+            GalleryUiInputs(
+                destination = GalleryDestination.Timeline,
+                protonAccountStatus = ProtonAccountStatus.CONNECTED,
+                protonGallery = ProtonGalleryState(photos = listOf(photo), hasLoaded = true),
+            )
+        assertFalse(factory.create(loaded).listingRefused)
+
+        val failedAndEmpty =
+            loaded.copy(protonGallery = ProtonGalleryState(hasLoaded = true, refreshFailed = true))
+        assertFalse("a plain failure is the panel's, not the banner's", factory.create(failedAndEmpty).listingRefused)
+
+        val failedWithPhotos =
+            loaded.copy(
+                protonGallery = ProtonGalleryState(photos = listOf(photo), hasLoaded = true, listingRefused = true),
+            )
+        assertFalse(factory.skeleton(failedWithPhotos).listingRefused)
+    }
+
+    @Test
+    fun `the listing-refused flag follows the section of the page on screen`() {
+        val photo = ProtonGalleryPhoto(nodeUid = "p1", captureTimeEpochSeconds = 1L, hasThumbnail = true)
+        val tagState =
+            factory.create(
+                GalleryUiInputs(
+                    destination = GalleryDestination.Tag(ProtonMediaTag.SELFIES),
+                    protonAccountStatus = ProtonAccountStatus.CONNECTED,
+                    protonGallery =
+                        ProtonGalleryState(
+                            hasLoaded = true,
+                            tags =
+                                mapOf(
+                                    ProtonMediaTag.SELFIES to
+                                        ProtonTagState(photos = listOf(photo), hasLoaded = true, listingRefused = true),
+                                ),
+                        ),
+                ),
+            )
+        assertTrue(tagState.listingRefused)
+
+        val album =
+            ProtonAlbum(
+                nodeUid = "a1",
+                name = "Album",
+                photoCount = 1L,
+                coverPhotoNodeUid = null,
+                createdAtEpochSeconds = 0L,
+                lastActivityEpochSeconds = 0L,
+                hasCoverThumbnail = false,
+                isShared = false,
+            )
+        val libraryState =
+            factory.create(
+                GalleryUiInputs(
+                    destination = GalleryDestination.Library,
+                    protonAccountStatus = ProtonAccountStatus.CONNECTED,
+                    protonAlbums = ProtonAlbumsState(albums = listOf(album), hasLoaded = true, listingRefused = true),
+                ),
+            )
+        assertTrue(libraryState.listingRefused)
+
+        val albumState =
+            factory.create(
+                GalleryUiInputs(
+                    destination = GalleryDestination.AlbumPhotos(ProtonAlbumReference("a1", "Album")),
+                    protonAccountStatus = ProtonAccountStatus.CONNECTED,
+                    protonAlbumPhotos =
+                        ProtonAlbumPhotosState(
+                            albumUid = "a1",
+                            photos = listOf(photo),
+                            hasLoaded = true,
+                            listingRefused = true,
+                        ),
+                ),
+            )
+        assertTrue(albumState.listingRefused)
     }
 
     @Test
@@ -522,6 +622,29 @@ class GalleryUiStateFactoryTest {
         val albums = (state.content as GalleryContent.Library).sections.single { it.key == "albums" }
         assertEquals(listOf(LibraryItem.Album(album)), albums.items)
         assertNull(state.emptyState)
+    }
+
+    @Test
+    fun `library content keeps its instance across publishes that only change a flag`() {
+        val albums = listOf(ProtonAlbum("album", "Trip", 4, "cover", 1, 2, true, false))
+        val inputs =
+            GalleryUiInputs(
+                destination = GalleryDestination.Library,
+                protonAccountStatus = ProtonAccountStatus.CONNECTED,
+                protonAlbums = ProtonAlbumsState(albums = albums, hasLoaded = true),
+            )
+
+        val first = factory.create(inputs).content
+        val refreshing = factory.create(inputs.copy(isRefreshing = true)).content
+        val syncing = factory.create(inputs.copy(protonAlbums = inputs.protonAlbums.copy(syncing = true))).content
+
+        assertSame(first, refreshing)
+        assertSame(first, syncing)
+        assertNotSame(first, factory.create(inputs.copy(protonAccountStatus = ProtonAccountStatus.CONNECTING)).content)
+        assertNotSame(
+            first,
+            factory.create(inputs.copy(protonAlbums = ProtonAlbumsState(albums = albums.toList()))).content,
+        )
     }
 
     @Test

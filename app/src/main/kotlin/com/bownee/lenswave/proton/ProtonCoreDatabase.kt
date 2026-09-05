@@ -156,11 +156,17 @@ abstract class ProtonCoreDatabase :
             // open, so it must stay intact for the lifetime of the database. Never zero it here,
             // and never hand this same array to anything else: the migration gets its own copy so
             // a library that wipes the key it was given cannot zero the one Room still holds.
+            // A passphrase that replaced an unreadable one cannot open the existing database;
+            // the migration is told so it probes again and discards that database.
             val passphrase = passphraseStore.getOrCreate()
-            ProtonDatabaseKeyMigration.rekeyLegacyDatabase(context.getDatabasePath(name), passphrase.copyOf())
+            ProtonDatabaseKeyMigration.rekeyLegacyDatabase(
+                context.getDatabasePath(name),
+                passphrase.bytes.copyOf(),
+                passphraseReplaced = passphrase.replacedUnreadable,
+            )
             return Room
                 .databaseBuilder(context, ProtonCoreDatabase::class.java, name)
-                .openHelperFactory(SupportOpenHelperFactory(passphrase))
+                .openHelperFactory(SupportOpenHelperFactory(passphrase.bytes))
                 .build()
         }
 

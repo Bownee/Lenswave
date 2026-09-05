@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.core.content.edit
 import com.bownee.lenswave.proton.ProtonAlbumReference
 import com.bownee.lenswave.proton.ProtonMediaTag
+import com.bownee.lenswave.proton.SharedPreferencesProtonThumbnailPauseStore
 import com.bownee.lenswave.viewer.ViewerPrivacySettings
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -89,6 +90,12 @@ internal object GalleryPreferenceWarmUp {
         context.getSharedPreferences(SharedPreferencesGalleryNavigationStore.PREFERENCES_NAME, Context.MODE_PRIVATE).all
         context.getSharedPreferences(GalleryNotificationPermissionPrompter.PREFERENCES_NAME, Context.MODE_PRIVATE).all
         context.getSharedPreferences(ViewerPrivacySettings.PREFERENCES_NAME, Context.MODE_PRIVATE).all
+        // The pause flag is read by every thumbnail run request, the first of them from the gallery's resume.
+        context
+            .getSharedPreferences(
+                SharedPreferencesProtonThumbnailPauseStore.PREFERENCES_NAME,
+                Context.MODE_PRIVATE,
+            ).all
     }
 }
 

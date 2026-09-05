@@ -9,6 +9,7 @@ import android.graphics.Typeface
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.RippleDrawable
+import android.os.LocaleList
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -28,8 +29,9 @@ import androidx.core.widget.TextViewCompat
 
 /** Colours, typography and the small set of view factories every screen is built from. */
 object UiStyle {
-    // The palette has no configuration qualifiers, so every colour, the typeface and the two
-    // state strings are resolved once in initialize() instead of on each property read or bind.
+    // The palette has no configuration qualifiers, so every colour and the typeface are resolved
+    // once in initialize() instead of on each property read or bind. The two state strings are
+    // localized: they are cached too, but against the locales they were resolved for.
     var background: Int = 0
         private set
     var surface: Int = 0
@@ -56,8 +58,11 @@ object UiStyle {
     lateinit var medium: Typeface
         private set
 
-    private lateinit var selectedDescription: String
-    private lateinit var notSelectedDescription: String
+    private var selectedDescription: String = ""
+    private var notSelectedDescription: String = ""
+
+    /** The locales [selectedDescription] and [notSelectedDescription] were resolved for; null until the first bind. */
+    private var descriptionLocales: LocaleList? = null
 
     fun initialize(context: Context) {
         val applicationContext = context.applicationContext
@@ -75,8 +80,23 @@ object UiStyle {
         danger = color(R.color.lenswave_error)
         dangerSoft = color(R.color.lenswave_error_soft)
         medium = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-        selectedDescription = applicationContext.getString(R.string.selected)
-        notSelectedDescription = applicationContext.getString(R.string.not_selected)
+        refreshDescriptions(applicationContext)
+    }
+
+    /**
+     * Re-resolves the state strings from [context] when its locales differ from the ones they were
+     * resolved for, so a locale change reaches every later bind without a process restart. The
+     * comparison is a LocaleList equality on the configuration already held by the resources.
+     */
+    private fun descriptionsFor(context: Context) {
+        val locales = context.resources.configuration.locales
+        if (locales != descriptionLocales) refreshDescriptions(context)
+    }
+
+    private fun refreshDescriptions(context: Context) {
+        descriptionLocales = context.resources.configuration.locales
+        selectedDescription = context.getString(R.string.selected)
+        notSelectedDescription = context.getString(R.string.not_selected)
     }
 
     internal fun withAlpha(
@@ -185,6 +205,59 @@ object UiStyle {
             background = rippled(rounded(context, if (destructive) dangerSoft else surfaceRaised, 22), tint)
         }
 
+    /**
+     * A compact notice with one text action and a close button; the caller shows and hides it.
+     * [onDismiss] runs after the banner has hidden itself.
+     */
+    fun banner(
+        context: Context,
+        message: String,
+        actionLabel: String,
+        dismissDescription: String,
+        onAction: () -> Unit,
+        onDismiss: () -> Unit,
+    ): LinearLayout {
+        val text = label(context, message, sizeSp = 13f).apply { setLineSpacing(0f, 1.1f) }
+        val action =
+            label(context, actionLabel, sizeSp = 14f, color = accent, medium = true).apply {
+                setPadding(context.dp(10), context.dp(6), context.dp(10), context.dp(6))
+                background = rippled(rounded(context, Color.TRANSPARENT, 10), accent)
+                setOnClickListener { onAction() }
+            }
+        val close =
+            iconButton(
+                context,
+                R.drawable.ic_close,
+                dismissDescription,
+                fill = Color.TRANSPARENT,
+                tint = muted,
+                sizeDp = 32,
+                iconDp = 16,
+            )
+        return LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(context.dp(14), context.dp(6), context.dp(6), context.dp(6))
+            background = rounded(context, surfaceRaised, 14, border)
+            addView(text, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(
+                action,
+                LinearLayout
+                    .LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ).apply {
+                        marginStart = context.dp(8)
+                    },
+            )
+            addView(close, LinearLayout.LayoutParams(context.dp(32), context.dp(32)))
+            close.setOnClickListener {
+                visibility = View.GONE
+                onDismiss()
+            }
+        }
+    }
+
     /** Shows the filled or outlined heart and the matching accessibility label. */
     fun applyFavoriteIcon(
         view: ImageView,
@@ -203,6 +276,7 @@ object UiStyle {
         selected: Boolean,
     ) {
         view.isSelected = selected
+        descriptionsFor(view.context)
         ViewCompat.setStateDescription(view, if (selected) selectedDescription else notSelectedDescription)
     }
 

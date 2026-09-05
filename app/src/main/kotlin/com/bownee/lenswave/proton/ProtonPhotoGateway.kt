@@ -98,14 +98,14 @@ class ProtonPhotoGateway internal constructor(
     internal val thumbnailWork: ProtonThumbnailWorkGateway = ThumbnailWork()
 
     /**
-     * The transition holds only what the grid needs: the cached listings, loaded first so the
-     * grid gets them as early as possible. Wiping the previous process's plaintext copies
-     * ([ProtonSessionCache.prepareUser], thousands of unlinks on a large cache) follows inside
-     * the same transition: nothing may materialize a new plaintext copy until the wipe is
-     * done, and no session operation can start before the transition ends. Everything else
-     * runs afterwards as an ordinary session operation, so thumbnail reads and the account
-     * state stop waiting on cache trimming and queue reconciliation, and a disconnect still
-     * waits for that housekeeping to finish before it erases the user's files.
+     * The transition holds only what the grid needs: the cached listings, loaded so the grid
+     * gets them as early as possible. Everything else runs afterwards as an ordinary session
+     * operation, so thumbnail reads and the account state stop waiting on cache trimming and
+     * queue reconciliation, and a disconnect still waits for that housekeeping to finish before
+     * it erases the user's files. Wiping the previous process's plaintext copies is not part
+     * of the transition either (thousands of unlinks on a large cache held every thumbnail load
+     * back); the original store wipes them, once per process, before it materializes or reads
+     * a plaintext copy.
      */
     override suspend fun activate(userId: UserId) {
         val transitioned =
@@ -118,6 +118,7 @@ class ProtonPhotoGateway internal constructor(
                         // user's directory and data key.
                         thumbnailQueue.forget(previous.id)
                         previewQueue.forget(previous.id)
+                        renditionSync.finishPublishing(previous)
                         originals.forgetUser(previous)
                         cache.clearUser(previous.id)
                     }
@@ -125,7 +126,6 @@ class ProtonPhotoGateway internal constructor(
                     albums.reset()
                     timeline.loadCached(userId)
                     albums.loadCached(userId)
-                    cache.prepareUser(userId.id)
                 }
             }
         // An activation the guard skipped (the account is already active) changes nothing
@@ -314,8 +314,10 @@ class ProtonPhotoGateway internal constructor(
                         .map { it.nodeUid.value }
                         .toSet()
                 if (successful.isNotEmpty()) {
-                    timeline.removePhotos(userId, successful)
+                    // Listings before renditions: the timeline removal deletes the files, so the
+                    // album indexes must have dropped the photo first.
                     albums.removePhotos(userId, successful)
+                    timeline.removePhotos(userId, successful)
                 }
                 ProtonTrashResult(
                     trashedCount = successful.size,
@@ -348,7 +350,11 @@ class ProtonPhotoGateway internal constructor(
                     results
                         .filterIsInstance<NodeResultPair.Success>()
                         .mapTo(mutableSetOf()) { result -> result.nodeUid.value }
-                timeline.setFavorite(userId, successful, favorite)
+                // A photo favourited from an album is not in the timeline; the album on screen
+                // knows when it was taken, so it lands where it belongs in the Favorites tab.
+                timeline.setFavorite(userId, successful, favorite) { nodeUid ->
+                    albums.publishedCaptureTime(userId, nodeUid)
+                }
                 ProtonFavoriteResult(
                     updatedCount = successful.size,
                     failedCount = results.count { it is NodeResultPair.Failure },
@@ -364,6 +370,7 @@ class ProtonPhotoGateway internal constructor(
                 // transfers first so none can land after the user's directory is gone.
                 thumbnailQueue.forget(userId.id)
                 previewQueue.forget(userId.id)
+                renditionSync.finishPublishing(userId)
                 originals.forgetUser(userId)
                 cache.clearUser(userId.id)
                 if (wasActive) {

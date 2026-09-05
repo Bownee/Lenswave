@@ -3,6 +3,7 @@ package com.bownee.lenswave.gallery
 import android.content.Context
 import android.content.res.ColorStateList
 import android.graphics.Color
+import android.graphics.drawable.Drawable
 import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
@@ -65,6 +66,10 @@ internal class GalleryScreen(
     private val emptyTitle: TextView
     private val emptyMessage: TextView
     private val emptyAction: Button
+    private val listingRefusedBanner: LinearLayout
+
+    /** The user closed the banner; it stays closed until the flag clears and is raised again. */
+    private var listingRefusedDismissed = false
     private val refreshLayout: GalleryRefreshLayout
     private val stickyDate: TextView
     private val stickyDateController: GalleryStickyDateController
@@ -109,6 +114,7 @@ internal class GalleryScreen(
         emptyTitle = listHeader.empty.title
         emptyMessage = listHeader.empty.message
         emptyAction = listHeader.empty.action
+        listingRefusedBanner = listHeader.listingRefusedBanner
 
         galleryFooter =
             View(activity).apply {
@@ -273,6 +279,13 @@ internal class GalleryScreen(
         emptyPanel.visibility = View.GONE
     }
 
+    /** Mirrors [GalleryUiState.listingRefused]; a dismissed banner stays down until the flag clears and returns. */
+    fun renderListingRefused(refused: Boolean) {
+        if (!refused) listingRefusedDismissed = false
+        val show = refused && !listingRefusedDismissed
+        listingRefusedBanner.visibility = if (show) View.VISIBLE else View.GONE
+    }
+
     fun showEmptyState(
         title: String,
         message: String,
@@ -316,9 +329,12 @@ internal class GalleryScreen(
             touchY,
             stickyHeader.height,
             filterRowBounds,
-            gapBelowFilterRow = activity.dp(PULL_GAP_BELOW_CHIPS_DP),
+            gapBelowFilterRow = pullGapBelowChips,
         )
     }
+
+    /** Resolved once rather than on every touch-down. */
+    private val pullGapBelowChips = activity.dp(PULL_GAP_BELOW_CHIPS_DP)
 
     private fun layoutBelowHeader() {
         val headerHeight = stickyHeader.height
@@ -430,6 +446,12 @@ internal class GalleryScreen(
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
             }
+        // Built once for the row; each chip draws its own copies off the shared constant state.
+        val chipBackgrounds =
+            FilterChip.Backgrounds(
+                selected = UiStyle.rippled(UiStyle.rounded(activity, UiStyle.surfaceRaised, 12), UiStyle.accent),
+                plain = UiStyle.rippled(UiStyle.rounded(activity, Color.TRANSPARENT, 12), UiStyle.accent),
+            )
 
         fun addChip(
             destination: GalleryDestination,
@@ -437,7 +459,7 @@ internal class GalleryScreen(
             @DrawableRes icon: Int,
         ) {
             val chip =
-                FilterChip(activity, label, icon).apply {
+                FilterChip(activity, label, icon, chipBackgrounds).apply {
                     setOnClickListener { actions.onFilterSelected(destination) }
                 }
             chips[destination] = chip
@@ -479,6 +501,25 @@ internal class GalleryScreen(
                 orientation = LinearLayout.VERTICAL
                 setPadding(0, activity.dp(2), 0, activity.dp(6))
             }
+        val banner =
+            UiStyle
+                .banner(
+                    activity,
+                    message = activity.getString(R.string.listing_refused_message),
+                    actionLabel = activity.getString(R.string.refresh),
+                    dismissDescription = activity.getString(R.string.dismiss),
+                    onAction = actions.onRefresh,
+                    onDismiss = { listingRefusedDismissed = true },
+                ).apply { visibility = View.GONE }
+        container.addView(
+            banner,
+            UiStyle.matchWrap().apply {
+                marginStart = activity.dp(16)
+                marginEnd = activity.dp(16)
+                topMargin = activity.dp(4)
+                bottomMargin = activity.dp(4)
+            },
+        )
         val empty = buildEmptyPanel()
         container.addView(
             empty.container,
@@ -489,7 +530,7 @@ internal class GalleryScreen(
                 bottomMargin = activity.dp(12)
             },
         )
-        return ListHeader(container, empty)
+        return ListHeader(container, empty, banner)
     }
 
     private fun buildEmptyPanel(): EmptyPanel {
@@ -604,6 +645,12 @@ internal class GalleryScreen(
                 gravity = Gravity.CENTER
             }
 
+        // Both colours are built once; a render only re-applies them when the tab's state changes.
+        // Declared before the init block: it calls setSelectedTab, which reads them.
+        private val selectedColor = ColorStateList.valueOf(UiStyle.text)
+        private val plainColor = ColorStateList.valueOf(UiStyle.muted)
+        private var isSelectedTab: Boolean? = null
+
         init {
             isClickable = true
             isFocusable = true
@@ -616,34 +663,53 @@ internal class GalleryScreen(
         }
 
         fun setSelectedTab(selected: Boolean) {
+            if (isSelectedTab == selected) return
+            isSelectedTab = selected
             UiStyle.setSelectedState(this, selected)
-            labelView.setTextColor(if (selected) UiStyle.text else UiStyle.muted)
+            labelView.setTextColor(if (selected) selectedColor else plainColor)
         }
     }
 
-    /** A media-type filter: icon and label in a pill that fills when selected. */
+    /**
+     * A media-type filter: icon and label in a pill that fills when selected. The eleven chips
+     * are built in the activity's onCreate, so the vector icon is inflated only once the chip
+     * joins the window, and the two pill backgrounds are copies off shared constant state rather
+     * than four fresh drawables per chip.
+     */
     private class FilterChip(
         context: Context,
         label: String,
-        @DrawableRes icon: Int,
+        @DrawableRes private val icon: Int,
+        backgrounds: Backgrounds,
     ) : LinearLayout(context) {
+        /** The two looks every chip shares; each chip takes its own drawable off their constant state. */
+        class Backgrounds(
+            val selected: Drawable,
+            val plain: Drawable,
+        )
+
         private val iconView =
             ImageView(context).apply {
-                setImageResource(icon)
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             }
         private val labelView = UiStyle.label(context, label, 14f, medium = true)
 
         // Both looks are built once; a render only swaps them when the chip's state changes.
-        private val selectedBackground =
-            UiStyle.rippled(
-                UiStyle.rounded(context, UiStyle.surfaceRaised, 12),
-                UiStyle.accent,
-            )
-        private val plainBackground = UiStyle.rippled(UiStyle.rounded(context, Color.TRANSPARENT, 12), UiStyle.accent)
+        private val selectedBackground = backgrounds.selected.copyForView()
+        private val plainBackground = backgrounds.plain.copyForView()
         private val selectedTint = ColorStateList.valueOf(UiStyle.text)
         private val plainTint = ColorStateList.valueOf(UiStyle.muted)
         private var isSelectedChip: Boolean? = null
+        private var iconResolved = false
+
+        private fun Drawable.copyForView(): Drawable = constantState?.newDrawable(resources) ?: this
+
+        override fun onAttachedToWindow() {
+            super.onAttachedToWindow()
+            if (iconResolved) return
+            iconResolved = true
+            iconView.setImageResource(icon)
+        }
 
         init {
             orientation = HORIZONTAL
@@ -669,7 +735,7 @@ internal class GalleryScreen(
     }
 
     internal class Actions(
-        val onPhotoClicked: (GalleryAsset) -> Unit,
+        val onPhotoClicked: (photo: GalleryAsset, index: Int) -> Unit,
         val onAlbumClicked: (ProtonAlbum) -> Unit,
         val onLibraryAction: (LibraryAction) -> Unit,
         val onSelectionChanged: (List<GalleryAsset>) -> Unit,
@@ -704,6 +770,7 @@ internal class GalleryScreen(
     private data class ListHeader(
         val container: LinearLayout,
         val empty: EmptyPanel,
+        val listingRefusedBanner: LinearLayout,
     )
 
     private data class SelectionBar(

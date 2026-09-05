@@ -4,6 +4,23 @@ import com.bownee.lenswave.LenswaveDiagnostics
 import com.bownee.lenswave.LenswaveOperation
 import net.zetetic.database.sqlcipher.SQLiteDatabase
 import java.io.File
+import java.io.IOException
+import java.util.concurrent.ConcurrentHashMap
+
+/** The SQLCipher operations the migration needs; a seam so its decisions run without the native library. */
+internal interface DatabaseKeyProbe {
+    fun opensWith(
+        databaseFile: File,
+        passphrase: ByteArray,
+    ): Boolean
+
+    /** Rekeys the database in place; throws when SQLCipher refuses. */
+    fun rekey(
+        databaseFile: File,
+        from: ByteArray,
+        to: ByteArray,
+    )
+}
 
 /**
  * Repairs session databases that earlier releases keyed with an all-zero passphrase.
@@ -22,6 +39,11 @@ import java.io.File
  * The marker is only ever written once the file is known to open with the real passphrase or is
  * known to be gone: a marker beside a database that still opens with neither key would skip the
  * probe on every later launch and leave Room failing permanently.
+ *
+ * A passphrase that was just replaced (its file had become unreadable, see
+ * [com.bownee.lenswave.storage.DatabasePassphraseStore]) makes the marker a lie: the database
+ * was keyed with the old passphrase. The caller says so and the probe runs regardless, finds
+ * that neither key opens the file and discards it.
  */
 internal object ProtonDatabaseKeyMigration {
     /**
@@ -31,12 +53,45 @@ internal object ProtonDatabaseKeyMigration {
     fun rekeyLegacyDatabase(
         databaseFile: File,
         passphrase: ByteArray,
+        passphraseReplaced: Boolean = false,
+        probe: DatabaseKeyProbe = SqlCipherKeyProbe,
+        reportFailure: (Throwable) -> Unit = { error ->
+            LenswaveDiagnostics.reportFailure(LenswaveOperation.SESSION_DATABASE_REKEY, error)
+        },
     ) {
         val marker = keyedMarker(databaseFile)
-        if (marker.isFile) return
-        if (!rekey(databaseFile, passphrase)) return
-        marker.parentFile?.mkdirs()
-        runCatching { marker.createNewFile() }
+        if (passphraseReplaced) {
+            verifiedInProcess.remove(databaseFile.path)
+            marker.delete()
+        } else if (databaseFile.path in verifiedInProcess || marker.isFile) {
+            return
+        }
+        if (!rekey(databaseFile, passphrase, probe, reportFailure)) return
+        verifiedInProcess.add(databaseFile.path)
+        recordKeyed(marker, reportFailure)
+    }
+
+    /**
+     * A marker that cannot be written is reported rather than swallowed: the probe would
+     * otherwise run silently on every launch. The in-process set still spares this process a
+     * second probe.
+     */
+    private fun recordKeyed(
+        marker: File,
+        reportFailure: (Throwable) -> Unit,
+    ) {
+        try {
+            marker.parentFile?.mkdirs()
+            if (!marker.createNewFile() && !marker.isFile) {
+                reportFailure(
+                    IllegalStateException(
+                        "Could not record the session database key; the probe runs again next launch",
+                    ),
+                )
+            }
+        } catch (error: IOException) {
+            reportFailure(error)
+        }
     }
 
     /** Sits beside the database so a cleared app storage removes both together. */
@@ -46,35 +101,50 @@ internal object ProtonDatabaseKeyMigration {
     private fun rekey(
         databaseFile: File,
         passphrase: ByteArray,
+        probe: DatabaseKeyProbe,
+        reportFailure: (Throwable) -> Unit,
     ): Boolean {
         if (!databaseFile.isFile) return true
-        if (opensWith(databaseFile, passphrase)) return true
+        if (probe.opensWith(databaseFile, passphrase)) return true
         val legacyPassphrase = ByteArray(passphrase.size)
-        if (!opensWith(databaseFile, legacyPassphrase)) {
-            LenswaveDiagnostics.reportFailure(
-                LenswaveOperation.SESSION_DATABASE_REKEY,
-                IllegalStateException("Session database opens with neither key; discarding it"),
-            )
-            return discard(databaseFile)
+        if (!probe.opensWith(databaseFile, legacyPassphrase)) {
+            reportFailure(IllegalStateException("Session database opens with neither key; discarding it"))
+            return discard(databaseFile, reportFailure)
         }
         try {
-            SQLiteDatabase
-                .openDatabase(
-                    databaseFile.path,
-                    legacyPassphrase.copyOf(),
-                    null,
-                    SQLiteDatabase.OPEN_READWRITE,
-                    null,
-                ).use { database -> database.changePassword(passphrase.copyOf()) }
+            probe.rekey(databaseFile, legacyPassphrase, passphrase)
         } catch (error: Throwable) {
-            LenswaveDiagnostics.reportFailure(LenswaveOperation.SESSION_DATABASE_REKEY, error)
-            return discard(databaseFile)
+            reportFailure(error)
+            return discard(databaseFile, reportFailure)
         }
         // The rekey is trusted only once the file demonstrably opens with the new key.
-        return opensWith(databaseFile, passphrase)
+        return probe.opensWith(databaseFile, passphrase)
     }
 
-    private fun opensWith(
+    /** True when nothing of the database is left on disk; a file that survives keeps the probe alive. */
+    private fun discard(
+        databaseFile: File,
+        reportFailure: (Throwable) -> Unit,
+    ): Boolean {
+        val deleted =
+            listOf("", "-journal", "-wal", "-shm").map { suffix ->
+                val file = File(databaseFile.path + suffix)
+                file.delete() || !file.exists()
+            }
+        if (deleted.all { it }) return true
+        reportFailure(IllegalStateException("Could not discard the session database; the key probe stays enabled"))
+        return false
+    }
+
+    private const val MARKER_SUFFIX = ".keyed"
+
+    /** Databases known to open with the real passphrase since this process started. */
+    private val verifiedInProcess: MutableSet<String> = ConcurrentHashMap.newKeySet()
+}
+
+/** The real SQLCipher; every call copies the passphrase it is handed, see [ProtonDatabaseKeyMigration]. */
+internal object SqlCipherKeyProbe : DatabaseKeyProbe {
+    override fun opensWith(
         databaseFile: File,
         passphrase: ByteArray,
     ): Boolean =
@@ -94,20 +164,18 @@ internal object ProtonDatabaseKeyMigration {
             false
         }
 
-    /** True when nothing of the database is left on disk; a file that survives keeps the probe alive. */
-    private fun discard(databaseFile: File): Boolean {
-        val deleted =
-            listOf("", "-journal", "-wal", "-shm").map { suffix ->
-                val file = File(databaseFile.path + suffix)
-                file.delete() || !file.exists()
-            }
-        if (deleted.all { it }) return true
-        LenswaveDiagnostics.reportFailure(
-            LenswaveOperation.SESSION_DATABASE_REKEY,
-            IllegalStateException("Could not discard the session database; the key probe stays enabled"),
-        )
-        return false
+    override fun rekey(
+        databaseFile: File,
+        from: ByteArray,
+        to: ByteArray,
+    ) {
+        SQLiteDatabase
+            .openDatabase(
+                databaseFile.path,
+                from.copyOf(),
+                null,
+                SQLiteDatabase.OPEN_READWRITE,
+                null,
+            ).use { database -> database.changePassword(to.copyOf()) }
     }
-
-    private const val MARKER_SUFFIX = ".keyed"
 }

@@ -65,6 +65,12 @@ identifiers are deliberately not recorded here; the CI emulator job is the refer
 - PR #12 (2026-09-04): cold start, gallery, downloads and viewer performance, two passes.
 - PR #22: sync safety, segmented file encryption (format v3), worker budget and pause,
   state restoration, security lows, gateway and view-model tests.
+- Audit III (2026-09-05, branch `audit/fixes-3`): passphrase recovery after a Keystore reset,
+  best-effort cache sweeps, network follow-up backoff, session-change handling in the viewer and
+  mutation coordinator, preview-fallback admission, album/tag reconcile floors and narrowing,
+  queue flush scaling, background writes kept out of the grid bitmap cache, settings dialogs as
+  fragments, scheduler and session-manager tests. Deferred: AAD file-identity binding (format v4),
+  ordered claim structures in the queue, persisted dropped-node suppression.
 
 A new audit should list these as already fixed so reviewers look for what is still there or
 newly introduced.

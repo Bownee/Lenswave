@@ -14,6 +14,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import me.proton.core.domain.entity.UserId
 import me.proton.drive.sdk.ProgressUpdate
 import me.proton.drive.sdk.ProtonPhotosClient
@@ -26,7 +27,9 @@ import java.io.File
 import java.nio.channels.WritableByteChannel
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.io.path.createTempDirectory
 
 /**
  * Drives the real gateway over the real repositories, queues and session guard; only the disk
@@ -54,7 +57,9 @@ class ProtonPhotoGatewayTest {
     private val albums = ProtonAlbumRepository(clients, cache, snapshotSync)
     private val transfers = ProtonTransferCoordinator()
     private val renditions = ProtonRenditionDownloads(clients, cache, transfers, ProtonPreviewAdmission())
-    private val originals = ProtonOriginalDownloads(clients, cache, transfers)
+    private val materializer = FakeMaterializer()
+    private val originals =
+        ProtonOriginalDownloads(clients, cache, transfers, materializer, ProtonDecryptedCopyRegistry())
     private val sessionGuard = ProtonSessionGuard()
 
     init {
@@ -71,21 +76,18 @@ class ProtonPhotoGatewayTest {
     }
 
     @Test
-    fun `activation publishes the cached listings before the wipe and housekeeps afterwards`() =
+    fun `activation publishes the cached listings and housekeeps afterwards`() =
         testScope.runTest {
             val gateway = gateway()
-            cache.onPrepareUser = { userId ->
-                val published = timeline.state.value
-                events +=
-                    "published:$userId:${published.hasLoaded}:${published.photos.size}:${albums.albumsState.value.hasLoaded}"
-            }
 
             gateway.activate(USER_A)
 
-            assertEquals(
-                listOf("readTimeline:a", "readAlbums:a", "published:a:true:4:true", "prepareUser:a"),
-                events.toList(),
-            )
+            // The transition reads the listings and nothing else; the wipe of stale plaintext
+            // copies is the original store's and the trim is housekeeping.
+            assertEquals(listOf("readTimeline:a", "readAlbums:a"), events.toList())
+            assertTrue(timeline.state.value.hasLoaded)
+            assertEquals(4, timeline.state.value.photos.size)
+            assertTrue(albums.albumsState.value.hasLoaded)
             assertEquals(0, thumbnailQueue.pendingCount(USER_A.id))
             runCurrent()
             assertEquals("trimUser:a", events.last())
@@ -121,7 +123,6 @@ class ProtonPhotoGatewayTest {
                     "clearUser:a",
                     "readTimeline:b",
                     "readAlbums:b",
-                    "prepareUser:b",
                 ),
                 events.toList(),
             )
@@ -158,12 +159,12 @@ class ProtonPhotoGatewayTest {
             delay(100L)
 
             assertFalse("the switch must wait for the housekeeping of the previous account", switch.isCompleted)
-            assertFalse("prepareUser:b" in events)
+            assertFalse("readTimeline:b" in events)
             releaseTrim.countDown()
             switch.await()
             trimmedB.await()
             assertTrue(events.indexOf("trimUser:a") < events.indexOf("clearUser:a"))
-            assertTrue(events.indexOf("clearUser:a") < events.indexOf("prepareUser:b"))
+            assertTrue(events.indexOf("clearUser:a") < events.indexOf("readTimeline:b"))
         }
 
     @Test
@@ -283,6 +284,99 @@ class ProtonPhotoGatewayTest {
             assertFalse(shouldContinue.get()())
             release.countDown()
             prepare.join()
+        }
+
+    @Test
+    fun `a cached original is handed to the player after its first verified segment`() =
+        runBlocking {
+            val directory = createTempDirectory("lenswave-originals").toFile()
+            val firstSegmentSeen = CountDownLatch(1)
+            val committed = File(directory, "video.image")
+            materializer.materialize = { _, onStarted, onBytesWritten ->
+                val part = File(directory, "video.image.part")
+                onStarted(part, 1_536L)
+                part.writeBytes(ByteArray(1_024))
+                onBytesWritten(1_024L)
+                // The player already reads while the rest of the file decrypts.
+                assertTrue(firstSegmentSeen.await(5L, TimeUnit.SECONDS))
+                part.appendBytes(ByteArray(512))
+                onBytesWritten(1_536L)
+                assertTrue(part.renameTo(committed))
+                committed
+            }
+            lateinit var stream: ProtonOriginalStream
+            try {
+                val file =
+                    withContext(Dispatchers.IO) {
+                        originals.downloadOriginalProgressively(USER_A, "a3") { ready ->
+                            stream = ready
+                            assertEquals(ProtonOriginalReadState(1_024L, complete = false), ready.awaitReadable(0L))
+                            // The decrypt of a cached original is sized from the encrypted file.
+                            assertEquals(
+                                ProtonOriginalDownloadProgress(1_024L, 1_536L, complete = false),
+                                ready.progress.value,
+                            )
+                            firstSegmentSeen.countDown()
+                        }
+                    }
+
+                assertEquals(committed, file)
+                assertEquals(committed, stream.file)
+                assertEquals(ProtonOriginalDownloadProgress(1_536L, 1_536L, complete = true), stream.progress.value)
+                assertTrue(events.none { it.startsWith("readOriginal") })
+            } finally {
+                directory.deleteRecursively()
+            }
+        }
+
+    @Test
+    fun `a plaintext copy already on disk is handed to the player complete`() =
+        runBlocking {
+            val copy = File.createTempFile("lenswave-original", ".image").apply { writeBytes(ByteArray(300)) }
+            materializer.materialize = { _, _, _ -> copy }
+            lateinit var stream: ProtonOriginalStream
+            try {
+                val file = originals.downloadOriginalProgressively(USER_A, "a3") { ready -> stream = ready }
+
+                assertEquals(copy, file)
+                assertEquals(ProtonOriginalReadState(300L, complete = true), stream.awaitReadable(0L))
+            } finally {
+                copy.delete()
+            }
+        }
+
+    @Test
+    fun `a player that refuses the stream stops the decrypt between segments`() =
+        runBlocking {
+            val directory = createTempDirectory("lenswave-originals").toFile()
+            val refused = CountDownLatch(1)
+            materializer.materialize = { shouldContinue, onStarted, onBytesWritten ->
+                val part = File(directory, "video.image.part")
+                onStarted(part, null)
+                part.writeBytes(ByteArray(1_024))
+                onBytesWritten(1_024L)
+                assertTrue(refused.await(5L, TimeUnit.SECONDS))
+                // The decrypt asks before the next segment, as SegmentedEnvelope does.
+                while (shouldContinue()) Thread.sleep(5L)
+                part.delete()
+                throw CancellationException("Copy interrupted before completion")
+            }
+            try {
+                val outcome =
+                    withContext(Dispatchers.IO) {
+                        runCatching {
+                            originals.downloadOriginalProgressively(USER_A, "a3") { ready ->
+                                refused.countDown()
+                                throw CancellationException("Viewer moved to different media")
+                            }
+                        }
+                    }
+
+                assertTrue(outcome.exceptionOrNull() is CancellationException)
+                assertTrue(directory.listFiles().orEmpty().isEmpty())
+            } finally {
+                directory.deleteRecursively()
+            }
         }
 
     @Test
@@ -430,6 +524,23 @@ class ProtonPhotoGatewayTest {
         ) = error("The SDK must not be reached")
     }
 
+    /** The progressive decrypt of a cached original, scripted per test; nothing is cached by default. */
+    private class FakeMaterializer : ProtonOriginalMaterializer {
+        var materialize: (
+            shouldContinue: () -> Boolean,
+            onStarted: (File, Long?) -> Unit,
+            onBytesWritten: (Long) -> Unit,
+        ) -> File? = { _, _, _ -> null }
+
+        override fun materialize(
+            userId: String,
+            nodeUid: String,
+            shouldContinue: () -> Boolean,
+            onStarted: (plaintextInProgress: File, expectedBytes: Long?) -> Unit,
+            onBytesWritten: (totalBytes: Long) -> Unit,
+        ): File? = materialize(shouldContinue, onStarted, onBytesWritten)
+    }
+
     /** The on-disk photo cache: listings keyed by user, renditions as name sets, no bitmaps. */
     private class FakeCache(
         private val events: MutableList<String>,
@@ -444,7 +555,6 @@ class ProtonPhotoGatewayTest {
         val albumPhotos = mutableMapOf<Pair<String, String>, List<ProtonGalleryPhoto>>()
         val thumbnails: MutableSet<String> = Collections.synchronizedSet(mutableSetOf())
         val previews: MutableSet<String> = Collections.synchronizedSet(mutableSetOf())
-        var onPrepareUser: (String) -> Unit = {}
         var onTrimUser: (String) -> Unit = {}
         var onClearUser: (String) -> Unit = {}
         var loadThumbnail: (isActive: () -> Boolean) -> Bitmap? = { error("no thumbnail load expected") }
@@ -535,6 +645,12 @@ class ProtonPhotoGatewayTest {
         override fun reconcileAlbums(
             userId: String,
             remoteAlbumUids: Collection<String>,
+        ) {
+        }
+
+        override fun removeAlbumPhotos(
+            userId: String,
+            nodeUids: Collection<String>,
         ) {
         }
 
@@ -631,14 +747,13 @@ class ProtonPhotoGatewayTest {
             events += "clearUser:$userId"
         }
 
-        override fun prepareUser(userId: String) {
-            onPrepareUser(userId)
-            events += "prepareUser:$userId"
-        }
-
         override fun trimUser(userId: String) {
             events += "trimUser:$userId"
             onTrimUser(userId)
+        }
+
+        override fun sweepExpiredDecryptedCopies() {
+            events += "sweepExpiredDecryptedCopies"
         }
 
         private fun List<ProtonGalleryPhoto>.hydrated(availability: ProtonStoredRenditions) =

@@ -2,13 +2,16 @@ package com.bownee.lenswave.metadata
 
 /**
  * What the viewer already knows about the decoded original, so [PhotoMetadataReader] does not
- * open the file again for a bounds decode or derive the orientation a second time.
+ * open the file again for a bounds decode, derive the orientation a second time or parse the
+ * EXIF tags again. [exif] is null when the decode could not parse them; the reader then parses
+ * the file itself.
  */
 data class PhotoMetadataHints(
     val rawWidth: Int,
     val rawHeight: Int,
     val rotationDegrees: Int,
     val mimeType: String?,
+    val exif: ExifSnapshot? = null,
 )
 
 /**

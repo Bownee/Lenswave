@@ -71,6 +71,31 @@ class ProtonBackgroundBatchPolicyTest {
     }
 
     @Test
+    fun thumbnailsWaitingForPreviewsAreDeferredWorkForAChargingRun() {
+        val idle =
+            ProtonBackgroundBatchPolicy.idle(
+                thumbnailsPending = false,
+                previewsPending = false,
+                allowPreviews = false,
+                thumbnailsAwaitingPreviews = true,
+            )
+
+        assertFalse(idle.hasPending)
+        assertTrue(idle.previewsDeferred)
+        assertNull(ProtonBackgroundBatchPolicy.idleWaitMillis(idle))
+        // Once previews are allowed the same nodes are claimable, so nothing is deferred.
+        assertFalse(
+            ProtonBackgroundBatchPolicy
+                .idle(
+                    thumbnailsPending = false,
+                    previewsPending = false,
+                    allowPreviews = true,
+                    thumbnailsAwaitingPreviews = true,
+                ).previewsDeferred,
+        )
+    }
+
+    @Test
     fun idleReportsPendingWorkFromEitherQueue() {
         assertFalse(ProtonBackgroundBatchPolicy.idle(thumbnailsPending = false, previewsPending = false).hasPending)
         assertTrue(ProtonBackgroundBatchPolicy.idle(thumbnailsPending = true, previewsPending = false).hasPending)
@@ -122,7 +147,9 @@ class ProtonBackgroundBatchPolicyTest {
         )
         assertEquals(
             ProtonThumbnailWorkPolicy.FOREGROUND_BUSY_RETRY_MILLIS,
-            ProtonBackgroundBatchPolicy.idleWaitMillis(ProtonThumbnailWorkPolicy.foregroundBusyStep()),
+            ProtonBackgroundBatchPolicy.idleWaitMillis(
+                ProtonThumbnailWorkPolicy.foregroundBusyStep(consecutiveBusySteps = 1),
+            ),
         )
         assertEquals(
             5L,
