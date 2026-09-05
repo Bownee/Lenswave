@@ -155,6 +155,14 @@ class PhotoViewerActivity :
      */
     private var prefetchJob: Deferred<Result<File?>>? = null
     private var prefetchStableId: String? = null
+
+    /**
+     * The screen-sized preview being decrypted and decoded while the original downloads. It
+     * outlives the load's body as a child coroutine, so it is cancelled by hand once the original
+     * wins: a preview finishing afterwards was dropped anyway, having evicted a neighbour's from
+     * the preview cache for nothing.
+     */
+    private var previewJob: Job? = null
     private var loadingPanelRunnable: Runnable? = null
 
     /** Set in onDestroy; posted work that outlives the Activity checks it and does nothing. */
@@ -373,6 +381,7 @@ class PhotoViewerActivity :
     override fun onDestroy() {
         destroyed = true
         photoLoadJob?.cancel()
+        cancelPreviewLoad()
         prefetchJob?.cancel()
         photoDetailsScroll.removeCallbacks(detailsSynchronizationRunnable)
         mediaFrame.removeCallbacks(mediaBoundsRunnable)
@@ -759,7 +768,9 @@ class PhotoViewerActivity :
                         showMedia(Uri.fromFile(cachedOriginal))
                         return@launch
                     }
-                    if (requestedPhoto.mediaKind != MediaKind.VIDEO) launch { showCachedProtonPreview(requestedPhoto) }
+                    if (requestedPhoto.mediaKind != MediaKind.VIDEO) {
+                        previewJob = launch { showCachedProtonPreview(requestedPhoto) }
+                    }
                     val file =
                         withContext(Dispatchers.IO) {
                             if (requestedPhoto.mediaKind == MediaKind.VIDEO) {
@@ -782,12 +793,14 @@ class PhotoViewerActivity :
                     // the read (a viewer relaunched from recents after a sign-out, say). Left to
                     // the branch below it would end the job with the spinner still up and no retry.
                     thumbnailLoad?.cancel()
+                    cancelPreviewLoad()
                     if (request.stableId != requestedPhoto.stableId) return@launch
                     handlePhotoLoadFailure(error, getString(R.string.could_not_open_proton_photo_signed_out))
                 } catch (error: CancellationException) {
                     throw error
                 } catch (error: Throwable) {
                     thumbnailLoad?.cancel()
+                    cancelPreviewLoad()
                     if (request.stableId != requestedPhoto.stableId) return@launch
                     if (!retryButton.isVisible) {
                         handlePhotoLoadFailure(error, getString(R.string.could_not_download_proton_photo))
@@ -798,6 +811,12 @@ class PhotoViewerActivity :
 
     private fun showMedia(uri: Uri) {
         if (request.mediaKind == MediaKind.VIDEO) video.show(uri) else showPhoto(uri)
+    }
+
+    /** Stops the preview read: the original has won, failed, or the viewer moved on. */
+    private fun cancelPreviewLoad() {
+        previewJob?.cancel()
+        previewJob = null
     }
 
     /**
@@ -940,6 +959,8 @@ class PhotoViewerActivity :
 
     private fun showPhoto(uri: Uri) {
         val requestedStableId = request.stableId
+        // The original is here: a preview still decoding would only be dropped on arrival.
+        cancelPreviewLoad()
         resolvedUri = uri
         video.stop()
         playerView.visibility = View.GONE
@@ -1033,6 +1054,7 @@ class PhotoViewerActivity :
         val previousRequest = request
         photoTransitioning = true
         photoLoadJob?.cancel()
+        cancelPreviewLoad()
         // A prefetch of the very photo the user is heading for is kept for loadPhoto to await;
         // one of the other neighbour is dropped, and the new photo's own prefetch restarts it in
         // the direction of travel once it is on screen.
