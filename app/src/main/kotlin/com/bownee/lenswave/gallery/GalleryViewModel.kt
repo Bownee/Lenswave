@@ -262,14 +262,19 @@ class GalleryViewModel internal constructor(
      * The confirmation dialog survives a process death and may answer before the restored
      * session has settled; the call then waits for the account (bounded, see
      * [awaitSessionUserId]) rather than dropping a confirmed destructive action without a word.
+     * The session that settles may belong to another account than the one the dialog was shown
+     * for; [confirmedUserId] is that account, and a mismatch is a failure, not a trash.
      */
-    fun trashPhotos(nodeUids: List<String>) {
+    fun trashPhotos(
+        confirmedUserId: UserId,
+        nodeUids: List<String>,
+    ) {
         if (mutationInFlight || nodeUids.isEmpty()) return
         mutationInFlight = true
         viewModelScope.launch {
             try {
                 val userId = currentUserId ?: awaitSessionUserId()
-                if (userId == null) {
+                if (userId != confirmedUserId) {
                     mutableMutationEvents.trySend(GalleryMutationEvent.TrashFailed)
                 } else {
                     val result = deletionExecutor.trashProton(userId, nodeUids)

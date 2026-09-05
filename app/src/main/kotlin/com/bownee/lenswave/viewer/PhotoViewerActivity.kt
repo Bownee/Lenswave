@@ -1291,13 +1291,19 @@ class PhotoViewerActivity :
             return
         }
         TrashConfirmationDialogFragment
-            .create(listOf(request.nodeUid), singlePhoto = true)
+            .create(UserId(request.userId), listOf(request.nodeUid), singlePhoto = true)
             .show(supportFragmentManager, TrashConfirmationDialogFragment.TAG)
     }
 
-    /** The dialog may have been answered on a recreated activity; the photo it named is the one to trash. */
-    override fun onTrashConfirmed(nodeUids: List<String>) {
-        val target = navigationRequests.firstOrNull { it.nodeUid in nodeUids } ?: return
+    /**
+     * The dialog may have been answered on a recreated activity; the photo it named is the one to
+     * trash, and only under the account it was confirmed for.
+     */
+    override fun onTrashConfirmed(
+        userId: UserId,
+        nodeUids: List<String>,
+    ) {
+        val target = navigationRequests.firstOrNull { it.userId == userId.id && it.nodeUid in nodeUids } ?: return
         trashProtonPhoto(target)
     }
 
