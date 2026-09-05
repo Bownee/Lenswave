@@ -76,6 +76,9 @@ Say plainly what was not measured. Reasoning from code is not a device measureme
 
 ## Fix mode (when asked)
 
+Before pushing, run `scripts/scan-view-init-order.sh` over every view class a fixer touched;
+see "Lessons from the third audit" below for why.
+
 Read `references/fix-mode.md` before dispatching fixes. The short version:
 
 - One fixer per area in its **own worktree and branch** off the audited commit, with an explicit
@@ -94,3 +97,37 @@ Instrumented tests and timing on the user's phone are valuable and risky: by def
 run uninstalls the app and its signed-in session, a locked phone fails every lifecycle test,
 and a cold-start timing needs a signed-in account with a cached library. See `references/fix-mode.md` for the flags and checks. Report device results as what they are, including "not evaluated
 because the keyguard was on".
+
+## Lessons from the third audit (2026-09-05: three parallel audits, three fix rounds)
+
+Three sessions audited the same commit independently and each found about seventy issues
+with only partial overlap. Single-pass line-by-line review has recall well below 100 %, so:
+
+- **Treat a second independent audit as part of the method**, not a duplicate. After fix
+  mode, verify the other audit's findings against the merged result with a read-only agent
+  that classifies each as fixed / still present / by design, then run a fix round on what
+  is left. The questions that produced the third round are in `references/dimensions.md`
+  under "Checks earlier passes missed"; hand them to the reviewers from the start.
+- **The second pass must ask "did the fix close every path", not "does the fix hold".** Two
+  first-round fixes each closed one of two paths (the unreferenced sweep but not the reconcile
+  loop; the settings dialogs but not their writes) and read as holding.
+- **The first fix round introduces regressions of its own.** Round one here added a
+  non-terminating worker loop and a cache wipe on a not-yet-loaded account; the second-pass
+  reviewers found both. Budget for the second round every time.
+- **JVM checks cannot construct Views.** A property declared after an `init` block that read
+  it passed the whole local chain and crashed every gallery start on the CI emulator. Run
+  `scripts/scan-view-init-order.sh` over every view class a fixer touched, and treat the
+  device job as part of the gate, not a flaky extra. When it fails, download the run's
+  test-result artifact and read the XML; the `--log-failed` excerpt rarely names the test.
+- **Main moves while fixers run.** Between the audited commit and the PR, main gained a
+  module split, its revert and three CI changes. `git fetch` and diff `origin/main` against
+  the audited commit before every merge step, and merge main into the integration branch
+  before dispatching the next round, not only at the start.
+- **Fixer agents stall on the full check chain** (a 600 s watchdog). Their worktree commits
+  survive; inspect `git log` and `git status` there and launch a follow-up agent for the
+  remaining items and the report instead of redoing the work.
+- **Cross-fixer APIs.** When fixer A needs a method on a class fixer B owns, have B add the
+  method (keeping old APIs) while A ships a temporary local guard; wire the call at merge
+  time. The reports' snippet section is where this hand-off lives.
+- **Watch CI with something that terminates**: `gh pr checks <n> --watch` in a background
+  shell. A polling monitor that swallowed `gh` errors sat silent for an hour, twice.

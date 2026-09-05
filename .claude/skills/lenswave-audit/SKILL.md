@@ -71,6 +71,15 @@ identifiers are deliberately not recorded here; the CI emulator job is the refer
   queue flush scaling, background writes kept out of the grid bitmap cache, settings dialogs as
   fragments, scheduler and session-manager tests. Deferred: AAD file-identity binding (format v4),
   ordered claim structures in the queue, persisted dropped-node suppression.
+- Audit III, round three (2026-09-05, branch `audit/fixes-4`): the two parallel sessions'
+  audits (three audits of 1dc01e3 in total) were verified against 8407f79 and nine remaining
+  items fixed: fail-closed reconcile on unreadable album listings, cold-restore trash waits for
+  the session, per-node ownership for decrypt commits and cleanup, telemetry and snooze writes
+  off the activity scope, preview invalidate-and-requeue, stalled-SDK short-circuit, charging
+  follow-up restored after null-outcome runs, viewer prefetch hand-off and decode generation
+  checks, onDestroy guards, sheet restore, opaque tiles with a byte budget. Still open (low):
+  fsync before rename, typed corruption exception, two stats per file on hydration, the
+  downsampled flag, constant grid span, notification tap CLEAR_TOP, remaining test gaps.
 
 A new audit should list these as already fixed so reviewers look for what is still there or
 newly introduced.

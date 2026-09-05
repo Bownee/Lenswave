@@ -137,3 +137,50 @@ the real classes through the smallest possible seams (an interface for a platfor
 collaborator, a constructor that takes a scope or dispatcher), covering ordering guarantees
 (what publishes before what), account switch and disconnect ordering, cancellation
 propagation, initial-state cheapness, and sharing/subscription behaviour.
+
+## Checks earlier passes missed
+
+Each of these was found by one of three parallel audits of the same commit and missed by the
+others. Add them to the relevant reviewer's checklist from the start.
+
+**Sync and reconciliation**
+- Every read of a nullable snapshot that feeds a *reference set* or *retained set*: is a
+  transient null flattened with `.orEmpty()`? An empty reference set means "delete
+  everything unreferenced". Fail closed: skip deletion when any listing is unreadable.
+- Do the two rendition-cleanup paths (the per-item removal loop and the unreferenced sweep)
+  both honour that rule, or only one?
+- Commit-versus-remove races: can an in-flight decrypt or download commit its file after the
+  item was removed, resurrecting a trashed photo's plaintext? Does cancellation cleanup
+  delete a temp another transfer now owns? Per-node ownership or a removal epoch is the fix.
+- Do secondary renditions (previews) have the same invalidate-and-requeue path on a corrupt
+  read that the primary ones (thumbnails) have?
+
+**Background worker**
+- When a whole batch gets no answer at all from the SDK, do the per-node re-asks and the
+  fallback still run, holding the foreground service for minutes with nothing stored?
+- When an on-screen ask REPLACEs a persisted charging follow-up and the replacing run ends
+  with an outcome that produces no follow-up, is the charging run lost?
+- Are the worker's small cached flags read from other coroutines `@Volatile`?
+
+**Process death and restoration**
+- Does a restored confirmation dialog deliver its answer before the session is initialised,
+  and does the receiver then silently return with no failure event and no toast?
+- Do preference writes started from a dialog run on a scope that survives rotation?
+- Can a sheet or panel restore as "shown" while invisible and still block gestures?
+- Are `lateinit` fields dereferenced in `onDestroy` without an `isInitialized` guard, so an
+  `onCreate` failure is masked by a different exception?
+- Is the grid's column count a constant, so rotation, tablets and multi-window never
+  recompute it?
+
+**Viewer performance**
+- Does the base decode task check its generation as its first statement and again after each
+  expensive step (open, decoder creation), and does `clear()` cancel the base future?
+- Does a forward swipe cancel the prefetch of the very photo it is heading for?
+- Is the stand-in (preview) decode cancelled when the original wins the race?
+- Do tiles use the same opaque-aware bitmap config as the base decode, and is the decode
+  budget in bytes rather than pixels?
+
+**Gallery performance**
+- Does each selection tap copy the whole selection, write saved state and re-render the
+  navigation row?
+- Are the empty panel and selection bar built before the first frame although hidden?
