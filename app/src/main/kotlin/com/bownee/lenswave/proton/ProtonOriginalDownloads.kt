@@ -27,6 +27,11 @@ import javax.inject.Singleton
  * Downloads full-size originals into the encrypted cache. Concurrent requests for the same node
  * share one transfer; requests for different nodes never wait on each other, and a cache hit is
  * answered before any coordination at all.
+ *
+ * Every transfer writes a plaintext file of its own (see [ProtonMediaCache.createOriginalTarget])
+ * and deletes only that file when it fails or is cancelled: a replacement transfer that started
+ * after this one was abandoned owns a different file, and the shared plaintext path is written
+ * by the commit alone, which the cache refuses once the photo has been removed.
  */
 @Singleton
 internal class ProtonOriginalDownloads
@@ -157,7 +162,8 @@ internal class ProtonOriginalDownloads
             nodeUid: String,
             onReady: suspend (ProtonOriginalStream) -> Unit,
         ): File {
-            val (temporary, target) = cache.createOriginalTarget(userId.id, nodeUid)
+            val download = cache.createOriginalTarget(userId.id, nodeUid)
+            val temporary = download.plaintext
             val stream = ProtonOriginalStream(temporary, openCopies)
             return try {
                 onReady(stream)
@@ -167,19 +173,25 @@ internal class ProtonOriginalDownloads
                         stream.updateProgress(progress.bytesCompleted, progress.bytesInTotal)
                     }
                 }
-                stream.complete()
-                // A cache that cannot keep the original is not a failed download: the plaintext
-                // the viewer is already reading stays. A cancellation is one, and goes below.
-                try {
-                    cache.commitOriginal(userId.id, nodeUid, temporary, target).also {
-                        cache.onOriginalStored(userId.id, target)
+                // The commit moves the plaintext to its shared path, so the stream completes with
+                // that path, as a decrypt does. A cache that cannot keep the original is not a
+                // failed download: the plaintext the viewer is already reading stays where it is.
+                // A cancellation is one, and so is a photo trashed meanwhile; both go below.
+                val committed =
+                    try {
+                        cache.commitOriginal(userId.id, nodeUid, download).also {
+                            cache.onOriginalStored(userId.id, download.encrypted)
+                        }
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (error: ProtonOriginalRemovedException) {
+                        throw error
+                    } catch (error: Throwable) {
+                        LenswaveDiagnostics.reportFailure(LenswaveOperation.ORIGINAL_CACHE_STORE, error)
+                        temporary
                     }
-                } catch (error: CancellationException) {
-                    throw error
-                } catch (error: Throwable) {
-                    LenswaveDiagnostics.reportFailure(LenswaveOperation.ORIGINAL_CACHE_STORE, error)
-                    temporary
-                }
+                stream.complete(committed)
+                committed
             } catch (error: CancellationException) {
                 stream.fail(error)
                 temporary.delete()
@@ -207,13 +219,14 @@ internal class ProtonOriginalDownloads
             nodeUid: String,
         ): File {
             cache.readOriginal(userId.id, nodeUid)?.let { return it }
-            val (temporary, target) = cache.createOriginalTarget(userId.id, nodeUid)
+            val download = cache.createOriginalTarget(userId.id, nodeUid)
+            val temporary = download.plaintext
             return try {
                 FileOutputStream(temporary).use { output ->
                     clientProvider.downloadTo(userId, nodeUid, output.channel)
                 }
-                val materialized = cache.commitOriginal(userId.id, nodeUid, temporary, target)
-                cache.onOriginalStored(userId.id, target)
+                val materialized = cache.commitOriginal(userId.id, nodeUid, download)
+                cache.onOriginalStored(userId.id, download.encrypted)
                 materialized
             } catch (error: CancellationException) {
                 temporary.delete()

@@ -405,6 +405,22 @@ internal class ProtonTimelineRepository
             userId: UserId,
             nodeUids: Set<String>,
         ) {
+            markPreviews(userId, nodeUids, available = true)
+        }
+
+        /** A stored preview that no longer decodes is dropped and its photo shown as lacking one, see [markPreviewsAvailable]. */
+        internal fun markPreviewsUnavailable(
+            userId: UserId,
+            nodeUids: Set<String>,
+        ) {
+            markPreviews(userId, nodeUids, available = false)
+        }
+
+        private fun markPreviews(
+            userId: UserId,
+            nodeUids: Set<String>,
+            available: Boolean,
+        ) {
             if (nodeUids.isEmpty()) return
             val current = mutableState.value
             if (current.userId != userId.id || !current.photos.containsAnyNodeUid(nodeUids, timelineIndex)) return
@@ -413,7 +429,7 @@ internal class ProtonTimelineRepository
                 val photos =
                     state.photos.withThumbnailAvailability(
                         nodeUids,
-                        available = true,
+                        available,
                         timelineIndex,
                         hasThumbnail = ProtonGalleryPhoto::hasPreview,
                         copy = { photo, hasPreview -> photo.copy(hasPreview = hasPreview) },

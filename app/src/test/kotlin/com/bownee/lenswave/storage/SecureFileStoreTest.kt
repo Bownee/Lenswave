@@ -171,6 +171,29 @@ class SecureFileStoreTest {
     }
 
     @Test
+    fun `a commit gate that declines leaves the target untouched and no temporary behind`() {
+        val store = store()
+        val directory = temporaryFolder.newFolder("gated")
+        val plaintext = File(directory, "plain.bin").apply { writeBytes(ByteArray(70_000) { it.toByte() }) }
+        val encrypted = File(directory, "encrypted.bin")
+        val decrypted = File(directory, "decrypted.bin")
+
+        store.encryptFile(scope, plaintext, encrypted, "encrypt failed") { _ -> }
+        assertFalse(encrypted.exists())
+        store.encryptFile(scope, plaintext, encrypted, "encrypt failed")
+        assertTrue(encrypted.isFile)
+
+        var offered = 0
+        store.decryptFile(scope, encrypted, decrypted) { _ -> offered++ }
+        assertEquals(1, offered)
+        assertFalse(decrypted.exists())
+        store.decryptFile(scope, encrypted, decrypted) { commit -> commit() }
+        assertArrayEquals(plaintext.readBytes(), decrypted.readBytes())
+        // Only the three files this test named are left: every temporary was removed.
+        assertEquals(setOf("plain.bin", "encrypted.bin", "decrypted.bin"), directory.list()?.toSet())
+    }
+
+    @Test
     fun `a small whole-file legacy record decrypts in one piece`() {
         val store = store()
         val legacy = File(temporaryFolder.root, "legacy")

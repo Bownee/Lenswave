@@ -120,6 +120,9 @@ internal class ProtonPreviewStore
          * bitmap. A [write] that replaced the file meanwhile has already dropped the old bytes'
          * entries, so a bitmap decoded from them is handed out for this one read but never
          * cached: the file version the read saw is checked again under the lock before the put.
+         *
+         * Null means the preview is absent or was just discarded as unreadable; a stored preview
+         * that cannot be decrypted right now throws [ProtonRenditionUnavailableException] instead.
          */
         fun load(
             userId: String,
@@ -139,14 +142,16 @@ internal class ProtonPreviewStore
                 try {
                     secureFiles.read(scope(userId), file)
                 } catch (error: Exception) {
-                    // A provably bad file goes; a Keystore or I/O hiccup keeps it, and the
-                    // viewer simply shows no preview until the next open.
+                    // A provably bad file goes and reads as a miss, which the gateway turns into a
+                    // fresh download. A Keystore or I/O hiccup keeps it and is told apart from a
+                    // miss, as in [ProtonThumbnailStore]: the viewer shows no preview until the
+                    // next open, and the intact file is neither deleted nor downloaded again.
                     if (ProtonSnapshotCorruptionPolicy.isCorrupt(error)) {
                         discardUnreadable(userId, nodeUid, file, version)
-                    } else {
-                        transientReadFailures.report(error)
+                        return null
                     }
-                    return null
+                    transientReadFailures.report(error)
+                    throw ProtonRenditionUnavailableException(error)
                 }
             transientReadFailures.recovered()
             val preview = ProtonPreviewCodec.decode(bytes, targetLongEdge)
