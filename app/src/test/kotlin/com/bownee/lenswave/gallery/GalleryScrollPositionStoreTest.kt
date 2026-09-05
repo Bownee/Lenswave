@@ -36,4 +36,28 @@ class GalleryScrollPositionStoreTest {
         assertEquals(GalleryScrollPosition(12, -9), store.positionFor(first))
         assertEquals(GalleryScrollPosition(27, -2), store.positionFor(second))
     }
+
+    @Test
+    fun aPositionKeepsItsSpanAndFirstPhotoAndIsReplacedWhole() {
+        val store = GalleryScrollPositionStore()
+        val timeline = GalleryDestination.Timeline
+
+        store.save(timeline, GalleryScrollPosition(42, -17, photoColumns = 3, firstVisibleAssetIndex = 9))
+        assertEquals(
+            GalleryScrollPosition(
+                firstVisiblePosition = 42,
+                topOffset = -17,
+                photoColumns = 3,
+                firstVisibleAssetIndex = 9,
+            ),
+            store.positionFor(timeline),
+        )
+
+        // A later save under another span replaces the whole position, unknown span and photo included.
+        store.save(timeline, GalleryScrollPosition(4, 0))
+        val replaced = store.positionFor(timeline)
+        assertEquals(GalleryScrollPosition(4, 0), replaced)
+        assertEquals(GalleryScrollPosition.UNKNOWN_COLUMNS, replaced?.photoColumns)
+        assertNull(replaced?.firstVisibleAssetIndex)
+    }
 }

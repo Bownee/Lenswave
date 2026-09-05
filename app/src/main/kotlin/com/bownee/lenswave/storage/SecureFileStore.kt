@@ -5,6 +5,7 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import com.bownee.lenswave.LenswaveDiagnostics
 import com.bownee.lenswave.LenswaveOperation
+import com.bownee.lenswave.storage.SegmentedEnvelope.requireIntact
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.BufferedInputStream
 import java.io.File
@@ -107,9 +108,23 @@ class SecureFileStore internal constructor(
         bytes: ByteArray,
         failureMessage: String,
     ) {
+        write(scope, file, bytes, failureMessage, fsync = false)
+    }
+
+    /**
+     * [write] with the option to force the record to disk before it is renamed into place, see
+     * [AtomicFileStore.write]; for the small metadata files whose loss is a whole listing.
+     */
+    fun write(
+        scope: String,
+        file: File,
+        bytes: ByteArray,
+        failureMessage: String,
+        fsync: Boolean,
+    ) {
         val key = dataKey(scope)
         val payload = encrypt(key, bytes)
-        AtomicFileStore.write(file, payload, failureMessage) { commit -> commitWith(scope, key, commit) }
+        AtomicFileStore.write(file, payload, failureMessage, fsync) { commit -> commitWith(scope, key, commit) }
     }
 
     fun writeText(
@@ -117,8 +132,9 @@ class SecureFileStore internal constructor(
         file: File,
         text: String,
         failureMessage: String,
+        fsync: Boolean = false,
     ) {
-        write(scope, file, text.toByteArray(Charsets.UTF_8), failureMessage)
+        write(scope, file, text.toByteArray(Charsets.UTF_8), failureMessage, fsync)
     }
 
     /**
@@ -206,8 +222,8 @@ class SecureFileStore internal constructor(
      * end of file and commit a truncated plaintext. The record is therefore read into a buffer
      * sized from the file (a growing stream copy peaked at several times the record) and
      * finished explicitly, so a bad tag throws, and only up to [LEGACY_FILE_LIMIT_BYTES]: a
-     * larger legacy original is discarded through [LegacyFileTooLargeException], an
-     * [IllegalArgumentException] its callers already treat as a corrupt file and fetch again.
+     * larger legacy original is discarded through [LegacyFileTooLargeException], a
+     * [CorruptEnvelopeException] its callers already treat as a corrupt file and fetch again.
      */
     private fun decryptLegacyFile(
         scope: String,
@@ -219,9 +235,11 @@ class SecureFileStore internal constructor(
         if (encrypted.length() > LEGACY_FILE_LIMIT_BYTES) throw LegacyFileTooLargeException()
         val cipher = readLegacyHeader(scope, version, rawInput)
         val ciphertextBytes = encrypted.length() - (MAGIC.size + 2 + cipher.iv.size)
-        require(ciphertextBytes >= TAG_BITS / 8) { "Encrypted file is truncated" }
+        requireIntact(ciphertextBytes >= TAG_BITS / 8) { "Encrypted file is truncated" }
         val ciphertext = ByteArray(ciphertextBytes.toInt())
-        require(SegmentedEnvelope.readFully(rawInput, ciphertext) == ciphertext.size) { "Encrypted file is truncated" }
+        requireIntact(
+            SegmentedEnvelope.readFully(rawInput, ciphertext) == ciphertext.size,
+        ) { "Encrypted file is truncated" }
         val plaintext = cipher.doFinal(ciphertext)
         output.write(plaintext)
         return plaintext.size.toLong()
@@ -254,7 +272,7 @@ class SecureFileStore internal constructor(
     }
 
     private class LegacyFileTooLargeException :
-        IllegalArgumentException("Legacy whole-file original is too large to decrypt in memory")
+        CorruptEnvelopeException("Legacy whole-file original is too large to decrypt in memory")
 
     /** The name under which [scope]'s wrapped key is stored; a hash, so safe to keep beside the data. */
     fun keyAlias(scope: String): String = alias(scope)
@@ -318,11 +336,11 @@ class SecureFileStore internal constructor(
     /** Checks the magic and returns the format version byte that follows it. */
     private fun readMagic(rawInput: InputStream): Byte {
         val magic = ByteArray(MAGIC.size)
-        require(rawInput.read(magic) == magic.size && magic.contentEquals(MAGIC)) {
+        requireIntact(rawInput.read(magic) == magic.size && magic.contentEquals(MAGIC)) {
             "Encrypted file header is invalid"
         }
         val version = rawInput.read()
-        require(version >= 0) { "Encrypted file is truncated" }
+        requireIntact(version >= 0) { "Encrypted file is truncated" }
         return version.toByte()
     }
 
@@ -333,9 +351,9 @@ class SecureFileStore internal constructor(
     ): Cipher {
         val key = keyForVersion(scope, version)
         val ivSize = rawInput.read()
-        require(ivSize in 12..16) { "Encrypted file IV is invalid" }
+        requireIntact(ivSize in 12..16) { "Encrypted file IV is invalid" }
         val iv = ByteArray(ivSize)
-        require(rawInput.read(iv) == ivSize) { "Encrypted file is truncated" }
+        requireIntact(rawInput.read(iv) == ivSize) { "Encrypted file is truncated" }
         return Cipher.getInstance(TRANSFORMATION).apply {
             init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_BITS, iv))
         }
@@ -362,13 +380,13 @@ class SecureFileStore internal constructor(
         scope: String,
         payload: ByteArray,
     ): ByteArray {
-        require(payload.size >= MAGIC.size + 2) { "Encrypted file is truncated" }
+        requireIntact(payload.size >= MAGIC.size + 2) { "Encrypted file is truncated" }
         val buffer = ByteBuffer.wrap(payload)
         val magic = ByteArray(MAGIC.size).also(buffer::get)
-        require(magic.contentEquals(MAGIC)) { "Encrypted file header is invalid" }
+        requireIntact(magic.contentEquals(MAGIC)) { "Encrypted file header is invalid" }
         val key = keyForVersion(scope, buffer.get())
         val ivSize = buffer.get().toInt() and 0xff
-        require(ivSize in 12..16 && buffer.remaining() > ivSize) { "Encrypted file IV is invalid" }
+        requireIntact(ivSize in 12..16 && buffer.remaining() > ivSize) { "Encrypted file IV is invalid" }
         val iv = ByteArray(ivSize).also(buffer::get)
         val cipher = Cipher.getInstance(TRANSFORMATION)
         cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_BITS, iv))
@@ -384,7 +402,7 @@ class SecureFileStore internal constructor(
         when (version) {
             VERSION -> dataKey(scope)
             LEGACY_VERSION -> keystoreKey(scope)
-            else -> throw IllegalArgumentException("Encrypted file version is unsupported")
+            else -> throw CorruptEnvelopeException("Encrypted file version is unsupported")
         }
 
     /** Best effort: a file that cannot be rewritten simply stays in the slow legacy format. */
@@ -469,11 +487,17 @@ class SecureFileStore internal constructor(
             // deletes both, and deleting a key that is not there is nothing), whereas a key
             // without its marker, left by a crash between the two writes, is one [keyAliases]
             // never lists and no cleaner ever removes. Best effort still: a key whose marker
-            // cannot be written is a working key.
+            // cannot be written is a working key. Both are forced to disk: a wrapped key file
+            // that survives a power loss empty would fail every read of the scope for good.
             runCatching {
-                AtomicFileStore.write(familyFile(alias(scope)), scopeFamily(scope), "Could not record the key family")
+                AtomicFileStore.write(
+                    familyFile(alias(scope)),
+                    scopeFamily(scope),
+                    "Could not record the key family",
+                    fsync = true,
+                )
             }
-            AtomicFileStore.write(file, wrap(scope, bytes), "Could not store data key")
+            AtomicFileStore.write(file, wrap(scope, bytes), "Could not store data key", fsync = true)
         }
 
     private fun wrap(
@@ -495,6 +519,10 @@ class SecureFileStore internal constructor(
         scope: String,
         wrapped: ByteArray,
     ): ByteArray {
+        // An empty or headerless file (a write that died before its bytes landed) must read as
+        // corrupt, not as a transient failure: only an IllegalArgumentException reaches the
+        // discard-and-mint path, and a BufferUnderflowException would fail the scope forever.
+        require(wrapped.size > 1) { "Wrapped data key is empty" }
         val buffer = ByteBuffer.wrap(wrapped)
         val ivSize = buffer.get().toInt() and 0xff
         require(ivSize in 12..16 && buffer.remaining() > ivSize) { "Wrapped data key is invalid" }

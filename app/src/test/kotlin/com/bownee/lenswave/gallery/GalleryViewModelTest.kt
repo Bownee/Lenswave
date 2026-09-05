@@ -224,6 +224,89 @@ class GalleryViewModelTest {
         }
 
     @Test
+    fun `the span and first visible photo travel with the saved scroll position`() =
+        runTest(dispatcher) {
+            val viewModel = connectedViewModel()
+
+            viewModel.saveScrollPosition(
+                GalleryDestination.Timeline,
+                GalleryScrollPosition(
+                    firstVisiblePosition = 5,
+                    topOffset = -9,
+                    photoColumns = 4,
+                    firstVisibleAssetIndex = 12,
+                ),
+            )
+
+            assertEquals(5, savedState.get<Int>("gallery.scroll-first-visible"))
+            assertEquals(-9, savedState.get<Int>("gallery.scroll-top-offset"))
+            assertEquals(4, savedState.get<Int>("gallery.scroll-columns"))
+            assertEquals(12, savedState.get<Int>("gallery.scroll-asset-index"))
+
+            // A page without a photo on screen (a header at the top of an empty day, or the library) has no photo index.
+            viewModel.saveScrollPosition(
+                GalleryDestination.Timeline,
+                GalleryScrollPosition(
+                    firstVisiblePosition = 0,
+                    topOffset = 0,
+                    photoColumns = 4,
+                    firstVisibleAssetIndex = null,
+                ),
+            )
+            assertTrue(
+                "the key is written, not left over from the earlier save",
+                savedState.contains("gallery.scroll-asset-index"),
+            )
+            assertNull(savedState.get<Int>("gallery.scroll-asset-index"))
+            assertEquals(4, savedState.get<Int>("gallery.scroll-columns"))
+
+            viewModel.selectDestination(GalleryDestination.Tag(ProtonMediaTag.VIDEOS))
+            runCurrent()
+            assertFalse("a page never scrolled drops every scroll key", savedState.contains("gallery.scroll-columns"))
+            assertFalse(savedState.contains("gallery.scroll-asset-index"))
+            assertFalse(savedState.contains("gallery.scroll-first-visible"))
+            assertFalse(savedState.contains("gallery.scroll-top-offset"))
+        }
+
+    @Test
+    fun `a restored view model reads the span and photo index back, or marks them unknown for an older state`() =
+        runTest(dispatcher) {
+            savedState["gallery.destination"] = "proton-timeline"
+            savedState["gallery.scroll-first-visible"] = 7
+            savedState["gallery.scroll-top-offset"] = -3
+            savedState["gallery.scroll-columns"] = 6
+            savedState["gallery.scroll-asset-index"] = 30
+
+            assertEquals(
+                GalleryScrollPosition(
+                    firstVisiblePosition = 7,
+                    topOffset = -3,
+                    photoColumns = 6,
+                    firstVisibleAssetIndex = 30,
+                ),
+                viewModel().scrollPositions.positionFor(GalleryDestination.Timeline),
+            )
+
+            // A state written before the span was saved carries only the position and offset.
+            savedState.remove<Int>("gallery.scroll-columns")
+            savedState.remove<Int>("gallery.scroll-asset-index")
+            val legacy = viewModel().scrollPositions.positionFor(GalleryDestination.Timeline)
+            assertEquals(
+                GalleryScrollPosition(
+                    firstVisiblePosition = 7,
+                    topOffset = -3,
+                    photoColumns = GalleryScrollPosition.UNKNOWN_COLUMNS,
+                    firstVisibleAssetIndex = null,
+                ),
+                legacy,
+            )
+
+            // A position without an offset is no position at all.
+            savedState.remove<Int>("gallery.scroll-top-offset")
+            assertNull(viewModel().scrollPositions.positionFor(GalleryDestination.Timeline))
+        }
+
+    @Test
     fun `the selection is saved to the state and cleared by a navigation`() =
         runTest(dispatcher) {
             val viewModel = connectedViewModel()
@@ -526,7 +609,7 @@ class GalleryViewModelTest {
             runCurrent()
 
             assertTrue(viewModel.uiState.value.isRefreshing)
-            assertEquals(listOf("syncTimeline:u:true"), events)
+            assertEquals(listOf("clearPaused:u", "syncTimeline:u:true"), events)
 
             viewModel.requestRefresh()
             runCurrent()
@@ -542,7 +625,17 @@ class GalleryViewModelTest {
             runCurrent()
 
             assertFalse(viewModel.uiState.value.isRefreshing)
-            assertEquals(listOf("syncTimeline:u:true", "syncTimeline:u:true", "enqueue:u", "enqueue:u"), events)
+            assertEquals(
+                listOf(
+                    "clearPaused:u",
+                    "syncTimeline:u:true",
+                    "clearPaused:u",
+                    "syncTimeline:u:true",
+                    "enqueue:u",
+                    "enqueue:u",
+                ),
+                events,
+            )
 
             events.clear()
             viewModel.refreshAfterMutation()
@@ -813,6 +906,141 @@ class GalleryViewModelTest {
             periodic.cancel()
         }
 
+    @Test
+    fun `a burst of repository states is mapped once, to the latest`() =
+        runTest(dispatcher) {
+            val viewModel = connectedViewModel(collect = false)
+            val states = mutableListOf<GalleryUiState>()
+            backgroundScope.launch { viewModel.uiState.collect { states += it } }
+            runCurrent()
+            states.clear()
+
+            reader.state.value = loadedTimeline("p1", "p2")
+            reader.state.value = loadedTimeline("p1", "p2", "p3")
+            reader.state.value = loadedTimeline("p1", "p2", "p3", "p4")
+            runCurrent()
+
+            assertEquals(
+                "the intermediate listings never reach the collector",
+                listOf(listOf("p1", "p2", "p3", "p4")),
+                states.map { state -> state.visibleAssets.map(GalleryAsset::nodeUid) },
+            )
+        }
+
+    @Test
+    fun `mutation outcomes nobody collects keep the latest sixteen`() =
+        runTest(dispatcher) {
+            val viewModel = connectedViewModel()
+            viewModel.trashPhotos(USER, listOf("p1"))
+            runCurrent()
+            // Sixteen refusals while the first trash is in flight, then its own outcome: seventeen events.
+            repeat(16) { viewModel.trashPhotos(USER, listOf("p2")) }
+            deletionExecutor.held.single().complete(Unit)
+            runCurrent()
+
+            val received = mutableListOf<GalleryMutationEvent>()
+            backgroundScope.launch { viewModel.mutationEvents.collect { received += it } }
+            runCurrent()
+
+            assertEquals(16, received.size)
+            assertEquals(
+                "the oldest refusal was dropped, not the outcome",
+                15,
+                received.count {
+                    it ==
+                        GalleryMutationEvent.TrashFailed
+                },
+            )
+            assertEquals(GalleryMutationEvent.Trashed(successfulCount = 1, failedCount = 0), received.last())
+        }
+
+    @Test
+    fun `navigateUp returns a collection to its parent and does nothing at a tab root`() =
+        runTest(dispatcher) {
+            val viewModel = connectedViewModel()
+            viewModel.selectDestination(GalleryDestination.Tag(ProtonMediaTag.VIDEOS))
+            runCurrent()
+            events.clear()
+
+            viewModel.navigateUp()
+            runCurrent()
+
+            assertEquals(GalleryDestination.Timeline, viewModel.uiState.value.destination)
+            assertEquals(listOf("syncTimeline:u:false", "enqueue:u"), events)
+            events.clear()
+
+            viewModel.navigateUp()
+            runCurrent()
+
+            assertEquals(GalleryDestination.Timeline, viewModel.uiState.value.destination)
+            assertTrue("the timeline has no parent: $events", events.isEmpty())
+        }
+
+    @Test
+    fun `resumeThumbnailDownloads resumes the scheduler for the signed-in user only`() =
+        runTest(dispatcher) {
+            val signedOut = viewModel()
+            runCurrent()
+            signedOut.resumeThumbnailDownloads()
+            runCurrent()
+            assertTrue("no account, nothing to resume: $events", events.isEmpty())
+
+            val viewModel = connectedViewModel()
+            viewModel.resumeThumbnailDownloads()
+            runCurrent()
+            assertEquals(listOf("resume:u"), events)
+        }
+
+    @Test
+    fun `a manual refresh lifts the download pause, a quiet one does not`() =
+        runTest(dispatcher) {
+            val viewModel = connectedViewModel()
+
+            viewModel.requestRefresh(manual = true)
+            runCurrent()
+            assertEquals(listOf("clearPaused:u", "syncTimeline:u:true", "enqueue:u"), events)
+            events.clear()
+
+            viewModel.refreshAfterMutation()
+            runCurrent()
+            assertEquals(listOf("syncTimeline:u:false", "enqueue:u"), events)
+        }
+
+    @Test
+    fun `a tag page syncs its tag, and the timeline first when that has not loaded`() =
+        runTest(dispatcher) {
+            val viewModel = connectedViewModel()
+
+            viewModel.selectDestination(GalleryDestination.Tag(ProtonMediaTag.VIDEOS))
+            runCurrent()
+            assertEquals(listOf("syncTag:VIDEOS:false", "enqueue:u"), events)
+            events.clear()
+
+            reader.state.value = reader.state.value.copy(hasLoaded = false)
+            runCurrent()
+            viewModel.requestRefresh(manual = true)
+            runCurrent()
+            assertEquals(
+                listOf("clearPaused:u", "syncTimeline:u:true", "syncTag:VIDEOS:true", "enqueue:u"),
+                events,
+            )
+        }
+
+    @Test
+    fun `the library page syncs the album list`() =
+        runTest(dispatcher) {
+            val viewModel = connectedViewModel()
+            viewModel.selectDestination(GalleryDestination.Library)
+            runCurrent()
+            events.clear()
+
+            viewModel.requestRefresh(manual = true)
+            runCurrent()
+
+            assertEquals(listOf("clearPaused:u", "syncAlbums:u:true", "enqueue:u"), events)
+            assertFalse(viewModel.uiState.value.isRefreshing)
+        }
+
     private fun viewModel() =
         GalleryViewModel(
             galleryText = text,
@@ -987,6 +1215,10 @@ class GalleryViewModelTest {
 
         override suspend fun cancelAndAwait(userId: UserId) {
             events += "cancel:${userId.id}"
+        }
+
+        override fun clearPaused(userId: UserId) {
+            events += "clearPaused:${userId.id}"
         }
     }
 

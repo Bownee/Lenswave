@@ -75,7 +75,7 @@ internal object SegmentedEnvelope {
      * Decrypts [input] to [output], writing each segment only after its tag verified; returns the
      * plaintext byte count. [shouldContinue] is asked before every segment; once it returns false
      * the decrypt stops with a [CopyInterruptedException] and only whole verified segments have
-     * been written. Any damage to the file surfaces as [IllegalArgumentException] or
+     * been written. Any damage to the file surfaces as [CorruptEnvelopeException] or
      * [javax.crypto.AEADBadTagException]. [onBytesWritten] is told the plaintext total after
      * every segment has been written, so a reader can follow the file as it grows.
      */
@@ -87,9 +87,9 @@ internal object SegmentedEnvelope {
         shouldContinue: () -> Boolean = { true },
     ): Long {
         val header = ByteArray(Int.SIZE_BYTES + NONCE_BYTES)
-        require(readFully(input, header) == header.size) { "Encrypted file is truncated" }
+        requireIntact(readFully(input, header) == header.size) { "Encrypted file is truncated" }
         val segmentBytes = ByteBuffer.wrap(header).int
-        require(segmentBytes in 1..MAX_SEGMENT_BYTES) { "Encrypted file segment size is invalid" }
+        requireIntact(segmentBytes in 1..MAX_SEGMENT_BYTES) { "Encrypted file segment size is invalid" }
         val nonce = header.copyOfRange(Int.SIZE_BYTES, header.size)
         val cipher = Cipher.getInstance(TRANSFORMATION)
         val ciphertext = ByteArray(segmentBytes + TAG_BYTES)
@@ -100,7 +100,7 @@ internal object SegmentedEnvelope {
             if (!shouldContinue()) throw CopyInterruptedException()
             val read = readFully(input, ciphertext)
             val final = read < ciphertext.size
-            require(!final || read >= TAG_BYTES) { "Encrypted file is truncated" }
+            requireIntact(!final || read >= TAG_BYTES) { "Encrypted file is truncated" }
             cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_BITS, segmentIv(nonce, index)))
             cipher.updateAAD(associatedData(segmentBytes, index, final))
             val produced = cipher.doFinal(ciphertext, 0, read, plaintext, 0)
@@ -163,6 +163,14 @@ internal object SegmentedEnvelope {
         return index + 1
     }
 
+    /** A format check on stored bytes: failing it proves the file is damaged, unlike a `require` on an argument. */
+    inline fun requireIntact(
+        condition: Boolean,
+        message: () -> String,
+    ) {
+        if (!condition) throw CorruptEnvelopeException(message())
+    }
+
     /** Fills [buffer] unless the stream ends first; returns the bytes read. */
     fun readFully(
         input: InputStream,
@@ -180,6 +188,16 @@ internal object SegmentedEnvelope {
     private const val TRANSFORMATION = "AES/GCM/NoPadding"
     private const val TAG_BITS = TAG_BYTES * 8
 }
+
+/**
+ * A stored envelope whose bytes do not fit the format: a wrong magic, a truncated header or body,
+ * an impossible segment or IV size, a version this build does not know, or a legacy record too
+ * large to verify. Unlike any other [IllegalArgumentException], it proves the file itself is bad,
+ * so readers may discard the file; an argument check that fails is a bug, not corruption.
+ */
+open class CorruptEnvelopeException internal constructor(
+    message: String,
+) : IllegalArgumentException(message)
 
 /** A [CancellationException] so a coroutine that cancelled the decrypt sees ordinary cancellation. */
 internal class CopyInterruptedException : CancellationException("Copy interrupted before completion")

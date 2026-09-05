@@ -9,6 +9,7 @@ import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.lifecycleScope
 import com.bownee.lenswave.BuildConfig
 import com.bownee.lenswave.R
+import com.bownee.lenswave.gallery.GallerySettingsMenuPolicy.Item
 import com.bownee.lenswave.viewer.ViewerPrivacySettings
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -42,47 +43,53 @@ internal class GallerySettingsPresenter(
         popup?.dismiss()
         popup =
             PopupMenu(activity, anchor).apply {
-                if (currentUserId() == null) {
-                    menu.add(Menu.NONE, SETTINGS_CONNECT_PROTON, 0, R.string.connect_proton)
-                } else {
-                    menu.add(Menu.NONE, SETTINGS_DISCONNECT_PROTON, 0, R.string.disconnect_proton)
+                val entries =
+                    GallerySettingsMenuPolicy.entries(
+                        connected = currentUserId() != null,
+                        blockScreenshots = privacySettings.blockScreenshots,
+                    )
+                entries.forEachIndexed { order, entry ->
+                    val title =
+                        if (entry.item == Item.VERSION) {
+                            activity.getString(entry.item.titleRes, BuildConfig.VERSION_NAME)
+                        } else {
+                            activity.getString(entry.item.titleRes)
+                        }
+                    // Ids start at 1: the first ordinal would be Menu.NONE, which the menu does not treat as an item id.
+                    menu.add(Menu.NONE, entry.item.ordinal + 1, order, title).apply {
+                        isEnabled = entry.enabled
+                        entry.checked?.let { checked ->
+                            isCheckable = true
+                            isChecked = checked
+                        }
+                    }
                 }
-                menu.add(Menu.NONE, SETTINGS_PRIVACY, 1, R.string.privacy_and_data)
-                menu.add(Menu.NONE, SETTINGS_BLOCK_SCREENSHOTS, 2, R.string.block_screenshots).apply {
-                    isCheckable = true
-                    isChecked = privacySettings.blockScreenshots
-                }
-                menu
-                    .add(
-                        Menu.NONE,
-                        Menu.NONE,
-                        3,
-                        activity.getString(R.string.app_version, BuildConfig.VERSION_NAME),
-                    ).isEnabled = false
                 setOnMenuItemClickListener { item ->
-                    when (item.itemId) {
-                        SETTINGS_CONNECT_PROTON -> {
+                    when (Item.entries.getOrNull(item.itemId - 1)) {
+                        Item.CONNECT_PROTON -> {
                             onConnectProton()
                         }
 
-                        SETTINGS_DISCONNECT_PROTON -> {
+                        Item.DISCONNECT_PROTON -> {
                             show(
                                 DisconnectProtonDialogFragment(),
                                 DisconnectProtonDialogFragment.TAG,
                             )
                         }
 
-                        SETTINGS_PRIVACY -> {
+                        Item.PRIVACY -> {
                             showPrivacySettings()
                         }
 
-                        SETTINGS_BLOCK_SCREENSHOTS -> {
+                        Item.BLOCK_SCREENSHOTS -> {
                             // Applied now, not on the next resume: a popup toggle never pauses the
                             // activity, and pressing Home right after enabling it would otherwise
                             // store an unsecured recents snapshot.
                             privacySettings.blockScreenshots = !item.isChecked
                             onScreenshotPolicyChanged()
                         }
+
+                        Item.VERSION, null -> {}
                     }
                     true
                 }
@@ -107,12 +114,7 @@ internal class GallerySettingsPresenter(
 
     /** What the view model's telemetry write came to; the write itself outlives this activity. */
     fun showTelemetryOutcome(saved: Boolean) {
-        Toast
-            .makeText(
-                activity,
-                if (saved) R.string.privacy_setting_saved else R.string.privacy_setting_failed,
-                Toast.LENGTH_LONG,
-            ).show()
+        Toast.makeText(activity, GallerySettingsMenuPolicy.telemetryOutcomeText(saved), Toast.LENGTH_LONG).show()
     }
 
     /** The answer from [DisconnectProtonDialogFragment]. */
@@ -158,12 +160,5 @@ internal class GallerySettingsPresenter(
 
             GalleryDialogPromptPolicy.Decision.DROP -> Unit
         }
-    }
-
-    private companion object {
-        const val SETTINGS_CONNECT_PROTON = 1
-        const val SETTINGS_DISCONNECT_PROTON = 2
-        const val SETTINGS_PRIVACY = 3
-        const val SETTINGS_BLOCK_SCREENSHOTS = 4
     }
 }

@@ -741,6 +741,11 @@ internal class ProtonPhotoCache
             return referenced
         }
 
+        /**
+         * Every listing, queue and sync stamp goes through here, forced to disk before the rename:
+         * a power loss right after the move could otherwise leave the file renamed but empty, and
+         * an empty queue or index is a miss the app has to rebuild from the server.
+         */
         private fun writeAtomically(
             userId: String,
             target: File,
@@ -748,14 +753,19 @@ internal class ProtonPhotoCache
             failureMessage: String,
         ) {
             recordKeyAlias(userId)
-            secureFiles.writeText(scope(userId), target, contents, failureMessage)
+            secureFiles.writeText(scope(userId), target, contents, failureMessage, fsync = true)
         }
 
         /** Leaves the data-key alias beside the user's metadata so [retainOnlyUser] can delete the key. */
         private fun recordKeyAlias(userId: String) {
             val marker = File(userDirectory(userId), KEY_ALIAS_FILE)
             if (marker.isFile) return
-            AtomicFileStore.write(marker, secureFiles.keyAlias(scope(userId)), "Could not record the cache key alias")
+            AtomicFileStore.write(
+                marker,
+                secureFiles.keyAlias(scope(userId)),
+                "Could not record the cache key alias",
+                fsync = true,
+            )
         }
 
         private fun readText(

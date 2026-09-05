@@ -47,6 +47,17 @@ class SecureFileStoreTest {
     }
 
     @Test
+    fun `a synced text write round trips like an unsynced one`() {
+        val store = store()
+        val target = File(temporaryFolder.root, "queue.json")
+
+        store.writeText(scope, target, "[]", "write failed", fsync = true)
+
+        assertEquals("[]", store.readText(scope, target))
+        assertFalse(temporaryFolder.root.walk().any { file -> file.name.endsWith(".part") })
+    }
+
+    @Test
     fun `a wrapped key the keystore can no longer unwrap is discarded and its files become unreadable`() {
         val store = store()
         val target = File(temporaryFolder.root, "payload.bin")
@@ -60,6 +71,22 @@ class SecureFileStoreTest {
 
         assertTrue(reported.single() is AEADBadTagException)
         // The scope works again with a fresh key; only what the old key protected is lost.
+        restarted.write(scope, target, "after".toByteArray(), "write failed")
+        assertArrayEquals("after".toByteArray(), restarted.read(scope, target))
+    }
+
+    @Test
+    fun `an empty wrapped key file is discarded and minted afresh instead of failing forever`() {
+        val store = store()
+        val target = File(temporaryFolder.root, "payload.bin")
+        store.write(scope, target, "before".toByteArray(), "write failed")
+        // A wrapped key whose bytes never landed: the file exists but is empty.
+        File(File(temporaryFolder.root, "keys"), "${store.keyAlias(scope)}.key").writeBytes(ByteArray(0))
+        val restarted = store()
+
+        assertThrows(AEADBadTagException::class.java) { restarted.read(scope, target) }
+
+        assertTrue(reported.single() is IllegalArgumentException)
         restarted.write(scope, target, "after".toByteArray(), "write failed")
         assertArrayEquals("after".toByteArray(), restarted.read(scope, target))
     }
@@ -243,7 +270,7 @@ class SecureFileStoreTest {
             encrypted.readBytes().copyOf(4 + 1 + Int.SIZE_BYTES + SegmentedEnvelope.NONCE_BYTES + fullSegments),
         )
         announced.clear()
-        assertThrows(IllegalArgumentException::class.java) {
+        assertThrows(CorruptEnvelopeException::class.java) {
             store.decryptFile(scope, encrypted, decrypted, onStarted = {
                 _,
                 expectedBytes,
@@ -285,7 +312,7 @@ class SecureFileStoreTest {
         // The header and a body shorter than one GCM tag: nothing to verify.
         legacy.writeBytes(legacy.readBytes().copyOf(4 + 2 + 12 + 8))
 
-        assertThrows(IllegalArgumentException::class.java) { store.decryptFile(scope, legacy, decrypted) }
+        assertThrows(CorruptEnvelopeException::class.java) { store.decryptFile(scope, legacy, decrypted) }
 
         assertFalse(decrypted.exists())
         assertTrue(legacy.isFile)
@@ -305,7 +332,7 @@ class SecureFileStoreTest {
             repeat(5) { output.write(chunk) }
         }
 
-        assertThrows(IllegalArgumentException::class.java) { store.decryptFile(scope, legacy, decrypted) }
+        assertThrows(CorruptEnvelopeException::class.java) { store.decryptFile(scope, legacy, decrypted) }
 
         assertFalse(legacy.exists())
         assertFalse(decrypted.exists())

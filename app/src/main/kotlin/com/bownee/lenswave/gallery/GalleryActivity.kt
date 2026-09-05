@@ -39,6 +39,7 @@ import com.bownee.lenswave.gallery.GalleryNotificationPermissionPrompter
 import com.bownee.lenswave.gallery.GalleryRowSet
 import com.bownee.lenswave.gallery.GalleryScrollPosition
 import com.bownee.lenswave.gallery.GallerySettingsPresenter
+import com.bownee.lenswave.gallery.GallerySpanPolicy
 import com.bownee.lenswave.gallery.GalleryThumbnailCacheIdentity
 import com.bownee.lenswave.gallery.GalleryThumbnailCachePolicy
 import com.bownee.lenswave.gallery.GalleryUiState
@@ -124,6 +125,10 @@ class GalleryActivity :
             }
         }
     private var timeChangeReceiverRegistered = false
+
+    // Photos per grid row, from the list width (see GallerySpanPolicy); the display width stands in until the list is laid out.
+    private val photoColumns = MutableStateFlow(GallerySpanPolicy.MIN_COLUMNS)
+    private var renderedColumns = GallerySpanPolicy.MIN_COLUMNS
     private var pendingScrollRestore: GalleryDestination? = null
     private var pendingSelectionRestore = false
     private var viewerLaunched = false
@@ -150,7 +155,12 @@ class GalleryActivity :
         super.onCreate(savedInstanceState)
         // Set before any content: the thumbnails are the same photos the viewer keeps out of screenshots.
         applyScreenshotPolicy()
-        updatePresenter = GalleryUpdatePresenter(activity = this, appUpdateChecker = appUpdateChecker)
+        updatePresenter =
+            GalleryUpdatePresenter(
+                host = GalleryUpdatePresenter.ActivityHost(this),
+                updates = GalleryUpdatePresenter.CheckerUpdates(appUpdateChecker),
+                scope = lifecycleScope,
+            )
         updatePresenter.restore(savedInstanceState)
         configureEdgeToEdgeWindow()
         authCoordinator =
@@ -169,7 +179,11 @@ class GalleryActivity :
                 onDisconnectProton = viewModel::disconnectProton,
                 onScreenshotPolicyChanged = ::applyScreenshotPolicy,
             )
-        deletionCoordinator = GalleryDeletionCoordinator(activity = this)
+        deletionCoordinator =
+            GalleryDeletionCoordinator(
+                host = GalleryDeletionCoordinator.ActivityHost(this),
+                text = AndroidGalleryText(resources),
+            )
         buildInterface()
         onBackPressedDispatcher.addCallback(
             this,
@@ -275,16 +289,40 @@ class GalleryActivity :
             )
         setContentView(screen.root)
         screen.onHeaderHeightChanged = { updateFastScrollTrack() }
+        observeListWidth()
 
         applySystemInsets()
         updateNavigationControls()
     }
 
+    /**
+     * The span follows the list width: a rotation, a tablet or a multi-window resize regroups the
+     * photo rows through the render below instead of stretching the portrait grid.
+     */
+    private fun observeListWidth() {
+        val density = resources.displayMetrics.density
+        // Both measures are the list width net of its horizontal padding; the display width stands in
+        // for the list width until the first layout.
+        photoColumns.value =
+            GallerySpanPolicy.columns(
+                resources.displayMetrics.widthPixels - list.paddingLeft - list.paddingRight,
+                density,
+            )
+        list.addOnLayoutChangeListener { view, left, _, right, _, _, _, _, _ ->
+            val width = right - left - view.paddingLeft - view.paddingRight
+            if (width <= 0) return@addOnLayoutChangeListener
+            // The span, not the raw width, decides: a padding-only change re-evaluates too.
+            val columns = GallerySpanPolicy.columns(width, density)
+            if (columns != photoColumns.value) photoColumns.value = columns
+        }
+    }
+
     private fun observeGalleryState() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                combine(viewModel.uiState, groupingGeneration) { state, generation -> state to generation }
-                    .collectLatest { (state, generation) -> render(state, generation) }
+                combine(viewModel.uiState, groupingGeneration, photoColumns) { state, generation, columns ->
+                    Triple(state, generation, columns)
+                }.collectLatest { (state, generation, columns) -> render(state, generation, columns) }
             }
         }
         lifecycleScope.launch {
@@ -340,25 +378,35 @@ class GalleryActivity :
     private suspend fun render(
         state: GalleryUiState,
         grouping: Int,
+        columns: Int,
     ) {
         val destinationChanged = renderedDestination != state.destination
+        // Only photo rows are chunked by span; the library page is not regrouped for a width change.
+        val spanChanged = renderedColumns != columns && state.content is GalleryContent.Photos
         val contentChanged =
-            GalleryRenderPolicy.contentChanged(renderedContent, state.content) || renderedGrouping != grouping
+            GalleryRenderPolicy.contentChanged(renderedContent, state.content) ||
+                renderedGrouping != grouping ||
+                spanChanged
         screen.setRefreshing(state.isRefreshing)
         notificationPermissionPrompter.requestIfNeeded(protonConnected = state.isProtonConnected)
         updateThumbnailCacheIdentity(state.currentUserId)
         if (contentChanged || destinationChanged) {
-            val rows = buildRows(state.content, grouping)
+            val rows = buildRows(state.content, grouping, columns)
             if (destinationChanged) {
                 // The list still shows the previous page here, so its position can be captured.
                 saveScrollPosition()
                 pendingScrollRestore = state.destination
                 pendingSelectionRestore = true
+            } else if (spanChanged) {
+                // The position is taken under the old span and restored through its first visible photo.
+                saveScrollPosition()
+                pendingScrollRestore = state.destination
             }
             adapter.submitRows(rows)
             renderedDestination = state.destination
             renderedContent = state.content
             renderedGrouping = grouping
+            renderedColumns = columns
         }
         currentUiState = state
         if (contentChanged || destinationChanged) {
@@ -411,6 +459,7 @@ class GalleryActivity :
     private suspend fun buildRows(
         content: GalleryContent,
         grouping: Int,
+        columns: Int,
     ): GalleryRowSet =
         when (content) {
             is GalleryContent.Library -> {
@@ -425,9 +474,11 @@ class GalleryActivity :
                     GalleryRowSet.of(
                         GalleryGrouping.createRows(
                             content.assets,
+                            columns = columns,
                             unknownDateLabel = unknownDateLabel,
                             dayLabels = dayLabels,
                         ),
+                        photoColumns = columns,
                     )
                 }
             }
@@ -601,9 +652,11 @@ class GalleryActivity :
         if (adapter.count == 0 && state.emptyState == null) return
 
         val savedPosition = viewModel.scrollPositions.positionFor(destination)
-        pendingScrollRestore = null
+        // Cleared only when the posted scroll runs: a span change landing in between must not
+        // capture the list's pre-restore position against the regrouped rows (see saveScrollPosition).
         screen.restoreScrollPosition(
             savedPosition ?: GalleryScrollPosition(firstVisiblePosition = 0, topOffset = 0),
+            onRestored = { if (pendingScrollRestore == destination) pendingScrollRestore = null },
         ) { currentUiState.destination == destination }
     }
 
