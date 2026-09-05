@@ -105,8 +105,11 @@ jobs:
           yes | "$tools/sdkmanager" emulator "platforms;android-29" "system-images;android-29;default;x86_64" >/dev/null
           set -o pipefail
           echo no | "$tools/avdmanager" create avd --force --name test \
-            --package "system-images;android-29;default;x86_64" --device pixel_2 >/dev/null
-          printf 'hw.cpu.ncore=2\ndisk.dataPartition.size=2G\n' >> ~/.android/avd/test.avd/config.ini
+            --package "system-images;android-29;default;x86_64" --device pixel_2
+          # avdmanager decides the AVD home (ANDROID_AVD_HOME, else ~/.android/avd); ask it.
+          avd_dir="$("$tools/avdmanager" list avd | sed -n 's/^ *Path: *//p' | grep '/test\.avd$' | head -n 1)"
+          test -f "$avd_dir/config.ini" || { echo "AVD 'test' not found (path '$avd_dir')" >&2; exit 1; }
+          printf 'hw.cpu.ncore=2\ndisk.dataPartition.size=2G\n' >> "$avd_dir/config.ini"
           nohup "$ANDROID_SDK_ROOT/emulator/emulator" -avd test -port 5554 \
             -no-window -gpu software -no-snapshot -noaudio -no-boot-anim -camera-back none \
             > "$RUNNER_TEMP/emulator.log" 2>&1 &
