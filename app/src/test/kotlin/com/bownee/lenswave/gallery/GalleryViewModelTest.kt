@@ -60,6 +60,7 @@ class GalleryViewModelTest {
     private val session = MutableStateFlow(ProtonAccountSessionState())
     private val navigationStore = FakeNavigationStore()
     private val deletionExecutor = FakeDeletionExecutor(events)
+    private val telemetryWriter = FakeTelemetryWriter(events)
     private val savedState = SavedStateHandle()
     private val text = CountingText()
 
@@ -272,6 +273,51 @@ class GalleryViewModelTest {
         }
 
     @Test
+    fun `saveTelemetryPreference writes in the view model scope and reports the outcome to a late collector`() =
+        runTest(dispatcher) {
+            val viewModel = connectedViewModel()
+
+            viewModel.saveTelemetryPreference(enabled = true)
+            runCurrent()
+            assertEquals(listOf("telemetry:u:true"), events)
+            // The activity that opened the dialog may have been recreated meanwhile; the write goes on.
+            telemetryWriter.held.single().complete(Unit)
+            runCurrent()
+
+            val received = mutableListOf<GalleryMutationEvent>()
+            backgroundScope.launch { viewModel.mutationEvents.collect { received += it } }
+            runCurrent()
+            assertEquals(
+                listOf<GalleryMutationEvent>(GalleryMutationEvent.TelemetryPreferenceSaved(saved = true)),
+                received,
+            )
+
+            telemetryWriter.failure = IllegalStateException("offline")
+            viewModel.saveTelemetryPreference(enabled = false)
+            runCurrent()
+            telemetryWriter.held.last().complete(Unit)
+            runCurrent()
+            assertEquals(GalleryMutationEvent.TelemetryPreferenceSaved(saved = false), received.last())
+        }
+
+    @Test
+    fun `saveTelemetryPreference without an account is reported as not saved and writes nothing`() =
+        runTest(dispatcher) {
+            val viewModel = viewModel()
+            val received = mutableListOf<GalleryMutationEvent>()
+            backgroundScope.launch { viewModel.mutationEvents.collect { received += it } }
+
+            viewModel.saveTelemetryPreference(enabled = true)
+            runCurrent()
+
+            assertEquals(
+                listOf<GalleryMutationEvent>(GalleryMutationEvent.TelemetryPreferenceSaved(saved = false)),
+                received,
+            )
+            assertTrue(events.none { it.startsWith("telemetry:") })
+        }
+
+    @Test
     fun `a trash cancelled by an account change is reported as failed and frees the next trash`() =
         runTest(dispatcher) {
             val viewModel = connectedViewModel()
@@ -297,6 +343,72 @@ class GalleryViewModelTest {
             runCurrent()
 
             assertEquals("the in-flight guard was released", listOf("trash:u:p1", "trash:u:p1"), events)
+        }
+
+    @Test
+    fun `a trash confirmed before the restored session has settled runs once the account arrives`() =
+        runTest(dispatcher) {
+            reader.state.value = loadedTimeline("p1")
+            reader.albumsState.value = ProtonAlbumsState(userId = USER.id, hasLoaded = true)
+            val viewModel = viewModel()
+            backgroundScope.launch { viewModel.uiState.collect {} }
+            val received = mutableListOf<GalleryMutationEvent>()
+            backgroundScope.launch { viewModel.mutationEvents.collect { received += it } }
+            runCurrent()
+
+            // The confirmation dialog restored by the fragment manager answers before the session flow does.
+            viewModel.trashPhotos(listOf("p1"))
+            runCurrent()
+            assertTrue("nothing is trashed without an account", events.none { it.startsWith("trash:") })
+            assertTrue(received.isEmpty())
+
+            session.value =
+                ProtonAccountSessionState(readyAccount(USER), USER, initialized = true, transitioning = true)
+            runCurrent()
+            assertTrue("a transitioning session is not an account yet", events.none { it.startsWith("trash:") })
+
+            session.value = ProtonAccountSessionState(readyAccount(USER), USER, initialized = true)
+            runCurrent()
+            assertEquals(listOf("trash:u:p1"), events.filter { it.startsWith("trash:") })
+            deletionExecutor.held.single().complete(Unit)
+            runCurrent()
+
+            assertEquals(
+                listOf<GalleryMutationEvent>(GalleryMutationEvent.Trashed(successfulCount = 1, failedCount = 0)),
+                received,
+            )
+        }
+
+    @Test
+    fun `a trash confirmed while no session ever arrives is reported as failed`() =
+        runTest(dispatcher) {
+            val viewModel = viewModel()
+            val received = mutableListOf<GalleryMutationEvent>()
+            backgroundScope.launch { viewModel.mutationEvents.collect { received += it } }
+            viewModel.setSelection(setOf("p1"))
+
+            viewModel.trashPhotos(listOf("p1"))
+            advanceTimeBy(9_999L)
+            runCurrent()
+            assertTrue(received.isEmpty())
+
+            advanceTimeBy(2L)
+            runCurrent()
+
+            assertEquals(listOf<GalleryMutationEvent>(GalleryMutationEvent.TrashFailed), received)
+            assertTrue(events.none { it.startsWith("trash:") })
+            assertEquals(
+                "the photos were not trashed, so the selection stands",
+                setOf("p1"),
+                viewModel.selectedStableIds,
+            )
+
+            // A session that settles without an account fails the same way, and the guard is free again.
+            session.value = ProtonAccountSessionState(initialized = true)
+            viewModel.trashPhotos(listOf("p1"))
+            runCurrent()
+            assertEquals(2, received.size)
+            assertEquals(GalleryMutationEvent.TrashFailed, received.last())
         }
 
     @Test
@@ -605,6 +717,7 @@ class GalleryViewModelTest {
             accountSession = session,
             navigationStore = navigationStore,
             deletionExecutor = deletionExecutor,
+            telemetryWriter = telemetryWriter,
             savedStateHandle = savedState,
             clock = SchedulerClock(),
             dispatchers = TestDispatchers(),
@@ -787,6 +900,22 @@ class GalleryViewModelTest {
             CompletableDeferred<Unit>().also(held::add).await()
             failure?.let { throw it }
             return result
+        }
+    }
+
+    private class FakeTelemetryWriter(
+        private val events: MutableList<String>,
+    ) : TelemetryPreferenceWriter {
+        var failure: Throwable? = null
+        val held = mutableListOf<CompletableDeferred<Unit>>()
+
+        override suspend fun setTelemetryEnabled(
+            userId: UserId,
+            enabled: Boolean,
+        ) {
+            events += "telemetry:${userId.id}:$enabled"
+            CompletableDeferred<Unit>().also(held::add).await()
+            failure?.let { throw it }
         }
     }
 

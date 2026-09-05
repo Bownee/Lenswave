@@ -7,8 +7,10 @@ import com.bownee.lenswave.LenswaveOperation
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -30,10 +32,11 @@ class AppUpdateChecker
     ) {
         private val checkMutex = Mutex()
 
-        // The startup check runs in this singleton's scope, not the activity's: a rotation while it
-        // is in flight recreates the activity, which awaits the same check instead of starting or
-        // skipping one.
-        private val startupScope = CoroutineScope(SupervisorJob() + dispatchers.io)
+        // The startup check and the snooze write run in this singleton's scope, not the activity's:
+        // a rotation while the check is in flight recreates the activity, which awaits the same
+        // check instead of starting or skipping one, and a rotation right after "remind me later"
+        // does not cancel the write.
+        private val scope = CoroutineScope(SupervisorJob() + dispatchers.io)
         private val startupMutex = Mutex()
         private var startupCheck: Deferred<AvailableUpdate?>? = null
 
@@ -50,7 +53,7 @@ class AppUpdateChecker
             val check =
                 startupMutex.withLock {
                     startupCheck
-                        ?: startupScope.async { findAvailableUpdate(currentVersionName) }.also { startupCheck = it }
+                        ?: scope.async { findAvailableUpdate(currentVersionName) }.also { startupCheck = it }
                 }
             val update = check.await() ?: return null
             return if (startupUpdateShown) null else update
@@ -81,6 +84,9 @@ class AppUpdateChecker
                 LenswaveDiagnostics.reportFailure(LenswaveOperation.APP_UPDATE_EVALUATION, error)
                 null
             }
+
+        /** Records the snooze in this singleton's scope, so the activity that asked for it may go away. */
+        internal fun snoozeInBackground(versionName: String): Job = scope.launch { snooze(versionName) }
 
         internal suspend fun snooze(versionName: String) {
             try {

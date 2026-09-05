@@ -80,7 +80,7 @@ internal class GalleryUpdatePresenter(
     }
 
     override fun onUpdateSnoozed(versionName: String) {
-        activity.lifecycleScope.launch { appUpdateChecker.snooze(versionName) }
+        appUpdateChecker.snoozeInBackground(versionName)
     }
 
     private companion object {

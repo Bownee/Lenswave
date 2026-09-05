@@ -21,7 +21,7 @@ internal class GalleryDeletionCoordinator(
     }
 
     /** Shows what a mutation the view model ran came to. */
-    fun showOutcome(event: GalleryMutationEvent) {
+    fun showOutcome(event: GalleryMutationEvent.Trash) {
         when (event) {
             is GalleryMutationEvent.Trashed -> {
                 showMessage(
