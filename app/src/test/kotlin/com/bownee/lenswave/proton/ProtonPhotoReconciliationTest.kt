@@ -2,7 +2,6 @@ package com.bownee.lenswave.proton
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -38,32 +37,5 @@ class ProtonPhotoReconciliationTest {
 
         assertEquals(ProtonPhotoChanges(), changes)
         assertTrue(changes.isEmpty)
-    }
-
-    @Test
-    fun dropsPhotosRemovedWhileEnumeratingButKeepsRemoteAdditions() {
-        val narrowed =
-            ProtonPhotoReconciliation.withoutRemovedSince(
-                enumerated = listOf("kept", "trashed", "added"),
-                existing = listOf("kept", "trashed"),
-                published = listOf("kept"),
-            ) { it }
-
-        assertEquals(listOf("kept", "added"), narrowed)
-    }
-
-    @Test
-    fun keepsTheListingInstanceWhenNothingWasRemovedOrNothingIsPublished() {
-        val enumerated = listOf("kept", "added")
-
-        assertSame(
-            enumerated,
-            ProtonPhotoReconciliation.withoutRemovedSince(enumerated, listOf("kept"), listOf("kept")) { it },
-        )
-        assertSame(enumerated, ProtonPhotoReconciliation.withoutRemovedSince(enumerated, listOf("kept"), null) { it })
-        assertSame(
-            enumerated,
-            ProtonPhotoReconciliation.withoutRemovedSince(enumerated, listOf("kept"), listOf("kept", "marked")) { it },
-        )
     }
 }

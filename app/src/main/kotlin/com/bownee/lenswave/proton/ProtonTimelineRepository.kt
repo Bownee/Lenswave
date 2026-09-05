@@ -31,11 +31,19 @@ internal class ProtonTimelineRepository
          * sync commit (with its stamp and publish), a favourite toggle and a removal. It is the
          * innermost lock of the hierarchy, taken after [syncMutex] or a tag mutex and never held
          * across an enumeration, and a removal takes nothing else, so a trash never waits on a
-         * network round trip. A sync that enumerated before the trash narrows its listing at
-         * commit time instead (see [ProtonPhotoReconciliation.withoutRemovedSince]), so neither
-         * the timeline nor a tag can publish or persist the trashed photo again.
+         * network round trip. A sync that enumerated before the trash subtracts it at commit
+         * time instead (see [removals]), so neither the timeline nor a tag can publish or persist
+         * the trashed photo again.
          */
         private val mutationMutex = Mutex()
+
+        /**
+         * Every removal since each sync in flight began, recorded under [mutationMutex]. The
+         * commit subtracts exactly those, rather than diffing the published listing against the
+         * one it started from: that diff read a listing that could not be read for a moment as
+         * the removal of everything.
+         */
+        private val removals = ProtonRemovalLog()
         private val mutableState = MutableStateFlow(ProtonGalleryState())
 
         /** Uid lookups over the published timeline and tag listings, memoized per list instance; see [ProtonNodeUidIndex]. */
@@ -81,6 +89,20 @@ internal class ProtonTimelineRepository
             userId: UserId,
             forceRemote: Boolean,
         ) = syncMutex.withLock {
+            // Opened before the listing is read, so a removal between the two is subtracted too.
+            val removalSnapshot = removals.openSnapshot()
+            try {
+                syncTimeline(userId, forceRemote, removalSnapshot)
+            } finally {
+                removals.closeSnapshot(removalSnapshot)
+            }
+        }
+
+        private suspend fun syncTimeline(
+            userId: UserId,
+            forceRemote: Boolean,
+            removalSnapshot: Long,
+        ) {
             // The published timeline is the cached one plus every mark since, so a loaded state
             // answers "what is cached" without decrypting and parsing the index again, which the
             // sync policy then often decides was fresh anyway.
@@ -107,13 +129,16 @@ internal class ProtonTimelineRepository
                     items.map { item -> availability.photo(item.nodeUid.value, item.captureTime.epochSecond) }
                 },
                 commit = { photos ->
+                    // A photo trashed while the timeline was enumerating has left the cache and
+                    // the screen; the enumerated listing must not bring it back.
+                    val retained = removals.retain(userId.id, removalSnapshot, photos, ProtonGalleryPhoto::nodeUid)
                     if (hasCachedSnapshot) {
                         ProtonReconcileSafetyPolicy.requireCommit(
                             listing = "timeline",
                             existing = existing,
                             remoteNodeUids =
-                                photos.mapTo(
-                                    HashSet(photos.size * 4 / 3 + 1),
+                                retained.mapTo(
+                                    HashSet(retained.size * 4 / 3 + 1),
                                     ProtonGalleryPhoto::nodeUid,
                                 ),
                             forceRemote = forceRemote,
@@ -126,19 +151,10 @@ internal class ProtonTimelineRepository
                         ProtonReconcileSafetyPolicy.requireCommitOverStoredThumbnails(
                             listing = "timeline",
                             storedThumbnailCount = cache.storedRenditions(userId.id).thumbnailCount,
-                            remoteStoredThumbnailCount = photos.count(ProtonGalleryPhoto::hasThumbnail),
+                            remoteStoredThumbnailCount = retained.count(ProtonGalleryPhoto::hasThumbnail),
                             forceRemote = forceRemote,
                         )
                     }
-                    // A photo trashed while the timeline was enumerating has left the published
-                    // listing; the enumerated one must not bring it back.
-                    val retained =
-                        ProtonPhotoReconciliation.withoutRemovedSince(
-                            enumerated = photos,
-                            existing = existing,
-                            published = mutableState.value.takeIf { state -> state.userId == userId.id }?.photos,
-                            nodeUid = ProtonGalleryPhoto::nodeUid,
-                        )
                     // The new listing lands before anything is deleted: a crash between the two
                     // then leaves stray renditions for the next reconcile, not a listing that
                     // points at renditions which are gone.
@@ -169,6 +185,20 @@ internal class ProtonTimelineRepository
             tag: ProtonMediaTag,
             forceRemote: Boolean,
         ) = tagMutexes.getValue(tag).withLock {
+            val removalSnapshot = removals.openSnapshot()
+            try {
+                syncTag(userId, tag, forceRemote, removalSnapshot)
+            } finally {
+                removals.closeSnapshot(removalSnapshot)
+            }
+        }
+
+        private suspend fun syncTag(
+            userId: UserId,
+            tag: ProtonMediaTag,
+            forceRemote: Boolean,
+            removalSnapshot: Long,
+        ) {
             val current =
                 mutableState.value
                     .takeIf { state -> state.userId == userId.id }
@@ -194,14 +224,18 @@ internal class ProtonTimelineRepository
                 },
                 enumerate = { listTag(userId, tag, existing) },
                 commit = { photos ->
+                    val retained =
+                        retainTimelinePhotos(
+                            userId,
+                            removals.retain(userId.id, removalSnapshot, photos, ProtonGalleryPhoto::nodeUid),
+                        )
                     ProtonReconcileSafetyPolicy.requireCommit(
                         listing = "tag-${tag.name.lowercase()}",
                         existing = existing,
-                        remoteNodeUids = photos.mapTo(HashSet(), ProtonGalleryPhoto::nodeUid),
+                        remoteNodeUids = retained.mapTo(HashSet(), ProtonGalleryPhoto::nodeUid),
                         forceRemote = forceRemote,
                         nodeUid = ProtonGalleryPhoto::nodeUid,
                     )
-                    val retained = retainTimelinePhotos(userId, photos)
                     cache.writeTag(userId.id, tag, retained)
                     retained
                 },
@@ -225,10 +259,9 @@ internal class ProtonTimelineRepository
         }
 
         /**
-         * A tag listing narrowed to the photos the published timeline still has. The listing was
-         * enumerated outside [mutationMutex], so a photo trashed in the meantime may still be in
-         * it; committing that would bring the photo back into the tag file and the tab. A timeline
-         * that has not loaded cannot judge, and the listing is kept whole.
+         * A tag listing narrowed to the photos the published timeline still has: Proton's tag index
+         * may still name a photo the timeline no longer lists, and the tab must not show what the
+         * grid does not. A timeline that has not loaded cannot judge, and the listing is kept whole.
          */
         private fun retainTimelinePhotos(
             userId: UserId,
@@ -419,11 +452,10 @@ internal class ProtonTimelineRepository
             // listing when it commits, so the trash never waits on the network.
             mutationMutex.withLock {
                 cache.removePhotos(userId.id, nodeUids)
+                removals.record(userId.id, nodeUids)
                 updateState(userId) { state ->
                     state.copy(
                         photos = state.photos.filterNot { it.nodeUid in nodeUids },
-                        hasLoaded = true,
-                        syncing = false,
                         tags =
                             state.tags.mapValues { (_, tagState) ->
                                 tagState.copy(photos = tagState.photos.filterNot { it.nodeUid in nodeUids })

@@ -116,6 +116,37 @@ class ProtonAlbumRepositoryTest {
         }
 
     @Test
+    fun `a photo trashed while the album was enumerating is dropped even after the album was closed`() =
+        runTest {
+            val album = ProtonAlbumReference("al1", "Album")
+            cache.albums[USER.id] = listOf(album("al1", photoCount = 2L), album("al2", photoCount = 1L))
+            cache.albumPhotos[USER.id to "al1"] = listOf(photo("x", 2L), photo("y", 1L))
+            cache.albumPhotos[USER.id to "al2"] = listOf(photo("w", 5L))
+            repository.loadCached(USER)
+            repository.loadCachedAlbum(USER, album)
+            clients.albumPhotos = listOf("x" to 2L, "y" to 1L, "z" to 3L)
+
+            val sync = launch { repository.syncAlbumPhotoMetadata(USER, album, forceRemote = false) }
+            runCurrent()
+            assertTrue("the enumeration must be in flight", clients.enumerating.isCompleted)
+
+            // The user leaves for another album, then trashes a photo of the first one.
+            repository.loadCachedAlbum(USER, ProtonAlbumReference("al2", "Other"))
+            repository.removePhotos(USER, setOf("x"))
+            clients.release.complete(Unit)
+            sync.join()
+
+            assertEquals(
+                listOf("z", "y"),
+                cache.albumPhotos.getValue(USER.id to "al1").map(ProtonGalleryPhoto::nodeUid),
+            )
+            val published = repository.albumPhotosState.value
+            assertEquals("al2", published.albumUid)
+            assertEquals(listOf("w"), published.photos.map(ProtonGalleryPhoto::nodeUid))
+            assertTrue(failures.isEmpty())
+        }
+
+    @Test
     fun `an automatic albums refresh that drops most of the albums keeps the cache and fails`() =
         runTest {
             cache.albums[USER.id] = List(400) { index -> album("al$index", photoCount = 1L) }

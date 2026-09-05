@@ -35,10 +35,18 @@ internal class ProtonAlbumRepository
          * Serializes every write to the album files and to the states that mirror them: a sync
          * commit (with its stamp and publish) and a removal. It is the innermost lock, taken
          * after a sync mutex and never held across an enumeration, so a trash never waits on a
-         * network round trip; a sync that enumerated before the trash narrows its listing at
-         * commit time instead (see [ProtonPhotoReconciliation.withoutRemovedSince]).
+         * network round trip; a sync that enumerated before the trash subtracts it at commit time
+         * instead (see [removals]).
          */
         private val mutationMutex = Mutex()
+
+        /**
+         * Every removal since each album-photo sync in flight began, recorded under
+         * [mutationMutex]. The commit subtracts exactly those; diffing the album on screen against
+         * the listing the sync started from could not judge once the album was closed, and wrote
+         * the trashed photo back into the album's index.
+         */
+        private val removals = ProtonRemovalLog()
 
         /** Uid lookups over the published albums (by cover) and album photos, memoized per list instance. */
         private val albumCoverIndex = ProtonNodeUidIndex(ProtonAlbum::coverPhotoNodeUid)
@@ -148,6 +156,20 @@ internal class ProtonAlbumRepository
             album: ProtonAlbumReference,
             forceRemote: Boolean,
         ) = albumPhotosSyncMutex.withLock {
+            val removalSnapshot = removals.openSnapshot()
+            try {
+                syncAlbumPhotos(userId, album, forceRemote, removalSnapshot)
+            } finally {
+                removals.closeSnapshot(removalSnapshot)
+            }
+        }
+
+        private suspend fun syncAlbumPhotos(
+            userId: UserId,
+            album: ProtonAlbumReference,
+            forceRemote: Boolean,
+            removalSnapshot: Long,
+        ) {
             val current = mutableAlbumPhotosState.value
             val (existing, hasCachedSnapshot) =
                 if (current.userId == userId.id && current.albumUid == album.nodeUid && current.hasLoaded) {
@@ -175,22 +197,17 @@ internal class ProtonAlbumRepository
                         .sortedByDescending(ProtonGalleryPhoto::captureTimeEpochSeconds)
                 },
                 commit = { photos ->
+                    // A photo trashed while the album was enumerating has left every album index;
+                    // the enumerated listing must not bring it back, whether or not the album is
+                    // still the one on screen.
+                    val retained = removals.retain(userId.id, removalSnapshot, photos, ProtonGalleryPhoto::nodeUid)
                     ProtonReconcileSafetyPolicy.requireCommit(
                         listing = "album-photos",
                         existing = existing,
-                        remoteNodeUids = photos.mapTo(HashSet(), ProtonGalleryPhoto::nodeUid),
+                        remoteNodeUids = retained.mapTo(HashSet(), ProtonGalleryPhoto::nodeUid),
                         forceRemote = forceRemote,
                         nodeUid = ProtonGalleryPhoto::nodeUid,
                     )
-                    // A photo trashed while the album was enumerating has left the published
-                    // listing; the enumerated one must not bring it back.
-                    val retained =
-                        ProtonPhotoReconciliation.withoutRemovedSince(
-                            enumerated = photos,
-                            existing = existing,
-                            published = publishedAlbumPhotos(userId, album),
-                            nodeUid = ProtonGalleryPhoto::nodeUid,
-                        )
                     cache.writeAlbumPhotos(userId.id, album.nodeUid, retained)
                     retained
                 },
@@ -210,15 +227,6 @@ internal class ProtonAlbumRepository
                 commitGate = { commit -> mutationMutex.withLock { commit() } },
             )
         }
-
-        /** The album-photo listing on screen, when it is still [album]'s; null when another album (or account) took over. */
-        private fun publishedAlbumPhotos(
-            userId: UserId,
-            album: ProtonAlbumReference,
-        ): List<ProtonGalleryPhoto>? =
-            mutableAlbumPhotosState.value
-                .takeIf { state -> state.userId == userId.id && state.albumUid == album.nodeUid }
-                ?.photos
 
         internal fun markCoverThumbnailsAvailable(
             userId: UserId,
@@ -304,6 +312,7 @@ internal class ProtonAlbumRepository
             if (nodeUids.isEmpty()) return
             mutationMutex.withLock {
                 cache.removeAlbumPhotos(userId.id, nodeUids)
+                removals.record(userId.id, nodeUids)
                 mutableAlbumPhotosState.update { state ->
                     if (state.userId != userId.id) return@update state
                     val remaining = state.photos.filterNot { it.nodeUid in nodeUids }

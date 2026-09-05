@@ -111,6 +111,36 @@ class ProtonTimelineRepositoryTest {
         }
 
     @Test
+    fun `a cached listing that cannot be read while the timeline is enumerating narrows nothing`() =
+        runTest {
+            cache.timelines[USER.id] = listOf(photo("v~a1", 100L), photo("v~x", 500L))
+            repository.loadCached(USER)
+            clients.holdEnumeration = true
+            clients.timeline = listOf("v~a1" to 100L, "v~x" to 500L, "v~new" to 600L)
+
+            val sync = launch { repository.syncMetadata(USER, forceRemote = false) }
+            runCurrent()
+            assertTrue("the enumeration must be in flight", clients.enumerating.isCompleted)
+
+            // A transient read failure publishes an empty, unloaded timeline in the meantime.
+            cache.timelines.remove(USER.id)
+            repository.loadCached(USER)
+            assertFalse(repository.state.value.hasLoaded)
+            assertTrue(
+                repository.state.value.photos
+                    .isEmpty(),
+            )
+            clients.release.complete(Unit)
+            sync.join()
+
+            val state = repository.state.value
+            assertEquals(listOf("v~a1", "v~x", "v~new"), state.photos.map(ProtonGalleryPhoto::nodeUid))
+            assertTrue(state.hasLoaded)
+            assertEquals(3, cache.timelines.getValue(USER.id).size)
+            assertTrue(failures.isEmpty())
+        }
+
+    @Test
     fun `a favourite set while the favourites listing is enumerating survives the sync commit`() =
         runTest {
             cache.timelines[USER.id] = listOf(photo("v~a1", 100L), photo("v~x", 500L))
