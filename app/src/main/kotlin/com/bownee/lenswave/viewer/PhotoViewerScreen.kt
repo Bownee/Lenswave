@@ -16,7 +16,6 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.core.view.ViewCompat
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.bownee.lenswave.R
 import com.bownee.lenswave.UiStyle
@@ -71,12 +70,6 @@ internal class PhotoViewerScreen(
             controllerAutoShow = false
             controllerShowTimeoutMs = CONTROLS_TIMEOUT_MILLIS
             controllerHideOnTouch = true
-            // The video takes the viewport's full width whatever its aspect ratio. The default
-            // RESIZE_MODE_FIT only fills the width when the clip is wider than the media box and
-            // pillarboxes anything taller, which left a portrait clip floating in a band of
-            // background. Height follows from the width and the aspect ratio, so a clip taller
-            // than the box is cropped top and bottom by the frame rather than shrunk to fit.
-            resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIXED_WIDTH
             setShutterBackgroundColor(Color.TRANSPARENT)
             visibility = View.GONE
             setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
