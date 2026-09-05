@@ -301,11 +301,19 @@ class GalleryActivity :
      */
     private fun observeListWidth() {
         val density = resources.displayMetrics.density
-        photoColumns.value = GallerySpanPolicy.columns(resources.displayMetrics.widthPixels, density)
-        list.addOnLayoutChangeListener { view, left, _, right, _, oldLeft, _, oldRight, _ ->
-            if (right - left == oldRight - oldLeft) return@addOnLayoutChangeListener
+        // Both measures are the list width net of its horizontal padding; the display width stands in
+        // for the list width until the first layout.
+        photoColumns.value =
+            GallerySpanPolicy.columns(
+                resources.displayMetrics.widthPixels - list.paddingLeft - list.paddingRight,
+                density,
+            )
+        list.addOnLayoutChangeListener { view, left, _, right, _, _, _, _, _ ->
             val width = right - left - view.paddingLeft - view.paddingRight
-            if (width > 0) photoColumns.value = GallerySpanPolicy.columns(width, density)
+            if (width <= 0) return@addOnLayoutChangeListener
+            // The span, not the raw width, decides: a padding-only change re-evaluates too.
+            val columns = GallerySpanPolicy.columns(width, density)
+            if (columns != photoColumns.value) photoColumns.value = columns
         }
     }
 
