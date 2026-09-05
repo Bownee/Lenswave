@@ -254,7 +254,7 @@ class SecureFileStoreTest {
             encrypted.readBytes().copyOf(4 + 1 + Int.SIZE_BYTES + SegmentedEnvelope.NONCE_BYTES + fullSegments),
         )
         announced.clear()
-        assertThrows(IllegalArgumentException::class.java) {
+        assertThrows(CorruptEnvelopeException::class.java) {
             store.decryptFile(scope, encrypted, decrypted, onStarted = {
                 _,
                 expectedBytes,
@@ -296,7 +296,7 @@ class SecureFileStoreTest {
         // The header and a body shorter than one GCM tag: nothing to verify.
         legacy.writeBytes(legacy.readBytes().copyOf(4 + 2 + 12 + 8))
 
-        assertThrows(IllegalArgumentException::class.java) { store.decryptFile(scope, legacy, decrypted) }
+        assertThrows(CorruptEnvelopeException::class.java) { store.decryptFile(scope, legacy, decrypted) }
 
         assertFalse(decrypted.exists())
         assertTrue(legacy.isFile)
@@ -316,7 +316,7 @@ class SecureFileStoreTest {
             repeat(5) { output.write(chunk) }
         }
 
-        assertThrows(IllegalArgumentException::class.java) { store.decryptFile(scope, legacy, decrypted) }
+        assertThrows(CorruptEnvelopeException::class.java) { store.decryptFile(scope, legacy, decrypted) }
 
         assertFalse(legacy.exists())
         assertFalse(decrypted.exists())

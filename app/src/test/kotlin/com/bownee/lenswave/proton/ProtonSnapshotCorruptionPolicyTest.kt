@@ -1,5 +1,6 @@
 package com.bownee.lenswave.proton
 
+import com.bownee.lenswave.storage.CorruptEnvelopeException
 import com.bownee.lenswave.storage.SecureFileStore
 import org.json.JSONException
 import org.junit.Assert.assertFalse
@@ -15,8 +16,20 @@ class ProtonSnapshotCorruptionPolicyTest {
     fun malformedContentIsCorrupt() {
         assertTrue(ProtonSnapshotCorruptionPolicy.isCorrupt(JSONException("unterminated array")))
         assertTrue(ProtonSnapshotCorruptionPolicy.isCorrupt(AEADBadTagException("tag mismatch")))
-        assertTrue(ProtonSnapshotCorruptionPolicy.isCorrupt(IllegalArgumentException("Encrypted file is truncated")))
-        assertTrue(ProtonSnapshotCorruptionPolicy.isCorrupt(NumberFormatException("captureTime")))
+        assertTrue(ProtonSnapshotCorruptionPolicy.isCorrupt(CorruptEnvelopeException("Encrypted file is truncated")))
+    }
+
+    @Test
+    fun anArgumentCheckThatFailedIsNotCorruptionOfTheFile() {
+        // Only the envelope format checks prove a file bad; any other IllegalArgumentException is
+        // a caller's bug and must not delete the file it happened to be reading.
+        assertFalse(ProtonSnapshotCorruptionPolicy.isCorrupt(IllegalArgumentException("Segment size is out of range")))
+        assertFalse(ProtonSnapshotCorruptionPolicy.isCorrupt(NumberFormatException("captureTime")))
+        assertFalse(
+            ProtonSnapshotCorruptionPolicy.isCorrupt(
+                IllegalStateException("outer", IllegalArgumentException("Key alias is invalid")),
+            ),
+        )
     }
 
     @Test
