@@ -7,7 +7,7 @@ video, `me.proton.drive:sdk` for Drive access.
 ## Commands
 
 ```shell
-./gradlew.bat --offline ktlintCheck testDebugUnitTest jacocoDebugCoverageVerification :app:lintDebug compileDebugAndroidTestKotlin assembleDebug
+./gradlew.bat --offline ktlintCheck testDebugUnitTest jacocoDebugCoverageVerification lintDebug compileDebugAndroidTestKotlin assembleDebug
 ```
 
 Run `./gradlew.bat --offline ktlintFormat` after editing Kotlin; CI rejects formatting drift.
@@ -18,20 +18,13 @@ dependency changed; see CONTRIBUTING.md.
 
 ## Layout
 
-Five Gradle modules, all under the Kotlin package `com.bownee.lenswave`: `:core` (diagnostics,
-clock/dispatchers, `ExifOrientation`, `metadata/`, shared colours), `:storage`, `:update`, `:proton`
-(also the data-source interfaces in `ProtonDataSources.kt` and the Compose `LenswaveTheme`), and
-`:app` (gallery, viewer, `LenswaveApplication`, `UiStyle`). Types used across modules are public;
-injected constructors stay `internal`. Library `R` classes are per module (`com.bownee.lenswave.core.R`
-and so on); alias them (`import ... as CoreR`) when a file needs two.
-
 - `gallery/` — timeline, filters, albums: `GalleryActivity` + `GalleryScreen` are wiring;
   state comes from `GalleryViewModel` through `GalleryUiStateFactory`; navigation is
   `GalleryDestination` + `GalleryNavigationPolicy`.
 - `viewer/` — full-screen photo/video viewer split into `Viewer*` controllers (media transform,
   swipe/peek, dismiss, details sheet, video playback).
 - `proton/` — everything that talks to Proton: `ProtonPhotoGateway` is the session boundary; UI
-  code depends on the narrow interfaces in `proton/ProtonDataSources.kt`, not the gateway.
+  code depends on the narrow interfaces in `gallery/GalleryDataSources.kt`, not the gateway.
   Downloads: `ProtonOriginalDownloads` (full-size files) and `ProtonRenditionDownloads`
   (thumbnails, previews). Background work: `ProtonThumbnailWorker` drives `ProtonRenditionSync`,
   which claims from two `ProtonThumbnailQueue` instances (`@ThumbnailQueue`, `@PreviewQueue`);

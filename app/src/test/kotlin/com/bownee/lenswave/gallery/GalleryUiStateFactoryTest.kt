@@ -16,7 +16,6 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import com.bownee.lenswave.proton.R as ProtonR
 
 class GalleryUiStateFactoryTest {
     private val factory =
@@ -166,7 +165,7 @@ class GalleryUiStateFactoryTest {
                 ),
             )
 
-        val label = ProtonR.string.proton_tag_selfies.toString()
+        val label = R.string.proton_tag_selfies.toString()
         assertEquals("${R.string.no_media_with_tag}($label())", state.emptyState?.title)
         assertNull(state.emptyState?.action)
     }
@@ -440,7 +439,7 @@ class GalleryUiStateFactoryTest {
         val titles =
             listOf(
                 GalleryDestination.Timeline to R.string.photos.toString(),
-                GalleryDestination.Tag(ProtonMediaTag.VIDEOS) to ProtonR.string.proton_tag_videos.toString(),
+                GalleryDestination.Tag(ProtonMediaTag.VIDEOS) to R.string.proton_tag_videos.toString(),
                 GalleryDestination.Library to R.string.albums.toString(),
                 GalleryDestination.AlbumPhotos(album) to "Trip",
             )

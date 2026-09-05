@@ -2,12 +2,12 @@ package com.bownee.lenswave.viewer
 
 import com.bownee.lenswave.gallery.GalleryAsset
 import com.bownee.lenswave.gallery.GalleryDestination
+import com.bownee.lenswave.gallery.ProtonGalleryReader
 import com.bownee.lenswave.proton.ProtonAccountSessionState
 import com.bownee.lenswave.proton.ProtonAlbumPhotosState
 import com.bownee.lenswave.proton.ProtonAlbumReference
 import com.bownee.lenswave.proton.ProtonAlbumsState
 import com.bownee.lenswave.proton.ProtonGalleryPhoto
-import com.bownee.lenswave.proton.ProtonGalleryReader
 import com.bownee.lenswave.proton.ProtonGalleryState
 import com.bownee.lenswave.proton.ProtonMediaTag
 import com.bownee.lenswave.proton.ProtonTagState

@@ -157,7 +157,7 @@ jobs:
         with:
           name: device-tests-${{ github.sha }}
           path: |
-            */build/reports/androidTests/**
-            */build/outputs/androidTest-results/**
+            app/build/reports/androidTests/**
+            app/build/outputs/androidTest-results/**
           if-no-files-found: warn
           retention-days: 30

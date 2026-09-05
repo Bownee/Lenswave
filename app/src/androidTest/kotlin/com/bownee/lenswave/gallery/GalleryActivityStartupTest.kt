@@ -16,7 +16,6 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
-import com.bownee.lenswave.update.R as UpdateR
 
 @RunWith(AndroidJUnit4::class)
 internal class GalleryActivityStartupTest {
@@ -69,7 +68,7 @@ internal class GalleryActivityStartupTest {
                 val dialog = fragments.single().dialog as AlertDialog
                 assertTrue(dialog.isShowing)
                 assertEquals(
-                    activity.getString(UpdateR.string.update_available_message, "0.20.0", "0.19.4"),
+                    activity.getString(R.string.update_available_message, "0.20.0", "0.19.4"),
                     dialog.findViewById<TextView>(android.R.id.message)?.text,
                 )
             }

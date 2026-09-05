@@ -25,10 +25,8 @@ import com.bownee.lenswave.UiStyle
 import com.bownee.lenswave.dp
 import com.bownee.lenswave.proton.ProtonAlbum
 import com.bownee.lenswave.proton.ProtonMediaTag
-import com.bownee.lenswave.proton.ProtonThumbnailImageSource
 import kotlinx.coroutines.CoroutineScope
 import me.proton.core.domain.entity.UserId
-import com.bownee.lenswave.core.R as CoreR
 
 /**
  * The gallery's view tree: a pinned header with the Photos | Albums switch (or a back button and
@@ -497,7 +495,7 @@ internal class GalleryScreen(
     private fun buildEmptyPanel(): EmptyPanel {
         val icon =
             ImageView(activity).apply {
-                setImageResource(CoreR.drawable.ic_cloud)
+                setImageResource(R.drawable.ic_cloud)
                 imageTintList = ColorStateList.valueOf(UiStyle.accent)
                 setPadding(activity.dp(14), activity.dp(14), activity.dp(14), activity.dp(14))
                 background = UiStyle.circle(activity, UiStyle.accentSoft)
@@ -558,7 +556,7 @@ internal class GalleryScreen(
             UiStyle
                 .iconButton(
                     activity,
-                    CoreR.drawable.ic_close,
+                    R.drawable.ic_close,
                     activity.getString(R.string.cancel_selection),
                 ).apply { setOnClickListener { adapter.clearSelection() } }
         val container =

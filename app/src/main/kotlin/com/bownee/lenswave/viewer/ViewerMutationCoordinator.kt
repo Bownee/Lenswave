@@ -1,7 +1,7 @@
 package com.bownee.lenswave.viewer
 
 import com.bownee.lenswave.gallery.PhotoDeletionExecutor
-import com.bownee.lenswave.proton.ProtonPhotoMutations
+import com.bownee.lenswave.gallery.ProtonPhotoMutations
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers

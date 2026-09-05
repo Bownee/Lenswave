@@ -12,7 +12,6 @@ import com.bownee.lenswave.proton.ProtonAlbum
 import com.bownee.lenswave.proton.ProtonAlbumPhotosState
 import com.bownee.lenswave.proton.ProtonAlbumReference
 import com.bownee.lenswave.proton.ProtonAlbumsState
-import com.bownee.lenswave.proton.ProtonGalleryReader
 import com.bownee.lenswave.proton.ProtonGalleryState
 import com.bownee.lenswave.proton.ProtonThumbnailScheduler
 import dagger.hilt.android.lifecycle.HiltViewModel

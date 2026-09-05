@@ -66,9 +66,7 @@ jobs:
             cp app/build/outputs/apk/debug/app-arm64-v8a-debug.apk "dist/Lenswave-v$version-arm64-v8a-debug.apk"
           fi
           cp -r app/build/reports/jacoco reports/coverage 2>/dev/null || true
-          for module in app core storage update proton; do
-            cp -r "$module/build/test-results" "reports/unit-test-results-$module" 2>/dev/null || true
-          done
+          cp -r app/build/test-results reports/unit-test-results 2>/dev/null || true
           find reports -maxdepth 2 -type d | sort
 
       - name: Upload evidence
@@ -101,12 +99,11 @@ jobs:
         uses: ./.github/actions/setup-android
 
       # There are no variant-specific source sets, so lintRelease would repeat lintDebug; the
-      # release-only fatal checks still run as lintVitalRelease inside assembleRelease. :app:lintDebug
-      # analyses the library modules too (checkDependencies), so one SARIF covers the tree. The SBOM
+      # release-only fatal checks still run as lintVitalRelease inside assembleRelease. The SBOM
       # license check only resolves dependencies, so it rides along here instead of waiting for
       # the release build.
       - name: Lint and verify dependency licenses
-        run: ./gradlew :app:lintDebug verifySbomLicenses --stacktrace
+        run: ./gradlew lintDebug verifySbomLicenses --stacktrace
 
       - name: Upload lint findings to code scanning
         if: always()
