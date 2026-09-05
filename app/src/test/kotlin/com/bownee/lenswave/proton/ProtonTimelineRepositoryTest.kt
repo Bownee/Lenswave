@@ -111,6 +111,40 @@ class ProtonTimelineRepositoryTest {
         }
 
     @Test
+    fun `two timeline syncs for one account share one enumeration, a forced one runs its own after`() =
+        runTest {
+            cache.timelines[USER.id] = listOf(photo("v~a1", 100L))
+            repository.loadCached(USER)
+            clients.holdEnumeration = true
+            clients.timeline = listOf("v~a1" to 100L, "v~new" to 600L)
+
+            val first = launch { repository.syncMetadata(USER, forceRemote = false) }
+            val second = launch { repository.syncMetadata(USER, forceRemote = false) }
+            val forced = launch { repository.syncMetadata(USER, forceRemote = true) }
+            runCurrent()
+
+            assertEquals(1, clients.enumerationCount)
+            assertFalse(second.isCompleted)
+            clients.release.complete(Unit)
+            first.join()
+            second.join()
+            forced.join()
+
+            // The unforced pair enumerated once between them; the forced refresh enumerated itself.
+            assertEquals(2, clients.enumerationCount)
+            assertEquals(
+                listOf("v~a1", "v~new"),
+                repository.state.value.photos
+                    .map(ProtonGalleryPhoto::nodeUid),
+            )
+            assertEquals(
+                listOf("writeIndex:2", "reconcilePhotos:1->2", "writeIndex:2", "reconcilePhotos:2->2"),
+                cache.events,
+            )
+            assertTrue(failures.isEmpty())
+        }
+
+    @Test
     fun `a cached listing that cannot be read while the timeline is enumerating narrows nothing`() =
         runTest {
             cache.timelines[USER.id] = listOf(photo("v~a1", 100L), photo("v~x", 500L))
@@ -404,6 +438,7 @@ class ProtonTimelineRepositoryTest {
 
         /** When set, an enumeration fails with it instead of listing anything. */
         var enumerationFailure: Throwable? = null
+        var enumerationCount = 0
         val enumerating = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
 
@@ -416,6 +451,7 @@ class ProtonTimelineRepositoryTest {
                     "enumerateTimeline" -> {
                         flow {
                             enumerating.complete(Unit)
+                            enumerationCount++
                             enumerationFailure?.let { throw it }
                             if (holdEnumeration) release.await()
                             timeline.forEach { (nodeUid, captureTime) -> emit(timelineItem(nodeUid, captureTime)) }

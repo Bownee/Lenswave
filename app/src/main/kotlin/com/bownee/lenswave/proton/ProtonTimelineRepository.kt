@@ -22,14 +22,24 @@ internal class ProtonTimelineRepository
         private val snapshotSync: ProtonSnapshotSync,
         private val tagListings: ProtonTagListingClient,
     ) {
-        /** One timeline sync and one sync per tag at a time; held across their enumerations. */
-        private val syncMutex = Mutex()
+        /**
+         * One timeline sync per account at a time, without a lock: a second sync asked for
+         * while one enumerates waits for that one's outcome instead of enumerating the library
+         * again (see [ProtonCoalescedRuns]); only the commit takes [mutationMutex].
+         */
+        private val timelineSyncs = ProtonCoalescedRuns<String>()
+
+        /**
+         * One sync per tag at a time, held across the tag's enumeration: [setFavorite] takes the
+         * favourites mutex so a favourites listing enumerated before the toggle cannot be
+         * committed on top of it, which is why the tag syncs are not coalesced like the timeline.
+         */
         private val tagMutexes = ProtonMediaTag.entries.associateWith { Mutex() }
 
         /**
          * Serializes every write to the cached listings and to the state that mirrors them: a
          * sync commit (with its stamp and publish), a favourite toggle and a removal. It is the
-         * innermost lock of the hierarchy, taken after [syncMutex] or a tag mutex and never held
+         * innermost lock of the hierarchy, taken after a tag mutex where one is held and never
          * across an enumeration, and a removal takes nothing else, so a trash never waits on a
          * network round trip. A sync that enumerated before the trash subtracts it at commit
          * time instead (see [removals]), so neither the timeline nor a tag can publish or persist
@@ -88,7 +98,7 @@ internal class ProtonTimelineRepository
         suspend fun syncMetadata(
             userId: UserId,
             forceRemote: Boolean,
-        ) = syncMutex.withLock {
+        ) = timelineSyncs.run(userId.id, forced = forceRemote) {
             // Opened before the listing is read, so a removal between the two is subtracted too.
             val removalSnapshot = removals.openSnapshot()
             try {
