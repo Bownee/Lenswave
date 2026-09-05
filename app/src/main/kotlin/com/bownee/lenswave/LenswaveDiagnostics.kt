@@ -172,9 +172,16 @@ internal object LenswaveDiagnostics {
 
     private const val TAG = "Lenswave"
     private const val MAX_STACK_FRAMES = 4
-    private const val MAX_DIAGNOSTIC_VALUE_LENGTH = 64
-    private val SAFE_DIAGNOSTIC_VALUE = Regex("[A-Za-z0-9_.-]{1,$MAX_DIAGNOSTIC_VALUE_LENGTH}")
-    private val UNSAFE_DIAGNOSTIC_CHARACTER = Regex("[^A-Za-z0-9_.-]")
+
+    /**
+     * A token is a short word of letters, digits, `_` and `-`: an SDK error type, a state name.
+     * No dot, so a hostname or a file name never passes as one, and short enough that a base64url
+     * node or share id (dozens of characters) does not either. The SDK types its structured
+     * errors by string, so there is no fixed list of them to allow instead.
+     */
+    private const val MAX_DIAGNOSTIC_VALUE_LENGTH = 32
+    private val SAFE_DIAGNOSTIC_VALUE = Regex("[A-Za-z0-9_-]{1,$MAX_DIAGNOSTIC_VALUE_LENGTH}")
+    private val UNSAFE_DIAGNOSTIC_CHARACTER = Regex("[^A-Za-z0-9_-]")
     private val SAFE_STACK_FRAME =
         Regex(
             """at ([A-Za-z0-9_.${'$'}<>-]+\.[A-Za-z0-9_${'$'}<>-]+\([A-Za-z0-9_.: -]{1,100}\))""",
