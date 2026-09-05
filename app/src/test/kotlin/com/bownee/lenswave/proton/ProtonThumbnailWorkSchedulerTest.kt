@@ -39,7 +39,37 @@ class ProtonThumbnailWorkSchedulerTest {
             val enqueued = workRequests.enqueued.single()
             assertEquals(NAME, enqueued.name)
             assertEquals(ExistingWorkPolicy.REPLACE, enqueued.policy)
-            assertEquals(ProtonThumbnailFollowUp(requiresCharging = false), enqueued.request)
+            // The replacement knows what it displaced, so a run that ends before the queues
+            // can give the charging follow-up back.
+            assertEquals(
+                ProtonThumbnailFollowUp(requiresCharging = false, replacesChargingRun = true),
+                enqueued.request,
+            )
+        }
+
+    @Test
+    fun `an ask that finds nothing waiting for the charger is a plain request`() =
+        test { scheduler ->
+            scheduler.enqueue(USER)
+            testScheduler.runCurrent()
+
+            assertEquals(ProtonThumbnailFollowUp(requiresCharging = false), workRequests.enqueued.single().request)
+        }
+
+    @Test
+    fun `a restart that displaces a charging follow-up marks its request as the replacement`() =
+        test { scheduler ->
+            workRequests.states[NAME] =
+                listOf(ProtonThumbnailQueuedRequest(WorkInfo.State.ENQUEUED, requiresCharging = true))
+
+            scheduler.restart(USER)
+
+            val restarted = workRequests.enqueued.single()
+            assertEquals(ExistingWorkPolicy.REPLACE, restarted.policy)
+            assertEquals(
+                ProtonThumbnailFollowUp(requiresCharging = false, replacesChargingRun = true),
+                restarted.request,
+            )
         }
 
     @Test

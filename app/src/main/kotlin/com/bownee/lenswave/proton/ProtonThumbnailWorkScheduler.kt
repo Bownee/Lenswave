@@ -133,6 +133,7 @@ internal class WorkManagerProtonThumbnailWorkRequests
             requiresCharging = request.requiresCharging,
             initialDelayMillis = request.initialDelayMillis,
             networkWaitAttempt = request.networkWaitAttempt,
+            replacesChargingRun = request.replacesChargingRun,
         )
 
         private fun queuedRequest(info: WorkInfo) =
@@ -157,8 +158,12 @@ internal class WorkManagerProtonThumbnailWorkRequests
  * previews it deferred. It waits for the charger, but previews are also allowed while the app
  * is on screen, and every ask from the app is made on screen. So an ask that finds only that
  * request waiting replaces it with a plain one, which runs now and leaves its own charging
- * follow-up for whatever it defers. A follow-up that is already running is a run in progress
- * and is kept like any other. Otherwise only [restart] replaces.
+ * follow-up for whatever it defers. The replacement is marked as such
+ * ([ProtonThumbnailFollowUp.replacesChargingRun]): a run that ends before it reaches the queues
+ * (no session, another run going) leaves no follow-up of its own, and the charging request it
+ * displaced would be lost with it, so such a run gives that request back. A follow-up that is
+ * already running is a run in progress and is kept like any other. Otherwise only [restart]
+ * replaces, and it marks its request the same way.
  *
  * The first ask for a name after the process started does not know yet what WorkManager holds
  * under it, and the request that decides the policy (the charging follow-up) may well be there,
@@ -229,7 +234,7 @@ internal class ProtonThumbnailWorkScheduler(
             workName,
             ProtonThumbnailEnqueuePolicy.existingWorkPolicy(waitingForCharger),
             userId,
-            ProtonThumbnailFollowUp(requiresCharging = false),
+            ProtonThumbnailFollowUp(requiresCharging = false, replacesChargingRun = waitingForCharger),
         )
     }
 
@@ -258,12 +263,17 @@ internal class ProtonThumbnailWorkScheduler(
     override suspend fun restart(userId: UserId) {
         if (pauseStore.isPaused(userId)) return
         val workName = ProtonWorkNames.thumbnails(userId)
-        observe(workName).lastEnqueuedAtMillis.set(elapsedRealtimeMillis())
+        val observation = observe(workName)
+        observation.lastEnqueuedAtMillis.set(elapsedRealtimeMillis())
+        // A restart replaces whatever is there, a waiting charging follow-up included, and
+        // marks its request accordingly; it waits for WorkManager's first answer to know, as it
+        // waits for WorkManager to record the request anyway.
+        observation.resolved.await()
         workRequests.enqueueUniqueWorkAndAwait(
             workName,
             ExistingWorkPolicy.REPLACE,
             userId,
-            ProtonThumbnailFollowUp(requiresCharging = false),
+            ProtonThumbnailFollowUp(requiresCharging = false, replacesChargingRun = observation.waitingForCharger),
         )
     }
 
