@@ -115,7 +115,6 @@ internal class ProtonThumbnailStore
                 discardUnreadable(key, file, observed)
                 return null
             }
-            file.setLastModified(clock.nowMillis())
             return synchronized(lock(key)) {
                 val cached = bitmaps.get(key)?.takeUnless(Bitmap::isRecycled)
                 if (cached != null) {
@@ -177,7 +176,6 @@ internal class ProtonThumbnailStore
                     val existed = target.isFile && target.length() > 0L
                     target.parentFile?.mkdirs()
                     secureFiles.write(scope(userId), target, stored, "Could not commit thumbnail cache file")
-                    target.setLastModified(clock.nowMillis())
                     if (!existed) adjustCount(userId, 1)
                     if (publishToMemory) {
                         bitmaps.put(key, bitmap)
