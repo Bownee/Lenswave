@@ -29,7 +29,9 @@ internal class ProtonSnapshotSync internal constructor(
      *   that serializes them against its other mutations without holding it across the
      *   enumeration.
      * - Cancellation anywhere after the freshness check: [publishCancelled], then rethrow.
-     * - Any other failure: it is reported under [operation], then [publishFailed].
+     * - Any other failure: it is reported under [operation], then [publishFailed] with it, so a
+     *   repository can tell a refused listing (see [ProtonSuspiciousListingException]) from a
+     *   refresh that merely failed.
      */
     suspend fun <T> sync(
         userId: String,
@@ -44,7 +46,7 @@ internal class ProtonSnapshotSync internal constructor(
         commit: (T) -> T,
         publishResult: (T) -> Unit,
         publishCancelled: () -> Unit,
-        publishFailed: () -> Unit,
+        publishFailed: (error: Throwable) -> Unit,
         commitGate: suspend (commit: suspend () -> Unit) -> Unit,
     ) {
         try {
@@ -72,7 +74,7 @@ internal class ProtonSnapshotSync internal constructor(
             throw error
         } catch (error: Throwable) {
             reportFailure(operation, error)
-            publishFailed()
+            publishFailed(error)
         }
     }
 }

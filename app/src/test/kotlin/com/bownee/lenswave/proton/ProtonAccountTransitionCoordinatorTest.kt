@@ -14,7 +14,7 @@ class ProtonAccountTransitionCoordinatorTest {
             val events = mutableListOf<String>()
             val coordinator = coordinator(events)
 
-            coordinator.transition(UserId("a"), UserId("b"))
+            coordinator.transition(UserId("a"), UserId("b"), accountAbsent = false)
 
             assertEquals(
                 listOf("cancel:a", "disconnect:a", "activate:b", "retain:b", "enqueue:b"),
@@ -27,7 +27,7 @@ class ProtonAccountTransitionCoordinatorTest {
         runBlocking {
             val events = mutableListOf<String>()
 
-            coordinator(events).transition(UserId("a"), null)
+            coordinator(events).transition(UserId("a"), null, accountAbsent = true)
 
             assertEquals(listOf("cancel:a", "disconnect:a", "retain:null"), events)
         }
@@ -39,7 +39,7 @@ class ProtonAccountTransitionCoordinatorTest {
         val coordinator = coordinator(events, sessionLifecycle)
 
         assertThrows(IllegalStateException::class.java) {
-            runBlocking { coordinator.transition(UserId("a"), UserId("b")) }
+            runBlocking { coordinator.transition(UserId("a"), UserId("b"), accountAbsent = false) }
         }
         assertEquals(listOf("cancel:a", "disconnect:a", "activate:b"), events)
     }
@@ -50,8 +50,8 @@ class ProtonAccountTransitionCoordinatorTest {
             val events = mutableListOf<String>()
             val coordinator = coordinator(events)
 
-            coordinator.transition(null, null)
-            coordinator.transition(null, null)
+            coordinator.transition(null, null, accountAbsent = true)
+            coordinator.transition(null, null, accountAbsent = true)
 
             assertEquals(listOf("retain:null"), events)
         }
@@ -62,8 +62,8 @@ class ProtonAccountTransitionCoordinatorTest {
             val events = mutableListOf<String>()
             val coordinator = coordinator(events)
 
-            coordinator.transition(null, UserId("a"))
-            coordinator.transition(UserId("a"), UserId("a"))
+            coordinator.transition(null, UserId("a"), accountAbsent = false)
+            coordinator.transition(UserId("a"), UserId("a"), accountAbsent = false)
 
             assertEquals(listOf("activate:a", "retain:a", "enqueue:a"), events)
         }
@@ -75,7 +75,7 @@ class ProtonAccountTransitionCoordinatorTest {
             val coordinator =
                 coordinator(events, mutationForgetter = ProtonAccountMutationForgetter { events += "forget-mutations" })
 
-            coordinator.transition(UserId("a"), UserId("b"))
+            coordinator.transition(UserId("a"), UserId("b"), accountAbsent = false)
 
             assertEquals(
                 listOf("cancel:a", "disconnect:a", "forget-mutations", "activate:b", "retain:b", "enqueue:b"),
@@ -83,13 +83,72 @@ class ProtonAccountTransitionCoordinatorTest {
             )
         }
 
+    @Test
+    fun anAccountThatIsNotReadyYetIsNotSweptAsIfItWereAbsent() =
+        runBlocking {
+            val events = mutableListOf<String>()
+            val coordinator = coordinator(events)
+
+            // The account exists but has not finished loading: nothing may be deleted.
+            coordinator.transition(null, null, accountAbsent = false)
+            assertEquals(emptyList<String>(), events)
+
+            // Once it is ready the real transition keeps exactly that account.
+            coordinator.transition(null, UserId("a"), accountAbsent = false)
+            assertEquals(listOf("activate:a", "retain:a", "enqueue:a"), events)
+        }
+
+    @Test
+    fun anAccountThatBecomesAbsentAfterLoadingIsSweptOnThatObservation() =
+        runBlocking {
+            val events = mutableListOf<String>()
+            val coordinator = coordinator(events)
+
+            coordinator.transition(null, null, accountAbsent = false)
+            coordinator.transition(null, null, accountAbsent = true)
+
+            assertEquals(listOf("retain:null"), events)
+        }
+
+    @Test
+    fun aSignedInAccountThatStopsBeingReadyIsTornDownWithoutASweep() =
+        runBlocking {
+            val events = mutableListOf<String>()
+            val coordinator = coordinator(events)
+
+            coordinator.transition(UserId("a"), null, accountAbsent = false)
+
+            assertEquals(listOf("cancel:a", "disconnect:a"), events)
+        }
+
+    @Test
+    fun aSweepThatFailsIsRetriedOnTheNextEqualTransition() =
+        runBlocking {
+            val events = mutableListOf<String>()
+            var failures = 1
+            val coordinator =
+                coordinator(events, cacheCleaner = { userId ->
+                    events += "retain:$userId"
+                    if (failures-- > 0) error("cache directory is busy")
+                })
+
+            assertThrows(IllegalStateException::class.java) {
+                runBlocking { coordinator.transition(null, null, accountAbsent = true) }
+            }
+            coordinator.transition(null, null, accountAbsent = true)
+            coordinator.transition(null, null, accountAbsent = true)
+
+            assertEquals(listOf("retain:null", "retain:null"), events)
+        }
+
     private fun coordinator(
         events: MutableList<String>,
         sessionLifecycle: ProtonSessionLifecycle = FakeSessionLifecycle(events),
         mutationForgetter: ProtonAccountMutationForgetter = ProtonAccountMutationForgetter {},
+        cacheCleaner: ProtonAccountCacheCleaner = ProtonAccountCacheCleaner { userId -> events += "retain:$userId" },
     ) = ProtonAccountTransitionCoordinator(
         sessionLifecycle = sessionLifecycle,
-        cacheCleaner = ProtonAccountCacheCleaner { userId -> events += "retain:$userId" },
+        cacheCleaner = cacheCleaner,
         thumbnailScheduler = FakeThumbnailScheduler(events),
         mutationForgetter = mutationForgetter,
     )

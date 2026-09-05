@@ -118,7 +118,31 @@ class ProtonAccountSessionManagerTest {
 
             assertNull(manager.state.value.activeUserId)
             assertTrue(manager.state.value.initialized)
-            assertTrue(events.none { it.startsWith("activate") })
+            assertFalse(manager.state.value.transitioning)
+            // Nothing at all: a sweep here would keep no account and erase the loading one's caches.
+            assertEquals(emptyList<String>(), events)
+
+            accounts.value = readyAccount("a")
+            runCurrent()
+
+            assertEquals(UserId("a"), manager.state.value.activeUserId)
+            assertEquals(listOf("activate:a", "retain:a", "enqueue:a"), events)
+        }
+
+    @Test
+    fun `an account that never becomes ready and is then removed is swept on its removal`() =
+        runTest {
+            val manager = manager(backgroundScope)
+            accounts.value = readyAccount("a").copy(state = AccountState.NotReady)
+            manager.start()
+            runCurrent()
+            assertEquals(emptyList<String>(), events)
+
+            accounts.value = null
+            runCurrent()
+
+            assertEquals(listOf("retain:null"), events)
+            assertNull(manager.state.value.activeUserId)
         }
 
     private fun manager(scope: CoroutineScope) =

@@ -116,15 +116,48 @@ class ProtonAlbumRepositoryTest {
         }
 
     @Test
+    fun `a photo trashed while the album was enumerating is dropped even after the album was closed`() =
+        runTest {
+            val album = ProtonAlbumReference("al1", "Album")
+            cache.albums[USER.id] = listOf(album("al1", photoCount = 2L), album("al2", photoCount = 1L))
+            cache.albumPhotos[USER.id to "al1"] = listOf(photo("x", 2L), photo("y", 1L))
+            cache.albumPhotos[USER.id to "al2"] = listOf(photo("w", 5L))
+            repository.loadCached(USER)
+            repository.loadCachedAlbum(USER, album)
+            clients.albumPhotos = listOf("x" to 2L, "y" to 1L, "z" to 3L)
+
+            val sync = launch { repository.syncAlbumPhotoMetadata(USER, album, forceRemote = false) }
+            runCurrent()
+            assertTrue("the enumeration must be in flight", clients.enumerating.isCompleted)
+
+            // The user leaves for another album, then trashes a photo of the first one.
+            repository.loadCachedAlbum(USER, ProtonAlbumReference("al2", "Other"))
+            repository.removePhotos(USER, setOf("x"))
+            clients.release.complete(Unit)
+            sync.join()
+
+            assertEquals(
+                listOf("z", "y"),
+                cache.albumPhotos.getValue(USER.id to "al1").map(ProtonGalleryPhoto::nodeUid),
+            )
+            val published = repository.albumPhotosState.value
+            assertEquals("al2", published.albumUid)
+            assertEquals(listOf("w"), published.photos.map(ProtonGalleryPhoto::nodeUid))
+            assertTrue(failures.isEmpty())
+        }
+
+    @Test
     fun `an automatic albums refresh that drops most of the albums keeps the cache and fails`() =
         runTest {
-            cache.albums[USER.id] = List(400) { index -> album("al$index", photoCount = 1L) }
+            // Real album counts are small; the album floor refuses losing three of five.
+            cache.albums[USER.id] = List(5) { index -> album("al$index", photoCount = 1L) }
             repository.loadCached(USER)
 
             repository.syncMetadata(USER, forceRemote = false)
 
-            assertEquals(400, repository.albumsState.value.albums.size)
+            assertEquals(5, repository.albumsState.value.albums.size)
             assertTrue(repository.albumsState.value.refreshFailed)
+            assertTrue(repository.albumsState.value.listingRefused)
             assertTrue(cache.events.isEmpty())
             assertTrue(failures.single().second is ProtonSuspiciousListingException)
 
@@ -134,6 +167,7 @@ class ProtonAlbumRepositoryTest {
                 repository.albumsState.value.albums
                     .isEmpty(),
             )
+            assertFalse(repository.albumsState.value.listingRefused)
             assertEquals(listOf("writeAlbums:0", "reconcileAlbums:0"), cache.events)
         }
 
@@ -149,6 +183,7 @@ class ProtonAlbumRepositoryTest {
 
             assertEquals(400, repository.albumPhotosState.value.photos.size)
             assertTrue(repository.albumPhotosState.value.refreshFailed)
+            assertTrue(repository.albumPhotosState.value.listingRefused)
             assertTrue(cache.events.isEmpty())
             assertTrue(failures.single().second is ProtonSuspiciousListingException)
 
@@ -158,6 +193,7 @@ class ProtonAlbumRepositoryTest {
                 repository.albumPhotosState.value.photos
                     .isEmpty(),
             )
+            assertFalse(repository.albumPhotosState.value.listingRefused)
             assertEquals(listOf("writeAlbumPhotos:al1:0"), cache.events)
         }
 
@@ -190,6 +226,35 @@ class ProtonAlbumRepositoryTest {
             )
 
             assertTrue(repository.albumPhotosState.value.hasLoaded)
+        }
+
+    @Test
+    fun `a slow read for an album opened earlier cannot overwrite the album opened after it`() =
+        runTest {
+            cache.albumPhotos[USER.id to "al1"] = listOf(photo("x", 2L))
+            cache.albumPhotos[USER.id to "al2"] = listOf(photo("y", 1L))
+            // While the first album's index is still being read, the user opens the second one.
+            cache.onReadAlbumPhotos = { albumUid ->
+                if (albumUid == "al1") repository.loadCachedAlbum(USER, ProtonAlbumReference("al2", "Second"))
+            }
+
+            repository.loadCachedAlbum(USER, ProtonAlbumReference("al1", "First"))
+
+            val published = repository.albumPhotosState.value
+            assertEquals("al2", published.albumUid)
+            assertEquals(listOf("y"), published.photos.map(ProtonGalleryPhoto::nodeUid))
+            assertTrue(published.hasLoaded)
+        }
+
+    @Test
+    fun `the capture time of a photo in the open album is known, one in a closed album is not`() =
+        runTest {
+            cache.albumPhotos[USER.id to "al1"] = listOf(photo("x", 2L))
+            repository.loadCachedAlbum(USER, ProtonAlbumReference("al1", "Album"))
+
+            assertEquals(2L, repository.publishedCaptureTime(USER, "x"))
+            assertEquals(null, repository.publishedCaptureTime(USER, "y"))
+            assertEquals(null, repository.publishedCaptureTime(UserId("other"), "x"))
         }
 
     @Test
@@ -305,6 +370,9 @@ class ProtonAlbumRepositoryTest {
         var albumsReadable = true
         var onRemove: () -> Unit = {}
 
+        /** Runs while an album-photo index is being read, before the result is handed back. */
+        var onReadAlbumPhotos: (albumUid: String) -> Unit = {}
+
         override fun storedRenditions(userId: String): ProtonStoredRenditions = ProtonStoredRenditions.NONE
 
         override fun readAlbumsSnapshot(
@@ -324,7 +392,11 @@ class ProtonAlbumRepositoryTest {
             userId: String,
             albumUid: String,
             availability: ProtonStoredRenditions,
-        ): List<ProtonGalleryPhoto>? = albumPhotos[userId to albumUid]?.map { it }
+        ): List<ProtonGalleryPhoto>? {
+            val photos = albumPhotos[userId to albumUid]?.map { it }
+            onReadAlbumPhotos(albumUid)
+            return photos
+        }
 
         override fun writeAlbumPhotos(
             userId: String,

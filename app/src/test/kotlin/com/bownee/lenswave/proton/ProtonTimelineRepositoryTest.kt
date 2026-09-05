@@ -111,6 +111,70 @@ class ProtonTimelineRepositoryTest {
         }
 
     @Test
+    fun `two timeline syncs for one account share one enumeration, a forced one runs its own after`() =
+        runTest {
+            cache.timelines[USER.id] = listOf(photo("v~a1", 100L))
+            repository.loadCached(USER)
+            clients.holdEnumeration = true
+            clients.timeline = listOf("v~a1" to 100L, "v~new" to 600L)
+
+            val first = launch { repository.syncMetadata(USER, forceRemote = false) }
+            val second = launch { repository.syncMetadata(USER, forceRemote = false) }
+            val forced = launch { repository.syncMetadata(USER, forceRemote = true) }
+            runCurrent()
+
+            assertEquals(1, clients.enumerationCount)
+            assertFalse(second.isCompleted)
+            clients.release.complete(Unit)
+            first.join()
+            second.join()
+            forced.join()
+
+            // The unforced pair enumerated once between them; the forced refresh enumerated itself.
+            assertEquals(2, clients.enumerationCount)
+            assertEquals(
+                listOf("v~a1", "v~new"),
+                repository.state.value.photos
+                    .map(ProtonGalleryPhoto::nodeUid),
+            )
+            assertEquals(
+                listOf("writeIndex:2", "reconcilePhotos:1->2", "writeIndex:2", "reconcilePhotos:2->2"),
+                cache.events,
+            )
+            assertTrue(failures.isEmpty())
+        }
+
+    @Test
+    fun `a cached listing that cannot be read while the timeline is enumerating narrows nothing`() =
+        runTest {
+            cache.timelines[USER.id] = listOf(photo("v~a1", 100L), photo("v~x", 500L))
+            repository.loadCached(USER)
+            clients.holdEnumeration = true
+            clients.timeline = listOf("v~a1" to 100L, "v~x" to 500L, "v~new" to 600L)
+
+            val sync = launch { repository.syncMetadata(USER, forceRemote = false) }
+            runCurrent()
+            assertTrue("the enumeration must be in flight", clients.enumerating.isCompleted)
+
+            // A transient read failure publishes an empty, unloaded timeline in the meantime.
+            cache.timelines.remove(USER.id)
+            repository.loadCached(USER)
+            assertFalse(repository.state.value.hasLoaded)
+            assertTrue(
+                repository.state.value.photos
+                    .isEmpty(),
+            )
+            clients.release.complete(Unit)
+            sync.join()
+
+            val state = repository.state.value
+            assertEquals(listOf("v~a1", "v~x", "v~new"), state.photos.map(ProtonGalleryPhoto::nodeUid))
+            assertTrue(state.hasLoaded)
+            assertEquals(3, cache.timelines.getValue(USER.id).size)
+            assertTrue(failures.isEmpty())
+        }
+
+    @Test
     fun `a favourite set while the favourites listing is enumerating survives the sync commit`() =
         runTest {
             cache.timelines[USER.id] = listOf(photo("v~a1", 100L), photo("v~x", 500L))
@@ -147,22 +211,28 @@ class ProtonTimelineRepositoryTest {
             cache.thumbnails += listOf("v~c", "v~album")
             repository.loadCached(USER)
 
-            repository.setFavorite(USER, setOf("v~a", "v~c", "v~album"), favorite = true)
+            repository.setFavorite(USER, setOf("v~a", "v~c", "v~album", "v~unknown"), favorite = true) { nodeUid ->
+                if (nodeUid == "v~album") 250L else null
+            }
 
             val favorites =
                 repository.state.value.tags
                     .getValue(ProtonMediaTag.FAVORITES)
                     .photos
-            // The album-only photo has no capture time here and sorts last; c keeps its stored thumbnail.
-            assertEquals(listOf("v~c", "v~b", "v~a", "v~album"), favorites.map(ProtonGalleryPhoto::nodeUid))
-            assertEquals(listOf(true, false, false, true), favorites.map(ProtonGalleryPhoto::hasThumbnail))
-            assertEquals(listOf("v~album"), cache.stats)
+            // The album-only photo takes the album's capture time and lands between c and b; the
+            // photo nobody knows has none and sorts last; c keeps its stored thumbnail.
             assertEquals(
-                listOf("v~c", "v~b", "v~a", "v~album"),
+                listOf("v~c", "v~album", "v~b", "v~a", "v~unknown"),
+                favorites.map(ProtonGalleryPhoto::nodeUid),
+            )
+            assertEquals(listOf(true, true, false, false, false), favorites.map(ProtonGalleryPhoto::hasThumbnail))
+            assertEquals(listOf("v~album", "v~unknown"), cache.stats)
+            assertEquals(
+                listOf("v~c", "v~album", "v~b", "v~a", "v~unknown"),
                 cache.tags.getValue(USER.id to ProtonMediaTag.FAVORITES).map(ProtonGalleryPhoto::nodeUid),
             )
 
-            repository.setFavorite(USER, setOf("v~b", "v~album"), favorite = false)
+            repository.setFavorite(USER, setOf("v~b", "v~album", "v~unknown"), favorite = false)
 
             assertEquals(
                 listOf("v~c", "v~a"),
@@ -222,18 +292,30 @@ class ProtonTimelineRepositoryTest {
             val state = repository.state.value
             assertEquals(400, state.photos.size)
             assertTrue(state.refreshFailed)
+            assertTrue(state.listingRefused)
             assertFalse(state.syncing)
             assertEquals(400, cache.timelines.getValue(USER.id).size)
             assertTrue(cache.events.none { it.startsWith("reconcilePhotos") || it.startsWith("writeIndex") })
             assertTrue(failures.single().second is ProtonSuspiciousListingException)
 
+            // A later automatic refresh that fails for another reason keeps the refusal showing.
+            clients.enumerationFailure = IllegalStateException("offline")
+            repository.syncMetadata(USER, forceRemote = false)
+            assertTrue(repository.state.value.refreshFailed)
+            assertTrue(repository.state.value.listingRefused)
+            // A photo trashed in the meantime keeps it too.
+            repository.removePhotos(USER, setOf("v~p399"))
+            assertTrue(repository.state.value.listingRefused)
+            clients.enumerationFailure = null
+
             repository.syncMetadata(USER, forceRemote = true)
 
             assertEquals(100, repository.state.value.photos.size)
             assertFalse(repository.state.value.refreshFailed)
+            assertFalse(repository.state.value.listingRefused)
             assertEquals(100, cache.timelines.getValue(USER.id).size)
             // The new listing is on disk before anything it no longer names is deleted.
-            assertEquals(listOf("writeIndex:100", "reconcilePhotos:400->100"), cache.events)
+            assertEquals(listOf("removePhotos:v~p399", "writeIndex:100", "reconcilePhotos:399->100"), cache.events)
         }
 
     @Test
@@ -274,17 +356,17 @@ class ProtonTimelineRepositoryTest {
                     .getValue(ProtonMediaTag.VIDEOS)
             assertEquals(400, videos.photos.size)
             assertTrue(videos.refreshFailed)
+            assertTrue(videos.listingRefused)
             assertEquals(400, cache.tags.getValue(USER.id to ProtonMediaTag.VIDEOS).size)
             assertTrue(failures.single().second is ProtonSuspiciousListingException)
 
             repository.syncTagMetadata(USER, ProtonMediaTag.VIDEOS, forceRemote = true)
 
-            assertEquals(
-                100,
+            val refreshed =
                 repository.state.value.tags
                     .getValue(ProtonMediaTag.VIDEOS)
-                    .photos.size,
-            )
+            assertEquals(100, refreshed.photos.size)
+            assertFalse(refreshed.listingRefused)
             assertEquals(100, cache.tags.getValue(USER.id to ProtonMediaTag.VIDEOS).size)
         }
 
@@ -353,6 +435,10 @@ class ProtonTimelineRepositoryTest {
 
         /** While true, an enumeration signals [enumerating] and answers only once [release] completes. */
         var holdEnumeration = false
+
+        /** When set, an enumeration fails with it instead of listing anything. */
+        var enumerationFailure: Throwable? = null
+        var enumerationCount = 0
         val enumerating = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
 
@@ -365,6 +451,8 @@ class ProtonTimelineRepositoryTest {
                     "enumerateTimeline" -> {
                         flow {
                             enumerating.complete(Unit)
+                            enumerationCount++
+                            enumerationFailure?.let { throw it }
                             if (holdEnumeration) release.await()
                             timeline.forEach { (nodeUid, captureTime) -> emit(timelineItem(nodeUid, captureTime)) }
                         }
