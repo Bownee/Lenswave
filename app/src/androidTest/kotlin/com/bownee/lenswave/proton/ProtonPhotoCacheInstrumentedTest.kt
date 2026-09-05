@@ -12,6 +12,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -46,17 +47,25 @@ class ProtonPhotoCacheInstrumentedTest {
 
             // A download in flight survives reconciliation while its photo is still listed and
             // is dropped with everything else once the photo has left the timeline.
-            val activeTarget = cache.createOriginalTarget(userId, "active").first
-            activeTarget.writeText("in progress")
+            // A download in flight survives reconciliation while its photo is still listed; once
+            // the photo has left the timeline its commit is refused and takes the plaintext with it.
+            val active = cache.createOriginalTarget(userId, "active")
+            active.plaintext.writeText("in progress")
             cache.reconcilePhotos(userId, emptyList(), listOf("active"))
-            assertTrue(activeTarget.exists())
+            assertTrue(active.plaintext.exists())
             // A reconcile that changes nothing sweeps nothing; the removal has to be visible to it.
             cache.reconcilePhotos(userId, cachedNodeUids = listOf("active"), remoteNodeUids = emptyList())
-            assertFalse(activeTarget.exists())
+            assertThrows(ProtonOriginalRemovedException::class.java) { cache.commitOriginal(userId, "active", active) }
+            assertFalse(active.plaintext.exists())
+            assertFalse(active.encrypted.exists())
+            assertNull(cache.readOriginal(userId, "active"))
 
-            val (plaintext, encrypted) = cache.createOriginalTarget(userId, "bounded")
-            plaintext.writeText("decrypted private content")
-            assertTrue(cache.commitOriginal(userId, "bounded", plaintext, encrypted).isFile)
+            val bounded = cache.createOriginalTarget(userId, "bounded")
+            bounded.plaintext.writeText("decrypted private content")
+            val (plaintext, encrypted) = bounded
+            assertTrue(cache.commitOriginal(userId, "bounded", bounded).isFile)
+            // The download's own file moved to the shared plaintext path.
+            assertFalse(plaintext.exists())
             // The decrypted copy expires after 30 minutes; the encrypted original stays until the
             // size cap or a disconnect removes it, so a later read simply decrypts it again.
             clock.value += 61L * 60L * 1_000L
@@ -77,13 +86,15 @@ class ProtonPhotoCacheInstrumentedTest {
         val staleUser = "stale-${UUID.randomUUID()}"
         val freshUser = "fresh-${UUID.randomUUID()}"
         try {
-            val (stalePlaintext, staleEncrypted) = store.createTarget(staleUser, "old")
-            stalePlaintext.writeText("old plaintext")
-            store.commit(staleUser, "old", stalePlaintext, staleEncrypted)
+            val staleDownload = store.createTarget(staleUser, "old")
+            staleDownload.plaintext.writeText("old plaintext")
+            val stalePlaintext = store.commit(staleUser, "old", staleDownload)
+            val staleEncrypted = staleDownload.encrypted
             clock.value += 31L * 60L * 1_000L
-            val (freshPlaintext, freshEncrypted) = store.createTarget(freshUser, "new")
-            freshPlaintext.writeText("new plaintext")
-            store.commit(freshUser, "new", freshPlaintext, freshEncrypted)
+            val freshDownload = store.createTarget(freshUser, "new")
+            freshDownload.plaintext.writeText("new plaintext")
+            val freshPlaintext = store.commit(freshUser, "new", freshDownload)
+            val freshEncrypted = freshDownload.encrypted
 
             // A copy a player holds open outlives its TTL until the reader closes it.
             val playing = ProtonOriginalStream(stalePlaintext, openCopies).apply { complete() }
@@ -107,6 +118,54 @@ class ProtonPhotoCacheInstrumentedTest {
             store.clear(freshUser)
             secureFiles.deleteKey(ProtonStorageLayout.mediaScope(staleUser))
             secureFiles.deleteKey(ProtonStorageLayout.mediaScope(freshUser))
+            context.testRoot.deleteRecursively()
+        }
+    }
+
+    @Test fun aDecryptThatOutlivesTheRemovalOfItsPhotoCommitsNothing() {
+        val context = isolatedContext()
+        val clock = FakeClock(System.currentTimeMillis())
+        val secureFiles = SecureFileStore(File(context.filesDir, "secure-keys"))
+        val store = ProtonOriginalStore(context, secureFiles, clock, ProtonDecryptedCopyRegistry())
+        val userId = "trash-${UUID.randomUUID()}"
+        try {
+            val download = store.createTarget(userId, "video")
+            download.plaintext.writeBytes(ByteArray(3 * 1_024 * 1_024) { position -> position.toByte() })
+            val copy = store.commit(userId, "video", download)
+            assertTrue(download.encrypted.isFile)
+            // The copy expires, so the next read decrypts again; the photo is trashed while the
+            // first segment is being written. The decrypt finishes, but nothing of it lands.
+            clock.value += 31L * 60L * 1_000L
+            var removedDuringDecrypt = false
+            val result =
+                store.materialize(
+                    userId,
+                    "video",
+                    shouldContinue = { true },
+                    onStarted = { _, _ -> },
+                    onBytesWritten = { _ ->
+                        if (!removedDuringDecrypt) {
+                            removedDuringDecrypt = true
+                            store.remove(userId, "video")
+                        }
+                    },
+                )
+
+            assertTrue(removedDuringDecrypt)
+            assertNull(result)
+            assertFalse(copy.exists())
+            assertFalse(download.encrypted.isFile)
+            assertEquals(
+                emptyList<File>(),
+                copy.parentFile
+                    ?.listFiles()
+                    ?.toList()
+                    .orEmpty(),
+            )
+            assertNull(store.read(userId, "video"))
+        } finally {
+            store.clear(userId)
+            secureFiles.deleteKey(ProtonStorageLayout.mediaScope(userId))
             context.testRoot.deleteRecursively()
         }
     }

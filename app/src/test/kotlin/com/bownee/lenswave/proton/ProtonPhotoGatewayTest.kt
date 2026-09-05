@@ -791,13 +791,12 @@ class ProtonPhotoGatewayTest {
         override fun createOriginalTarget(
             userId: String,
             nodeUid: String,
-        ): Pair<File, File> = error("no download expected")
+        ): ProtonOriginalTarget = error("no download expected")
 
         override fun commitOriginal(
             userId: String,
             nodeUid: String,
-            plaintext: File,
-            target: File,
+            download: ProtonOriginalTarget,
         ): File = error("no download expected")
 
         override fun onOriginalStored(

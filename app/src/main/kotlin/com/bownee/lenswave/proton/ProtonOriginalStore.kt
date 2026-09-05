@@ -38,6 +38,17 @@ internal interface ProtonOriginalMaterializer {
     ): File?
 }
 
+/**
+ * A download in flight: the private plaintext file it writes, the encrypted original it is
+ * committed to, and the removal epoch it started in, see [ProtonRemovalEpochs]. The plaintext is
+ * the download's own; the shared plaintext path is only ever written by a commit.
+ */
+data class ProtonOriginalTarget(
+    val plaintext: File,
+    val encrypted: File,
+    val removalEpoch: Long,
+)
+
 @Module
 @InstallIn(SingletonComponent::class)
 internal abstract class ProtonOriginalStoreModule {
@@ -85,6 +96,13 @@ internal class ProtonOriginalStore
         private val transientReadFailures = ProtonRenditionReadFailures()
 
         /**
+         * Orders every commit of a plaintext copy or an encrypted original against [remove]: a
+         * decrypt or a download that started before the photo was trashed must not bring its
+         * files back once the removal has deleted them.
+         */
+        private val removals = ProtonRemovalEpochs()
+
+        /**
          * The plaintext copy the viewer reads, decrypting it on demand; null when nothing is cached.
          *
          * [shouldContinue] is consulted between decrypt segments. When it turns false the decrypt
@@ -119,18 +137,33 @@ internal class ProtonOriginalStore
             // Read before the decrypt: an oversized legacy original is deleted by the decrypt
             // itself, and its length is gone by the time the tracked total is adjusted below.
             val encryptedBytes = file.length()
+            val key = removalKey(userId, nodeUid)
+            val startedIn = removals.current(key)
+            // The decrypt writes its own temporary and only the gated rename touches the shared
+            // path, so a failure or a cancellation has nothing of the shared path to delete; a
+            // copy another decrypt committed meanwhile is left alone.
             return try {
                 materialized.delete()
-                secureFiles.decryptFile(scope(userId), file, materialized, onStarted, onBytesWritten, shouldContinue)
+                secureFiles.decryptFile(
+                    scope(userId),
+                    file,
+                    materialized,
+                    onStarted,
+                    onBytesWritten,
+                    shouldContinue,
+                ) { commit ->
+                    if (!removals.commitIf(key, startedIn, commit)) throw ProtonOriginalRemovedException()
+                }
                 transientReadFailures.recovered()
                 file.setLastModified(clock.nowMillis())
                 materialized.setLastModified(clock.nowMillis())
                 materialized
             } catch (interrupted: CancellationException) {
-                materialized.delete()
                 throw interrupted
+            } catch (_: ProtonOriginalRemovedException) {
+                // Trashed while it was being decrypted: the temporary is gone, and so is the original.
+                null
             } catch (error: Exception) {
-                materialized.delete()
                 // Only a provably bad original is dropped; a Keystore or I/O hiccup keeps the
                 // encrypted file, and the next open decrypts it again.
                 if (ProtonSnapshotCorruptionPolicy.isCorrupt(error)) {
@@ -142,36 +175,68 @@ internal class ProtonOriginalStore
             }
         }
 
-        /** The plaintext download target and the encrypted file it is committed to. */
+        /**
+         * A private plaintext target for a download and the encrypted file it is committed to.
+         * Two transfers of one node (a replacement started after the first was abandoned) each
+         * own their own file, so the cleanup of one never deletes what the other is writing, and
+         * neither writes the shared plaintext path before [commit].
+         */
         fun createTarget(
             userId: String,
             nodeUid: String,
-        ): Pair<File, File> {
+        ): ProtonOriginalTarget {
             wipeStaleDecryptedCopies()
             val target = file(userId, nodeUid)
             val materialized = decryptedFile(userId, nodeUid)
             materialized.parentFile?.mkdirs()
             target.parentFile?.mkdirs()
-            check(materialized.delete() || !materialized.exists()) {
-                "Could not replace materialized Proton media"
-            }
-            return materialized to target
+            val plaintext = File.createTempFile("${materialized.name}.", ".part", materialized.parentFile)
+            return ProtonOriginalTarget(plaintext, target, removals.current(removalKey(userId, nodeUid)))
         }
 
+        /**
+         * Encrypts the downloaded plaintext into its original and moves the plaintext to the
+         * shared path the viewer reads from, which is returned. Both land under the node's
+         * removal lock and only while the node has not been removed since [createTarget]; a
+         * download whose photo was trashed meanwhile loses its plaintext and throws
+         * [ProtonOriginalRemovedException] instead of resurrecting either file.
+         */
         fun commit(
             userId: String,
             nodeUid: String,
-            plaintext: File,
-            target: File,
+            download: ProtonOriginalTarget,
         ): File {
-            require(plaintext == decryptedFile(userId, nodeUid)) {
-                "Downloaded Proton media must use its materialized cache target"
+            val materialized = decryptedFile(userId, nodeUid)
+            require(
+                download.plaintext.parentFile == materialized.parentFile && download.encrypted == file(userId, nodeUid),
+            ) {
+                "Downloaded Proton media must use its own cache target"
             }
-            secureFiles.encryptFile(scope(userId), plaintext, target, "Could not protect downloaded photo")
+            var committed = false
+            secureFiles.encryptFile(
+                scope(userId),
+                download.plaintext,
+                download.encrypted,
+                "Could not protect downloaded photo",
+            ) { commit ->
+                committed =
+                    removals.commitIf(removalKey(userId, nodeUid), download.removalEpoch) {
+                        commit()
+                        AtomicFileStore.commit(
+                            download.plaintext,
+                            materialized,
+                            "Could not materialize downloaded photo",
+                        )
+                    }
+            }
+            if (!committed) {
+                download.plaintext.delete()
+                throw ProtonOriginalRemovedException()
+            }
             val storedAt = clock.nowMillis()
-            target.setLastModified(storedAt)
-            plaintext.setLastModified(storedAt)
-            return plaintext
+            download.encrypted.setLastModified(storedAt)
+            materialized.setLastModified(storedAt)
+            return materialized
         }
 
         /** Marks [target] as the most recent original and evicts older ones beyond the size limit. */
@@ -213,12 +278,15 @@ internal class ProtonOriginalStore
             decrypted.listFiles()?.filter(File::isDirectory)?.forEach(::expireCopies)
         }
 
+        /** Deletes the original and its plaintext copy, and refuses every decrypt or download commit that started before. */
         fun remove(
             userId: String,
             nodeUid: String,
         ) {
-            deleteTracked(userId, file(userId, nodeUid))
-            decryptedFile(userId, nodeUid).delete()
+            removals.remove(removalKey(userId, nodeUid)) {
+                deleteTracked(userId, file(userId, nodeUid))
+                decryptedFile(userId, nodeUid).delete()
+            }
         }
 
         /**
@@ -355,6 +423,11 @@ internal class ProtonOriginalStore
         private fun decryptedDirectory(userId: String): File = File(decrypted, AtomicFileStore.safeName(userId))
 
         private fun scope(userId: String): String = ProtonStorageLayout.mediaScope(userId)
+
+        private fun removalKey(
+            userId: String,
+            nodeUid: String,
+        ): String = "$userId:$nodeUid"
 
         private fun isStalePartial(file: File): Boolean =
             file.extension == "part" && isExpired(file, ProtonStorageLayout.STALE_PART_TTL_MILLIS)

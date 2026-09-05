@@ -365,14 +365,13 @@ internal class ProtonPhotoCache
         override fun createOriginalTarget(
             userId: String,
             nodeUid: String,
-        ): Pair<File, File> = originals.createTarget(userId, nodeUid)
+        ): ProtonOriginalTarget = originals.createTarget(userId, nodeUid)
 
         override fun commitOriginal(
             userId: String,
             nodeUid: String,
-            plaintext: File,
-            target: File,
-        ): File = originals.commit(userId, nodeUid, plaintext, target)
+            download: ProtonOriginalTarget,
+        ): File = originals.commit(userId, nodeUid, download)
 
         override fun onOriginalStored(
             userId: String,
