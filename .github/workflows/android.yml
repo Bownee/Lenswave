@@ -84,9 +84,6 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            */build/reports/androidTests/**
-            */build/outputs/androidTest-results/**
-|
             ${{ steps.sdk.outputs.root }}/platforms/android-29
             ${{ steps.sdk.outputs.root }}/system-images/android-29/default/x86_64
           key: emulator-packages-api29-default-x86_64-v1
@@ -160,7 +157,7 @@ jobs:
         with:
           name: device-tests-${{ github.sha }}
           path: |
-            app/build/reports/androidTests/**
-            app/build/outputs/androidTest-results/**
+            */build/reports/androidTests/**
+            */build/outputs/androidTest-results/**
           if-no-files-found: warn
           retention-days: 30
