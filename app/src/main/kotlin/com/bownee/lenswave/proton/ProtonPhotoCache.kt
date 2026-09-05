@@ -379,10 +379,6 @@ internal class ProtonPhotoCache
             originals.onStored(userId, target)
         }
 
-        override fun prepareUser(userId: String) {
-            originals.wipeStaleDecryptedCopies()
-        }
-
         override fun trimUser(userId: String) {
             thumbnails.maintain(userId)
             previews.maintain(userId)
@@ -412,11 +408,14 @@ internal class ProtonPhotoCache
             cachedNodeUids: Collection<String>,
             remoteNodeUids: Collection<String>,
         ) {
-            val changes = ProtonPhotoReconciliation.compare(cachedNodeUids, remoteNodeUids)
-            val remote = remoteNodeUids.toSet()
-            val availability = storedRenditions(userId)
+            val remote = remoteNodeUids.toHashSet()
+            val changes = ProtonPhotoReconciliation.compare(cachedNodeUids, remote)
+            // An unchanged library has no tag entry to drop and no rendition to delete, and
+            // this used to decrypt every tag file, the albums index and every album-photo index
+            // on each sync to find that out. Stale write temporaries are swept by [trimUser].
+            if (changes.isEmpty) return
             ProtonMediaTag.entries.forEach { tag ->
-                val tagged = readTagSnapshot(userId, tag, availability) ?: return@forEach
+                val tagged = readPhotoEntries(userId, tagIndexFile(userId, tag)) ?: return@forEach
                 val retained = tagged.filter { it.nodeUid in remote }
                 if (retained.size != tagged.size) writeTag(userId, tag, retained)
             }
@@ -445,35 +444,53 @@ internal class ProtonPhotoCache
             val removed = nodeUids.toSet()
             // The listings are rewritten before any rendition is deleted, so a crash in between
             // leaves stray files for the next reconcile rather than listings that still name
-            // the photos. Only the node uids are persisted, so the rendition availability the
-            // listings are hydrated with does not matter here.
-            val availability = storedRenditions(userId)
+            // the photos. Only the node uids and capture times are persisted, so the listings
+            // are parsed without hydrating rendition availability. The album indexes are
+            // [removeAlbumPhotos]' job, under the album repository's lock.
             // A listing that did not contain any of the photos is left as it is; rewriting it
-            // would encrypt and commit the same contents again under the sync mutex.
-            readTimelineSnapshot(userId, availability)?.let { photos ->
+            // would encrypt and commit the same contents again under the mutation mutex.
+            readPhotoEntries(userId, indexFile(userId))?.let { photos ->
                 val remaining = photos.filterNot { it.nodeUid in removed }
                 if (remaining.size != photos.size) writeIndex(userId, remaining)
             }
             ProtonMediaTag.entries.forEach { tag ->
-                readTagSnapshot(userId, tag, availability)?.let { photos ->
+                readPhotoEntries(userId, tagIndexFile(userId, tag))?.let { photos ->
                     val remaining = photos.filterNot { it.nodeUid in removed }
                     if (remaining.size != photos.size) writeTag(userId, tag, remaining)
                 }
             }
+            removed.forEach { nodeUid ->
+                thumbnails.remove(userId, nodeUid)
+                previews.remove(userId, nodeUid)
+                originals.remove(userId, nodeUid)
+            }
+            forgetRenditions(userId)
+        }
+
+        /**
+         * The album repository calls this under its own mutation lock, so an album-photo sync
+         * committing at the same time cannot overwrite the rewritten index with a listing that
+         * still names the photos.
+         */
+        override fun removeAlbumPhotos(
+            userId: String,
+            nodeUids: Collection<String>,
+        ) {
+            val removed = nodeUids.toSet()
             // Only albums that actually lost a photo are rewritten; the rest keep their counts.
             val albumCounts = mutableMapOf<String, Long>()
             albumPhotosDirectory(userId)
                 .listFiles()
                 ?.filter { it.extension == "json" }
                 ?.forEach { file ->
-                    val photos = readPhotoSnapshot(userId, file, availability) ?: return@forEach
+                    val photos = readPhotoEntries(userId, file) ?: return@forEach
                     val remaining = photos.filterNot { it.nodeUid in removed }
                     if (remaining.size == photos.size) return@forEach
                     writePhotoIndex(userId, file, remaining)
                     albumCounts[file.nameWithoutExtension] = remaining.size.toLong()
                 }
             if (albumCounts.isNotEmpty()) {
-                readAlbumsSnapshot(userId, availability)?.let { albums ->
+                readAlbumsSnapshot(userId, ProtonStoredRenditions.NONE)?.let { albums ->
                     writeAlbums(
                         userId,
                         albums.map { album ->
@@ -483,12 +500,6 @@ internal class ProtonPhotoCache
                     )
                 }
             }
-            removed.forEach { nodeUid ->
-                thumbnails.remove(userId, nodeUid)
-                previews.remove(userId, nodeUid)
-                originals.remove(userId, nodeUid)
-            }
-            forgetRenditions(userId)
         }
 
         /**
@@ -518,12 +529,18 @@ internal class ProtonPhotoCache
          * Directory names are hashed user ids and key files are hashed scopes, so an orphaned
          * directory cannot name its key; the alias marker each directory carries does. A directory
          * from before the marker existed leaves its key behind: a wrapped key nothing reads.
+         *
+         * Best effort, like [clearUser]: this runs inside the account transition, which the
+         * session manager retries forever while the gallery shows the account as transitioning,
+         * so a directory that resists deletion is reported once and left for the next sweep. Its
+         * key is deleted regardless, so whatever residue survives is unreadable.
          */
         override fun retainOnlyUser(userId: String?) {
             val retainedName = userId?.let(::safeName)
+            var everythingDeleted = true
             root.listFiles()?.filter { it.name != retainedName }?.forEach { directory ->
                 val keyAlias = File(directory, KEY_ALIAS_FILE).takeIf(File::isFile)?.readText()
-                check(directory.deleteRecursively()) { "Could not remove orphaned Proton cache" }
+                if (!directory.deleteRecursively()) everythingDeleted = false
                 keyAlias?.let { alias ->
                     try {
                         secureFiles.deleteKeyAlias(alias)
@@ -531,6 +548,12 @@ internal class ProtonPhotoCache
                         LenswaveDiagnostics.reportFailure(LenswaveOperation.CACHE_CLEAR, error)
                     }
                 }
+            }
+            if (!everythingDeleted) {
+                LenswaveDiagnostics.reportFailure(
+                    LenswaveOperation.CACHE_CLEAR,
+                    IllegalStateException("Could not remove all orphaned Proton caches; residue is swept later"),
+                )
             }
             originals.retainOnly(userId)
             thumbnails.retainMemoryFor(userId)
@@ -575,6 +598,22 @@ internal class ProtonPhotoCache
         ): List<ProtonGalleryPhoto>? =
             parsePhotoIndex(userId, index) { value ->
                 availability.photo(value.getString("nodeUid"), value.getLong("captureTime"))
+            }
+
+        /**
+         * The persisted fields only, for listings that are rewritten rather than shown: hydrating
+         * availability hashes every node uid, and a reconcile or a removal never looks at it.
+         */
+        private fun readPhotoEntries(
+            userId: String,
+            index: File,
+        ): List<ProtonGalleryPhoto>? =
+            parsePhotoIndex(userId, index) { value ->
+                ProtonGalleryPhoto(
+                    nodeUid = value.getString("nodeUid"),
+                    captureTimeEpochSeconds = value.getLong("captureTime"),
+                    hasThumbnail = false,
+                )
             }
 
         /** Node uids only, for callers that never look at rendition availability. */

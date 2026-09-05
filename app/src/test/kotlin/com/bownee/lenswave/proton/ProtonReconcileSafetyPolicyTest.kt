@@ -1,6 +1,8 @@
 package com.bownee.lenswave.proton
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -36,5 +38,45 @@ class ProtonReconcileSafetyPolicyTest {
     fun `large counts do not overflow the share comparison`() {
         assertTrue(ProtonReconcileSafetyPolicy.mayCommit(Int.MAX_VALUE, Int.MAX_VALUE / 2, forceRemote = false))
         assertFalse(ProtonReconcileSafetyPolicy.mayCommit(Int.MAX_VALUE, Int.MAX_VALUE, forceRemote = false))
+    }
+
+    @Test
+    fun `requireCommit throws for a suspicious listing and names it`() {
+        val existing = List(400) { index -> "p$index" }
+        val remote = existing.take(100).toSet()
+
+        val error =
+            assertThrows(ProtonSuspiciousListingException::class.java) {
+                ProtonReconcileSafetyPolicy.requireCommit("albums", existing, remote, forceRemote = false) { it }
+            }
+
+        assertEquals(
+            "Remote albums listing dropped 300 of 400 cached entries; refusing to reconcile without a manual refresh",
+            error.message,
+        )
+    }
+
+    @Test
+    fun `requireCommit passes a forced refresh, an empty cache and a modest change`() {
+        val existing = List(400) { index -> "p$index" }
+
+        ProtonReconcileSafetyPolicy.requireCommit("albums", existing, emptySet(), forceRemote = true) { it }
+        ProtonReconcileSafetyPolicy.requireCommit("albums", emptyList<String>(), emptySet(), forceRemote = false) { it }
+        ProtonReconcileSafetyPolicy.requireCommit(
+            "albums",
+            existing,
+            existing.take(300).toSet(),
+            forceRemote = false,
+        ) { it }
+    }
+
+    @Test
+    fun `stored thumbnails stand in for a listing that could not be read`() {
+        assertThrows(ProtonSuspiciousListingException::class.java) {
+            ProtonReconcileSafetyPolicy.requireCommitOverStoredThumbnails("timeline", 400, 100, forceRemote = false)
+        }
+        ProtonReconcileSafetyPolicy.requireCommitOverStoredThumbnails("timeline", 400, 100, forceRemote = true)
+        ProtonReconcileSafetyPolicy.requireCommitOverStoredThumbnails("timeline", 0, 0, forceRemote = false)
+        ProtonReconcileSafetyPolicy.requireCommitOverStoredThumbnails("timeline", 400, 300, forceRemote = false)
     }
 }

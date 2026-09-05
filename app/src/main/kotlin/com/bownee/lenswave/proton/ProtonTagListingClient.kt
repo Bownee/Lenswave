@@ -44,6 +44,12 @@ internal class ProtonTagListingApiClient
     constructor(
         private val apiProvider: ApiProvider,
     ) : ProtonTagListingClient {
+        /**
+         * Pages until the API answers an empty page. Nothing documents that every page but the
+         * last is full, and Proton's own web client keeps asking until a page comes back empty;
+         * stopping on the first short page would silently truncate the listing, and a truncated
+         * tag listing empties the tab.
+         */
         override suspend fun list(
             userId: UserId,
             volumeId: String,
@@ -83,7 +89,7 @@ internal class ProtonTagListingApiClient
                     }
                 photos += page
                 previousPageLastLinkId = lastLinkId
-            } while (page.size == PAGE_SIZE)
+            } while (page.isNotEmpty())
             return photos
         }
 

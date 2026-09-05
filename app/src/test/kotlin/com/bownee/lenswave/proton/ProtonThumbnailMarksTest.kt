@@ -1,10 +1,16 @@
 package com.bownee.lenswave.proton
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ProtonThumbnailMarksTest {
+    private val photoIndex = ProtonNodeUidIndex(ProtonGalleryPhoto::nodeUid)
+
     @Test
     fun marksOnlyTheRequestedPhotosAvailable() {
         val photos = listOf(photo("a", false), photo("b", false), photo("c", false))
@@ -35,6 +41,41 @@ class ProtonThumbnailMarksTest {
     }
 
     @Test
+    fun untouchedItemsKeepTheirInstanceAndTheSourceListIsLeftAlone() {
+        val photos = List(5) { index -> photo("p$index", false) }
+
+        val updated = photos.mark(setOf("p1", "p3", "absent"), available = true)
+
+        assertNotNull(updated)
+        updated!!
+        assertEquals(5, updated.size)
+        listOf(0, 2, 4).forEach { position -> assertSame(photos[position], updated[position]) }
+        assertTrue(updated[1].hasThumbnail)
+        assertTrue(updated[3].hasThumbnail)
+        assertFalse(photos[1].hasThumbnail)
+        assertFalse(photos[3].hasThumbnail)
+    }
+
+    @Test
+    fun theIndexFollowsTheListItIsAskedAbout() {
+        val first = listOf(photo("a", false), photo("b", false))
+        val marked = first.mark(setOf("a"), available = true)!!
+        // A new list with the same uids in the same positions keeps the memo, a different one does not.
+        assertEquals(listOf(photo("a", true), photo("b", true)), marked.mark(setOf("b"), available = true))
+        val reordered = listOf(photo("b", false), photo("a", false))
+        assertEquals(listOf(photo("b", false), photo("a", true)), reordered.mark(setOf("a"), available = true))
+    }
+
+    @Test
+    fun containsAnyNodeUidAnswersWithoutCopying() {
+        val photos = listOf(photo("a", false), photo("b", false))
+
+        assertTrue(photos.containsAnyNodeUid(setOf("x", "b"), photoIndex))
+        assertFalse(photos.containsAnyNodeUid(setOf("x"), photoIndex))
+        assertFalse(emptyList<ProtonGalleryPhoto>().containsAnyNodeUid(setOf("a"), photoIndex))
+    }
+
+    @Test
     fun itemsWithoutANodeUidAreLeftAlone() {
         val albums = listOf(album("with-cover", "cover", false), album("without-cover", null, false))
 
@@ -42,7 +83,7 @@ class ProtonThumbnailMarksTest {
             albums.withThumbnailAvailability(
                 setOf("cover"),
                 available = true,
-                nodeUid = ProtonAlbum::coverPhotoNodeUid,
+                index = ProtonNodeUidIndex(ProtonAlbum::coverPhotoNodeUid),
                 hasThumbnail = ProtonAlbum::hasCoverThumbnail,
                 copy = { album, hasCoverThumbnail -> album.copy(hasCoverThumbnail = hasCoverThumbnail) },
             )
@@ -56,7 +97,7 @@ class ProtonThumbnailMarksTest {
     ) = withThumbnailAvailability(
         nodeUids,
         available,
-        nodeUid = ProtonGalleryPhoto::nodeUid,
+        photoIndex,
         hasThumbnail = ProtonGalleryPhoto::hasThumbnail,
         copy = { photo, hasThumbnail -> photo.copy(hasThumbnail = hasThumbnail) },
     )
