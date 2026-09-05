@@ -75,8 +75,16 @@ internal class ViewerDetailsSheetController(
     private var detailsDragStartedShown = false
     private var detailsSheetAttachmentOffset = 0
 
-    /** True while a settle waits for the surface's first layout pass (see [synchronizeWithImage]). */
+    /**
+     * True while a settle waits for the surface's first layout pass (see [synchronizeWithImage]).
+     * Cleared by [resetForNavigation] and [release]; the listener already registered then checks
+     * [layoutSynchronizationGeneration] and does nothing when it has moved on.
+     */
     private var layoutSynchronizationPending = false
+    private var layoutSynchronizationGeneration = 0
+
+    /** Set by [release]: the Activity is going, and a layout listener that still fires must not touch it. */
+    private var released = false
 
     /** Resolved once: a resource lookup per animation frame is a needless trip through the resource table. */
     private val sheetOverlap = resources.getDimensionPixelSize(R.dimen.photo_details_sheet_overlap)
@@ -257,7 +265,9 @@ internal class ViewerDetailsSheetController(
             // 0: open, invisible, and blocking swipes. Settle once the layout pass has run instead.
             if (!layoutSynchronizationPending) {
                 layoutSynchronizationPending = true
+                val generation = ++layoutSynchronizationGeneration
                 photoDetailsScroll.doOnNextLayout {
+                    if (released || generation != layoutSynchronizationGeneration) return@doOnNextLayout
                     layoutSynchronizationPending = false
                     synchronizeWithImage()
                 }
@@ -287,6 +297,7 @@ internal class ViewerDetailsSheetController(
     /** Clears the rows and the attachment for the next photo; `shown` is deliberately kept. */
     fun resetForNavigation() {
         metadataLoaded = false
+        clearPendingLayoutSynchronization()
         metadataJob?.cancel()
         metadataJob = null
         screen.hideDetailsRows()
@@ -362,9 +373,17 @@ internal class ViewerDetailsSheetController(
 
     /** Stops the settle animation and any metadata read; call from the Activity's onDestroy. */
     fun release() {
+        released = true
+        clearPendingLayoutSynchronization()
         detailsScrollAnimator?.cancel()
         metadataJob?.cancel()
         metadataJob = null
+    }
+
+    /** Forgets a settle still waiting for a layout pass; the listener it registered will find itself stale. */
+    private fun clearPendingLayoutSynchronization() {
+        layoutSynchronizationPending = false
+        layoutSynchronizationGeneration++
     }
 
     private companion object {
