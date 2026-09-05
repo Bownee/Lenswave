@@ -39,12 +39,12 @@ internal sealed interface ProtonThumbnailRunResult {
  */
 internal class ProtonThumbnailRun(
     private val userId: UserId,
-    private val repository: ProtonThumbnailWorkGateway,
+    repository: Lazy<ProtonThumbnailWorkGateway>,
     private val sessionState: Flow<ProtonAccountSessionState>,
-    private val followUps: ProtonThumbnailFollowUpScheduler,
+    followUps: Lazy<ProtonThumbnailFollowUpScheduler>,
     private val runGuard: ProtonThumbnailRunGuard,
-    private val transferCoordinator: ProtonTransferCoordinator,
-    private val foregroundBudget: ProtonThumbnailForegroundBudgetStore,
+    transferCoordinator: Lazy<ProtonTransferCoordinator>,
+    foregroundBudget: Lazy<ProtonThumbnailForegroundBudgetStore>,
     private val clock: LenswaveClock,
     private val pauseStore: ProtonThumbnailPauseStore,
     private val previewAdmission: ProtonPreviewAdmission,
@@ -60,6 +60,13 @@ internal class ProtonThumbnailRun(
     private val reportFailure: (Throwable) -> Unit,
     private val reportState: (String) -> Unit,
 ) {
+    // Resolved on first use: a paused or duplicate run exits before touching the gateway, and
+    // building the Proton graph for a run that does nothing is what these were costing.
+    private val repository: ProtonThumbnailWorkGateway by repository
+    private val followUps: ProtonThumbnailFollowUpScheduler by followUps
+    private val transferCoordinator: ProtonTransferCoordinator by transferCoordinator
+    private val foregroundBudget: ProtonThumbnailForegroundBudgetStore by foregroundBudget
+
     /** What the work request carried into this run. */
     data class Input(
         /** The network backoff ladder this run was started on; see [ProtonThumbnailFollowUpPolicy]. */

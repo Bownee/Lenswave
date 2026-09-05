@@ -43,20 +43,22 @@ class ProtonThumbnailRunTest {
     private fun TestScope.newRun(input: ProtonThumbnailRun.Input = ProtonThumbnailRun.Input()) =
         ProtonThumbnailRun(
             userId = userId,
-            repository = gateway,
+            repository = lazyOf(gateway),
             sessionState = sessionState,
             followUps =
-                object : ProtonThumbnailFollowUpScheduler {
-                    override fun enqueueFollowUp(
-                        userId: UserId,
-                        followUp: ProtonThumbnailFollowUp,
-                    ) {
-                        followUps += followUp
-                    }
-                },
+                lazyOf(
+                    object : ProtonThumbnailFollowUpScheduler {
+                        override fun enqueueFollowUp(
+                            userId: UserId,
+                            followUp: ProtonThumbnailFollowUp,
+                        ) {
+                            followUps += followUp
+                        }
+                    },
+                ),
             runGuard = runGuard,
-            transferCoordinator = transferCoordinator,
-            foregroundBudget = budget,
+            transferCoordinator = lazyOf(transferCoordinator),
+            foregroundBudget = lazyOf(budget),
             clock =
                 object : LenswaveClock {
                     override fun nowMillis(): Long = wallClockMillis

@@ -47,12 +47,12 @@ class ProtonThumbnailWorker(
         val run =
             ProtonThumbnailRun(
                 userId = requestedUserId,
-                repository = entryPoint.thumbnailWork(),
+                repository = lazy { entryPoint.thumbnailWork() },
                 sessionState = entryPoint.accountSessionManager().state,
-                followUps = entryPoint.followUpScheduler(),
+                followUps = lazy { entryPoint.followUpScheduler() },
                 runGuard = entryPoint.runGuard(),
-                transferCoordinator = entryPoint.transferCoordinator(),
-                foregroundBudget = entryPoint.foregroundBudgetStore(),
+                transferCoordinator = lazy { entryPoint.transferCoordinator() },
+                foregroundBudget = lazy { entryPoint.foregroundBudgetStore() },
                 clock = entryPoint.clock(),
                 pauseStore = entryPoint.pauseStore(),
                 previewAdmission = entryPoint.previewAdmission(),

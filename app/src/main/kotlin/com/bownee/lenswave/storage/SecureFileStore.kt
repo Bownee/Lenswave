@@ -519,6 +519,10 @@ class SecureFileStore internal constructor(
         scope: String,
         wrapped: ByteArray,
     ): ByteArray {
+        // An empty or headerless file (a write that died before its bytes landed) must read as
+        // corrupt, not as a transient failure: only an IllegalArgumentException reaches the
+        // discard-and-mint path, and a BufferUnderflowException would fail the scope forever.
+        require(wrapped.size > 1) { "Wrapped data key is empty" }
         val buffer = ByteBuffer.wrap(wrapped)
         val ivSize = buffer.get().toInt() and 0xff
         require(ivSize in 12..16 && buffer.remaining() > ivSize) { "Wrapped data key is invalid" }
