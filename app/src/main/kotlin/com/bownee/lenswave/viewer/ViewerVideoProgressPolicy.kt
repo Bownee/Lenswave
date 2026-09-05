@@ -39,16 +39,18 @@ internal object ViewerVideoProgressPolicy {
 
     /**
      * Whether the progress panel belongs on screen. Before the first frame it always does. Once
-     * the video plays it comes back only while the player is buffering against a download that
-     * is still in flight: a seek past the downloaded bytes parks the player on them, and without
-     * the panel that wait is a silent freeze. A complete download leaves stalls to the player's
-     * own buffering indicator.
+     * the video plays it comes back only while the player is buffering, or a reader of the file
+     * is waiting for bytes, against a download that is still in flight: a seek past the
+     * downloaded bytes parks the player on them, and without the panel that wait is a silent
+     * freeze. The reader's wait is reported by the stream itself and can precede the player's
+     * buffering state. A complete download leaves stalls to the player's own buffering indicator.
      */
     fun panelVisible(
         mediaReady: Boolean,
         buffering: Boolean,
+        waitingForBytes: Boolean,
         streamComplete: Boolean,
-    ): Boolean = !mediaReady || (buffering && !streamComplete)
+    ): Boolean = !mediaReady || ((buffering || waitingForBytes) && !streamComplete)
 
     /** Whether the progress collector still has anything to report: nothing changes once every byte is on disk. */
     fun keepObserving(streamComplete: Boolean): Boolean = !streamComplete

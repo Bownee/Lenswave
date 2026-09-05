@@ -81,6 +81,9 @@ internal class ViewerVideoController(
     /** True while the player reports STATE_BUFFERING for the current media. */
     private var buffering = false
 
+    /** True while a reader of the current download is blocked at bytes that have not arrived. */
+    private var waitingForBytes = false
+
     /** Applied by the next [show], so a recreated viewer resumes where the user was. */
     private var pendingPlayback: ViewerPlaybackState? = null
 
@@ -169,12 +172,23 @@ internal class ViewerVideoController(
         host.showLoadingPanelImmediately()
         progressJob =
             scope.launch {
+                // A reader parked on bytes still to come is a stall the player may not report
+                // as buffering yet; the panel comes back for it the same way. Both collectors
+                // end together when the download completes, when neither can change again.
+                launch {
+                    stream.waitingForBytes.collect { waiting ->
+                        if (host.currentStableId != requestedStableId) return@collect
+                        waitingForBytes = waiting
+                        refreshProgressPanel(requestedStableId)
+                    }
+                }
                 stream.progress.collect { downloadProgress ->
                     if (host.currentStableId != requestedStableId) return@collect
                     latestProgress = downloadProgress
                     refreshProgressPanel(requestedStableId)
                     if (!ViewerVideoProgressPolicy.keepObserving(downloadProgress.complete)) {
                         progressJob = null
+                        waitingForBytes = false
                         cancel()
                     }
                 }
@@ -191,7 +205,7 @@ internal class ViewerVideoController(
         val downloadProgress = latestProgress ?: return
         if (host.currentStableId != requestedStableId) return
         val mediaReady = host.mediaReady
-        if (ViewerVideoProgressPolicy.panelVisible(mediaReady, buffering, downloadProgress.complete)) {
+        if (ViewerVideoProgressPolicy.panelVisible(mediaReady, buffering, waitingForBytes, downloadProgress.complete)) {
             if (mediaReady) host.showLoadingPanelImmediately()
             updateDownloadProgress(downloadProgress)
         } else if (mediaReady) {
@@ -255,6 +269,7 @@ internal class ViewerVideoController(
         progressJob = null
         latestProgress = null
         buffering = false
+        waitingForBytes = false
         activeStableId = null
         pausedWhilePlaying = false
         player?.let { active ->

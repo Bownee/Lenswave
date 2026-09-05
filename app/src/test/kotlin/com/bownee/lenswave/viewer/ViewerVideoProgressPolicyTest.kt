@@ -58,19 +58,78 @@ class ViewerVideoProgressPolicyTest {
     @Test
     fun panelStaysUpUntilTheFirstFrame() {
         assertTrue(
-            ViewerVideoProgressPolicy.panelVisible(mediaReady = false, buffering = false, streamComplete = false),
+            ViewerVideoProgressPolicy.panelVisible(
+                mediaReady = false,
+                buffering = false,
+                waitingForBytes = false,
+                streamComplete = false,
+            ),
         )
-        assertTrue(ViewerVideoProgressPolicy.panelVisible(mediaReady = false, buffering = true, streamComplete = true))
+        assertTrue(
+            ViewerVideoProgressPolicy.panelVisible(
+                mediaReady = false,
+                buffering = true,
+                waitingForBytes = false,
+                streamComplete = true,
+            ),
+        )
     }
 
     @Test
     fun panelReturnsOnlyWhileBufferingAgainstAnUnfinishedDownload() {
-        assertTrue(ViewerVideoProgressPolicy.panelVisible(mediaReady = true, buffering = true, streamComplete = false))
-        assertFalse(
-            ViewerVideoProgressPolicy.panelVisible(mediaReady = true, buffering = false, streamComplete = false),
+        assertTrue(
+            ViewerVideoProgressPolicy.panelVisible(
+                mediaReady = true,
+                buffering = true,
+                waitingForBytes = false,
+                streamComplete = false,
+            ),
         )
-        assertFalse(ViewerVideoProgressPolicy.panelVisible(mediaReady = true, buffering = true, streamComplete = true))
-        assertFalse(ViewerVideoProgressPolicy.panelVisible(mediaReady = true, buffering = false, streamComplete = true))
+        assertFalse(
+            ViewerVideoProgressPolicy.panelVisible(
+                mediaReady = true,
+                buffering = false,
+                waitingForBytes = false,
+                streamComplete = false,
+            ),
+        )
+        assertFalse(
+            ViewerVideoProgressPolicy.panelVisible(
+                mediaReady = true,
+                buffering = true,
+                waitingForBytes = false,
+                streamComplete = true,
+            ),
+        )
+        assertFalse(
+            ViewerVideoProgressPolicy.panelVisible(
+                mediaReady = true,
+                buffering = false,
+                waitingForBytes = false,
+                streamComplete = true,
+            ),
+        )
+    }
+
+    @Test
+    fun panelReturnsWhileAReaderWaitsForBytesTheDownloadHasNotReached() {
+        assertTrue(
+            ViewerVideoProgressPolicy.panelVisible(
+                mediaReady = true,
+                buffering = false,
+                waitingForBytes = true,
+                streamComplete = false,
+            ),
+        )
+        // Nothing is still to come once the download is complete; a wait then is the player's own.
+        assertFalse(
+            ViewerVideoProgressPolicy.panelVisible(
+                mediaReady = true,
+                buffering = false,
+                waitingForBytes = true,
+                streamComplete = true,
+            ),
+        )
     }
 
     @Test
