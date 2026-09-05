@@ -619,6 +619,9 @@ class FullResolutionPhotoView
                 return
             }
             val visible = visibleRect
+            // Tiles use the base's pixel format: an opaque container decodes to RGB 565 at half
+            // the memory, which the budget hands back as twice the pixels.
+            val opaque = PhotoBaseDecodePolicy.isOpaque(mimeType)
             val plan =
                 PhotoDetailDecodePolicy.plan(
                     scale = scale,
@@ -626,7 +629,7 @@ class FullResolutionPhotoView
                     visible = PhotoDetailDecodePolicy.Region(visible.left, visible.top, visible.right, visible.bottom),
                     imageWidth = imageWidth,
                     imageHeight = imageHeight,
-                    budgetPixels = PhotoDetailDecodePolicy.budget(width, height),
+                    budgetPixels = PhotoDetailDecodePolicy.budget(width, height, opaque),
                 )
             if (plan == null) {
                 recycleDetail()
@@ -661,7 +664,8 @@ class FullResolutionPhotoView
                                 rawRect,
                                 BitmapFactory.Options().apply {
                                     inSampleSize = sample
-                                    inPreferredConfig = Bitmap.Config.ARGB_8888
+                                    inPreferredConfig =
+                                        if (opaque) Bitmap.Config.RGB_565 else Bitmap.Config.ARGB_8888
                                 },
                             )
                         }.getOrNull()
