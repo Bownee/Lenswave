@@ -294,7 +294,7 @@ class ProtonPhotoGatewayTest {
             val committed = File(directory, "video.image")
             materializer.materialize = { _, onStarted, onBytesWritten ->
                 val part = File(directory, "video.image.part")
-                onStarted(part)
+                onStarted(part, 1_536L)
                 part.writeBytes(ByteArray(1_024))
                 onBytesWritten(1_024L)
                 // The player already reads while the rest of the file decrypts.
@@ -311,6 +311,11 @@ class ProtonPhotoGatewayTest {
                         originals.downloadOriginalProgressively(USER_A, "a3") { ready ->
                             stream = ready
                             assertEquals(ProtonOriginalReadState(1_024L, complete = false), ready.awaitReadable(0L))
+                            // The decrypt of a cached original is sized from the encrypted file.
+                            assertEquals(
+                                ProtonOriginalDownloadProgress(1_024L, 1_536L, complete = false),
+                                ready.progress.value,
+                            )
                             firstSegmentSeen.countDown()
                         }
                     }
@@ -347,7 +352,7 @@ class ProtonPhotoGatewayTest {
             val refused = CountDownLatch(1)
             materializer.materialize = { shouldContinue, onStarted, onBytesWritten ->
                 val part = File(directory, "video.image.part")
-                onStarted(part)
+                onStarted(part, null)
                 part.writeBytes(ByteArray(1_024))
                 onBytesWritten(1_024L)
                 assertTrue(refused.await(5L, TimeUnit.SECONDS))
@@ -523,7 +528,7 @@ class ProtonPhotoGatewayTest {
     private class FakeMaterializer : ProtonOriginalMaterializer {
         var materialize: (
             shouldContinue: () -> Boolean,
-            onStarted: (File) -> Unit,
+            onStarted: (File, Long?) -> Unit,
             onBytesWritten: (Long) -> Unit,
         ) -> File? = { _, _, _ -> null }
 
@@ -531,7 +536,7 @@ class ProtonPhotoGatewayTest {
             userId: String,
             nodeUid: String,
             shouldContinue: () -> Boolean,
-            onStarted: (plaintextInProgress: File) -> Unit,
+            onStarted: (plaintextInProgress: File, expectedBytes: Long?) -> Unit,
             onBytesWritten: (totalBytes: Long) -> Unit,
         ): File? = materialize(shouldContinue, onStarted, onBytesWritten)
     }

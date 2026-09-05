@@ -24,15 +24,16 @@ import javax.inject.Singleton
 internal interface ProtonOriginalMaterializer {
     /**
      * The plaintext copy, or null when nothing is cached. [onStarted] names the growing plaintext
-     * file before the first segment is written and [onBytesWritten] follows every verified
-     * segment with the plaintext total; neither is called for a copy that was already on disk.
-     * The growing file is renamed to the returned one once the whole original verified.
+     * file before the first segment is written, with the plaintext size the encrypted file
+     * promises (null when its length does not fit the format), and [onBytesWritten] follows every
+     * verified segment with the plaintext total; neither is called for a copy that was already on
+     * disk. The growing file is renamed to the returned one once the whole original verified.
      */
     fun materialize(
         userId: String,
         nodeUid: String,
         shouldContinue: () -> Boolean,
-        onStarted: (plaintextInProgress: File) -> Unit,
+        onStarted: (plaintextInProgress: File, expectedBytes: Long?) -> Unit,
         onBytesWritten: (totalBytes: Long) -> Unit,
     ): File?
 }
@@ -94,13 +95,13 @@ internal class ProtonOriginalStore
             userId: String,
             nodeUid: String,
             shouldContinue: () -> Boolean = { true },
-        ): File? = materialize(userId, nodeUid, shouldContinue, onStarted = {}, onBytesWritten = {})
+        ): File? = materialize(userId, nodeUid, shouldContinue, onStarted = { _, _ -> }, onBytesWritten = {})
 
         override fun materialize(
             userId: String,
             nodeUid: String,
             shouldContinue: () -> Boolean,
-            onStarted: (plaintextInProgress: File) -> Unit,
+            onStarted: (plaintextInProgress: File, expectedBytes: Long?) -> Unit,
             onBytesWritten: (totalBytes: Long) -> Unit,
         ): File? {
             wipeStaleDecryptedCopies()

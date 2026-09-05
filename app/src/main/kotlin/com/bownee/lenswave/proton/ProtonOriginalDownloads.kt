@@ -112,7 +112,14 @@ internal class ProtonOriginalDownloads
                                     userId.id,
                                     nodeUid,
                                     shouldContinue = { isActive },
-                                    onStarted = { plaintext -> stream = ProtonOriginalStream(plaintext, openCopies) },
+                                    onStarted = { plaintext, expectedBytes ->
+                                        stream =
+                                            ProtonOriginalStream(plaintext, openCopies).also { started ->
+                                                // Sized from the encrypted file, so the panel shows a
+                                                // percentage rather than a bare byte count.
+                                                started.updateProgress(downloadedBytes = 0L, totalBytes = expectedBytes)
+                                            }
+                                    },
                                     onBytesWritten = { total ->
                                         stream?.let { started ->
                                             started.availableBytes(total)

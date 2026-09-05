@@ -152,10 +152,50 @@ class SecureFileStoreTest {
         val bytes = ByteArray(50_000) { (it * 3).toByte() }
         // A small payload is one whole-file GCM record: exactly the layout of a version 2 original.
         store.write(scope, legacy, bytes, "write failed")
+        var expected: Long? = null
 
-        store.decryptFile(scope, legacy, decrypted)
+        store.decryptFile(scope, legacy, decrypted, onStarted = { _, expectedBytes -> expected = expectedBytes })
 
         assertArrayEquals(bytes, decrypted.readBytes())
+        assertEquals(50_000L, expected)
+    }
+
+    @Test
+    fun `a decrypt announces the plaintext size its file promises before the first segment`() {
+        val store = store()
+        val plaintext = File(temporaryFolder.root, "original").apply { writeBytes(ByteArray(2_500_001)) }
+        val encrypted = File(temporaryFolder.root, "encrypted")
+        val decrypted = File(temporaryFolder.root, "decrypted")
+        store.encryptFile(scope, plaintext, encrypted, "encrypt failed")
+        val announced = mutableListOf<Long?>()
+        val written = mutableListOf<Long>()
+
+        store.decryptFile(
+            scope,
+            encrypted,
+            decrypted,
+            onStarted = { _, expectedBytes -> announced += expectedBytes },
+            onBytesWritten = { total -> written += total },
+        )
+
+        assertEquals(listOf<Long?>(2_500_001L), announced)
+        assertEquals(2_500_001L, written.last())
+        // A file cut at a segment boundary has a length no envelope has (the final segment is
+        // mandatory); the decrypt itself rejects it.
+        val fullSegments = 2 * (SegmentedEnvelope.DEFAULT_SEGMENT_BYTES + SegmentedEnvelope.TAG_BYTES)
+        encrypted.writeBytes(
+            encrypted.readBytes().copyOf(4 + 1 + Int.SIZE_BYTES + SegmentedEnvelope.NONCE_BYTES + fullSegments),
+        )
+        announced.clear()
+        assertThrows(IllegalArgumentException::class.java) {
+            store.decryptFile(scope, encrypted, decrypted, onStarted = {
+                _,
+                expectedBytes,
+                ->
+                announced += expectedBytes
+            })
+        }
+        assertEquals(listOf<Long?>(null), announced)
     }
 
     @Test
