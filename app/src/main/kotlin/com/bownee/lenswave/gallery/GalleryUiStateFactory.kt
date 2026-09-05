@@ -6,6 +6,7 @@ import com.bownee.lenswave.proton.ProtonAlbumsState
 import com.bownee.lenswave.proton.ProtonGalleryState
 import com.bownee.lenswave.proton.ProtonTagState
 import me.proton.core.domain.entity.UserId
+import com.bownee.lenswave.core.R as CoreR
 
 internal enum class ProtonAccountStatus {
     DISCONNECTED,
@@ -145,7 +146,7 @@ internal class GalleryUiStateFactory(
                                         entry(
                                             key = "connect-proton",
                                             label = text.string(R.string.connect_proton),
-                                            iconRes = R.drawable.ic_cloud,
+                                            iconRes = CoreR.drawable.ic_cloud,
                                             action = LibraryAction.Request(GalleryEmptyAction.CONNECT_PROTON),
                                         ),
                                     ),

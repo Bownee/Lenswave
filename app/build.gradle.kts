@@ -5,10 +5,6 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.ksp)
     alias(libs.plugins.hilt)
-    // Lenswave's own UI is built from Views. The Compose toolchain exists only because Proton
-    // Core's presentation-compose artifact needs an AppTheme binding (see LenswaveTheme).
-    alias(libs.plugins.kotlin.compose)
-    alias(libs.plugins.androidx.room)
     alias(libs.plugins.ktlint)
     jacoco
 }
@@ -136,7 +132,6 @@ android {
 
     buildFeatures {
         buildConfig = true
-        compose = true
     }
 
     testOptions {
@@ -146,17 +141,15 @@ android {
 
     lint {
         // lint.xml decides which checks are errors; this block decides what CI does with them.
+        // The library modules are analysed as part of :app:lintDebug so CI uploads one report.
+        lintConfig = rootProject.file("lint.xml")
         abortOnError = true
         warningsAsErrors = true
-        checkDependencies = false
+        checkDependencies = true
         sarifReport = true
         htmlReport = true
         xmlReport = false
     }
-}
-
-room {
-    schemaDirectory("$projectDir/schemas")
 }
 
 configurations.configureEach {
@@ -166,24 +159,22 @@ configurations.configureEach {
 }
 
 dependencies {
+    implementation(project(":core"))
+    implementation(project(":proton"))
+    implementation(project(":storage"))
+    implementation(project(":update"))
+
     implementation(libs.androidx.activity)
-    implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.exifinterface)
     implementation(libs.androidx.fragment)
     implementation(libs.androidx.lifecycle.viewmodel)
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.androidx.media3.ui)
-    implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.swiperefreshlayout)
     implementation(libs.androidx.work.runtime)
     implementation(libs.google.material)
     implementation(libs.hilt.android)
-    implementation(libs.sqlcipher)
     ksp(libs.hilt.compiler)
-    ksp(libs.androidx.room.compiler)
-
-    implementation(libs.proton.drive.sdk)
-    implementation(libs.bundles.proton.core)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
@@ -202,31 +193,44 @@ jacoco {
     toolVersion = libs.versions.jacoco.get()
 }
 
-// AGP 9 compiles Kotlin with its built-in compiler and writes the classes to this intermediate
-// directory. The coverage tasks assert that it is non-empty so a future AGP change cannot make
-// the gate pass vacuously.
+// The coverage gate spans every module: each one runs its own unit tests, and this module
+// aggregates their classes and execution data so the ratchet below stays a whole-app number.
+// AGP 9 compiles Kotlin with its built-in compiler and writes the classes to the intermediate
+// directory below. The coverage tasks assert that it is non-empty so a future AGP change cannot
+// make the gate pass vacuously.
+val coveredProjects = listOf(project) + listOf(":core", ":storage", ":update", ":proton").map(::project)
 val authoredDebugClasses =
     files(
-        fileTree(layout.buildDirectory.dir("intermediates/built_in_kotlinc/debug/compileDebugKotlin/classes")) {
-            include("com/bownee/lenswave/**")
-            exclude(
-                "**/BuildConfig.*",
-                "**/R.class",
-                "**/R$*.class",
-                "**/*_Factory*.*",
-                "**/*_Impl*.*",
-                "**/Hilt_*.*",
-                "**/*HiltModules*.*",
-                "dagger/**",
-                "hilt_aggregated_deps/**",
-            )
+        coveredProjects.map { covered ->
+            fileTree(
+                covered.layout.buildDirectory.dir("intermediates/built_in_kotlinc/debug/compileDebugKotlin/classes"),
+            ) {
+                include("com/bownee/lenswave/**")
+                exclude(
+                    "**/BuildConfig.*",
+                    "**/R.class",
+                    "**/R$*.class",
+                    "**/*_Factory*.*",
+                    "**/*_Impl*.*",
+                    "**/Hilt_*.*",
+                    "**/*HiltModules*.*",
+                    "dagger/**",
+                    "hilt_aggregated_deps/**",
+                )
+            }
         },
     )
+val authoredSources = files(coveredProjects.map { covered -> covered.file("src/main/kotlin") })
 val debugCoverageData =
-    fileTree(layout.buildDirectory) {
-        include("jacoco/testDebugUnitTest.exec")
-        include("outputs/unit_test_code_coverage/debugUnitTest/testDebugUnitTest.exec")
-    }
+    files(
+        coveredProjects.map { covered ->
+            fileTree(covered.layout.buildDirectory) {
+                include("jacoco/testDebugUnitTest.exec")
+                include("outputs/unit_test_code_coverage/debugUnitTest/testDebugUnitTest.exec")
+            }
+        },
+    )
+val coveredUnitTestTasks = coveredProjects.map { covered -> "${covered.path}:testDebugUnitTest" }
 
 // Reads the task's own inputs rather than script-level values so the configuration cache can
 // serialize the action.
@@ -243,14 +247,14 @@ fun org.gradle.testing.jacoco.tasks.JacocoReportBase.requireCoverageInputs() {
 }
 
 tasks.register<JacocoReport>("jacocoDebugUnitTestReport") {
-    dependsOn("testDebugUnitTest")
+    dependsOn(coveredUnitTestTasks)
     requireCoverageInputs()
     reports {
         xml.required.set(true)
         html.required.set(true)
         csv.required.set(false)
     }
-    sourceDirectories.setFrom(files("src/main/kotlin"))
+    sourceDirectories.setFrom(authoredSources)
     classDirectories.setFrom(authoredDebugClasses)
     executionData.setFrom(debugCoverageData)
 }
@@ -259,7 +263,7 @@ tasks.register<JacocoCoverageVerification>("jacocoDebugCoverageVerification") {
     dependsOn("jacocoDebugUnitTestReport")
     requireCoverageInputs()
     classDirectories.setFrom(authoredDebugClasses)
-    sourceDirectories.setFrom(files("src/main/kotlin"))
+    sourceDirectories.setFrom(authoredSources)
     executionData.setFrom(debugCoverageData)
     violationRules {
         // Whole-app ratchet. Raise these when coverage grows; never lower them to make CI pass.

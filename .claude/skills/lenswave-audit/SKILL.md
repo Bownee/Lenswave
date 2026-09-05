@@ -23,7 +23,9 @@ array; `UiStyle` is the single source of colours and view factories.
 
 ## Area map for reviewers and fixers
 
-Source root `app/src/main/kotlin/com/bownee/lenswave/`. List each directory before handing a
+Sources live in five Gradle modules that share the Kotlin package `com.bownee.lenswave`: `core/`,
+`storage/`, `update/`, `proton/`, and `app/` (gallery, viewer), each under
+`<module>/src/main/kotlin/com/bownee/lenswave/`. List each directory before handing a
 reviewer its files; names drift.
 
 | Area | Where |

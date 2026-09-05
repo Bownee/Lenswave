@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="not_now">Not now</string>
+    <string name="update_available">Update available</string>
+    <string name="update_available_message">Lenswave v%1$s is available. You have v%2$s.</string>
+    <string name="view_update">View update</string>
+</resources>

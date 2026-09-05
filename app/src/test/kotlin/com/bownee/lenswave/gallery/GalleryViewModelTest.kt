@@ -10,6 +10,7 @@ import com.bownee.lenswave.proton.ProtonAlbumPhotosState
 import com.bownee.lenswave.proton.ProtonAlbumReference
 import com.bownee.lenswave.proton.ProtonAlbumsState
 import com.bownee.lenswave.proton.ProtonGalleryPhoto
+import com.bownee.lenswave.proton.ProtonGalleryReader
 import com.bownee.lenswave.proton.ProtonGalleryState
 import com.bownee.lenswave.proton.ProtonMediaTag
 import com.bownee.lenswave.proton.ProtonTagState
@@ -43,6 +44,7 @@ import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import com.bownee.lenswave.proton.R as ProtonR
 
 /**
  * Every dispatcher the view model uses (Main through [Dispatchers.setMain], IO and Default
@@ -83,7 +85,7 @@ class GalleryViewModelTest {
             val initial = viewModel.uiState.value
 
             assertEquals(GalleryDestination.Tag(ProtonMediaTag.VIDEOS), initial.destination)
-            assertEquals("${R.string.proton_tag_videos}()", initial.title)
+            assertEquals("${ProtonR.string.proton_tag_videos}()", initial.title)
             assertTrue(initial.visibleAssets.isEmpty())
             assertNull(initial.emptyState)
             assertEquals("only the skeleton's title may be resolved on construction", 1, text.calls)

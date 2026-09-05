@@ -15,4 +15,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "Lenswave"
-include(":app")
+include(":app", ":core", ":storage", ":update", ":proton")

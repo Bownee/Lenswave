@@ -25,6 +25,7 @@ import androidx.core.graphics.Insets
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.widget.TextViewCompat
+import com.bownee.lenswave.core.R as CoreR
 
 /** Colours, typography and the small set of view factories every screen is built from. */
 object UiStyle {
@@ -63,17 +64,17 @@ object UiStyle {
         val applicationContext = context.applicationContext
 
         fun color(resource: Int): Int = ContextCompat.getColor(applicationContext, resource)
-        background = color(R.color.lenswave_background)
-        surface = color(R.color.lenswave_surface)
-        surfaceRaised = color(R.color.lenswave_surface_raised)
-        border = color(R.color.lenswave_border)
-        text = color(R.color.lenswave_text)
-        muted = color(R.color.lenswave_muted)
-        accent = color(R.color.lenswave_accent)
-        accentSoft = color(R.color.lenswave_accent_soft)
-        onAccent = color(R.color.lenswave_on_accent)
-        danger = color(R.color.lenswave_error)
-        dangerSoft = color(R.color.lenswave_error_soft)
+        background = color(CoreR.color.lenswave_background)
+        surface = color(CoreR.color.lenswave_surface)
+        surfaceRaised = color(CoreR.color.lenswave_surface_raised)
+        border = color(CoreR.color.lenswave_border)
+        text = color(CoreR.color.lenswave_text)
+        muted = color(CoreR.color.lenswave_muted)
+        accent = color(CoreR.color.lenswave_accent)
+        accentSoft = color(CoreR.color.lenswave_accent_soft)
+        onAccent = color(CoreR.color.lenswave_on_accent)
+        danger = color(CoreR.color.lenswave_error)
+        dangerSoft = color(CoreR.color.lenswave_error_soft)
         medium = Typeface.create("sans-serif-medium", Typeface.NORMAL)
         selectedDescription = applicationContext.getString(R.string.selected)
         notSelectedDescription = applicationContext.getString(R.string.not_selected)
