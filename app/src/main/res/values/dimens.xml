@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <dimen name="gallery_fast_scroll_top_margin">30dp</dimen>
+    <dimen name="gallery_fast_scroll_top_margin">10dp</dimen>
     <dimen name="gallery_fast_scroll_bottom_margin">15dp</dimen>
     <dimen name="gallery_fast_scroll_handle_size">36dp</dimen>
     <dimen name="gallery_fast_scroll_edge_inset">4dp</dimen>
