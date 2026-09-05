@@ -229,7 +229,7 @@ class GalleryListAdapter(
         convertView: View?,
         parent: ViewGroup?,
     ): View {
-        val container = (convertView as? LinearLayout) ?: createPhotoRow()
+        val container = (convertView as? FittedRow) ?: createPhotoRow()
         fitRowHeight(container, parent, ::photoRowHeight)
         for (column in 0 until COLUMN_COUNT) {
             val cell = container.getChildAt(column) as PhotoCell
@@ -280,7 +280,7 @@ class GalleryListAdapter(
 
     /** The row's height is fitted to the list width at bind (see [fitRowHeight]); it starts unsized. */
     private fun createPhotoRow() =
-        LinearLayout(context).apply {
+        FittedRow(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             val gap = photoGap
@@ -313,7 +313,7 @@ class GalleryListAdapter(
         convertView: View?,
         parent: ViewGroup?,
     ): View {
-        val container = (convertView as? LinearLayout) ?: createAlbumRow(parent)
+        val container = (convertView as? FittedRow) ?: createAlbumRow(parent)
         fitRowHeight(container, parent, ::albumRowHeight)
         for (column in 0 until ALBUM_COLUMN_COUNT) {
             val cell = container.getChildAt(column) as AlbumCell
@@ -343,13 +343,13 @@ class GalleryListAdapter(
      * recycled row is re-measured against the current width instead of keeping its first height.
      */
     private fun fitRowHeight(
-        row: LinearLayout,
+        row: FittedRow,
         parent: ViewGroup?,
         heightFor: (rowWidth: Int) -> Int,
     ) {
         val width = rowWidth(parent)
-        if (row.tag == width) return
-        row.tag = width
+        if (row.fittedWidth == width) return
+        row.fittedWidth = width
         val params = row.layoutParams as AbsListView.LayoutParams
         val height = heightFor(width)
         if (params.height != height) {
@@ -367,7 +367,7 @@ class GalleryListAdapter(
     }
 
     private fun createAlbumRow(parent: ViewGroup?) =
-        LinearLayout(context).apply {
+        FittedRow(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.TOP
             val gap = albumGap
@@ -519,4 +519,14 @@ class GalleryListAdapter(
         const val ALBUM_GAP_DP = 12
         const val ALBUM_TEXT_HEIGHT_DP = 58
     }
+}
+
+/**
+ * A photo or album row that remembers the list width its height was fitted to (see
+ * [GalleryListAdapter.fitRowHeight]); an Int field, so a bind compares without boxing.
+ */
+internal class FittedRow(
+    context: Context,
+) : LinearLayout(context) {
+    var fittedWidth = -1
 }
