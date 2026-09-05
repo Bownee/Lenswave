@@ -189,7 +189,8 @@ class SecureFileStore internal constructor(
      * ciphertext and plaintext in memory before it can verify the tag, and a cipher stream
      * would let the platform implementation treat a failed tag at end of stream as an ordinary
      * end of file and commit a truncated plaintext. The record is therefore read into a buffer
-     * and finished explicitly, so a bad tag throws, and only up to [LEGACY_FILE_LIMIT_BYTES]: a
+     * sized from the file (a growing stream copy peaked at several times the record) and
+     * finished explicitly, so a bad tag throws, and only up to [LEGACY_FILE_LIMIT_BYTES]: a
      * larger legacy original is discarded through [LegacyFileTooLargeException], an
      * [IllegalArgumentException] its callers already treat as a corrupt file and fetch again.
      */
@@ -202,7 +203,10 @@ class SecureFileStore internal constructor(
     ): Long {
         if (encrypted.length() > LEGACY_FILE_LIMIT_BYTES) throw LegacyFileTooLargeException()
         val cipher = readLegacyHeader(scope, version, rawInput)
-        val ciphertext = rawInput.readBytes()
+        val ciphertextBytes = encrypted.length() - (MAGIC.size + 2 + cipher.iv.size)
+        require(ciphertextBytes >= TAG_BITS / 8) { "Encrypted file is truncated" }
+        val ciphertext = ByteArray(ciphertextBytes.toInt())
+        require(SegmentedEnvelope.readFully(rawInput, ciphertext) == ciphertext.size) { "Encrypted file is truncated" }
         val plaintext = cipher.doFinal(ciphertext)
         output.write(plaintext)
         return plaintext.size.toLong()
@@ -482,7 +486,7 @@ class SecureFileStore internal constructor(
         const val DATA_KEY_BYTES = 32
 
         /** Whole-file legacy originals larger than this are not worth two copies of themselves in the heap. */
-        const val LEGACY_FILE_LIMIT_BYTES = 8L * 1024L * 1024L
+        const val LEGACY_FILE_LIMIT_BYTES = 4L * 1024L * 1024L
         val MAGIC = byteArrayOf(0x4c, 0x57, 0x45, 0x46)
         const val LEGACY_VERSION: Byte = 1
         const val VERSION: Byte = 2

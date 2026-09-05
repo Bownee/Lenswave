@@ -144,7 +144,7 @@ internal object SegmentedEnvelope {
     }
 
     /** Fills [buffer] unless the stream ends first; returns the bytes read. */
-    private fun readFully(
+    fun readFully(
         input: InputStream,
         buffer: ByteArray,
     ): Int {

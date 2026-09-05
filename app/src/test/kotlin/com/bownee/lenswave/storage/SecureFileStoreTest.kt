@@ -181,6 +181,21 @@ class SecureFileStoreTest {
     }
 
     @Test
+    fun `a legacy record cut before its tag is rejected as truncated`() {
+        val store = store()
+        val legacy = File(temporaryFolder.root, "legacy")
+        val decrypted = File(temporaryFolder.root, "decrypted")
+        store.write(scope, legacy, ByteArray(1_000), "write failed")
+        // The header and a body shorter than one GCM tag: nothing to verify.
+        legacy.writeBytes(legacy.readBytes().copyOf(4 + 2 + 12 + 8))
+
+        assertThrows(IllegalArgumentException::class.java) { store.decryptFile(scope, legacy, decrypted) }
+
+        assertFalse(decrypted.exists())
+        assertTrue(legacy.isFile)
+    }
+
+    @Test
     fun `an oversized legacy record is discarded as corrupt rather than decrypted in memory`() {
         val store = store()
         val legacy = File(temporaryFolder.root, "legacy")
@@ -191,7 +206,7 @@ class SecureFileStoreTest {
         legacy.outputStream().use { output ->
             output.write(header)
             val chunk = ByteArray(1 shl 20)
-            repeat(9) { output.write(chunk) }
+            repeat(5) { output.write(chunk) }
         }
 
         assertThrows(IllegalArgumentException::class.java) { store.decryptFile(scope, legacy, decrypted) }
