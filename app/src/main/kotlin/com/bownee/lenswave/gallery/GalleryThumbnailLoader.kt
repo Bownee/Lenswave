@@ -2,6 +2,7 @@ package com.bownee.lenswave.gallery
 
 import android.graphics.Bitmap
 import com.bownee.lenswave.proton.ProtonAlbum
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -15,15 +16,49 @@ import me.proton.core.domain.entity.UserId
  * Receives the thumbnail requested for [tag] (a photo's stable id or an album's node uid). A
  * recycled cell compares the tag with the one it currently shows and drops stale deliveries.
  */
-fun interface GalleryThumbnailTarget {
+fun interface GalleryThumbnailTarget<Image : Any> {
     fun onThumbnail(
         tag: String,
-        bitmap: Bitmap?,
+        image: Image?,
     )
 }
 
 /**
- * Binds decoded thumbnails to gallery cells. Decoded bitmaps live only in the Proton thumbnail
+ * The decoded thumbnails [GalleryThumbnailLoader] binds. The app's images are bitmaps (see
+ * [ProtonThumbnailImages]); the type is open so the loader's bookkeeping can be exercised on the
+ * JVM, where a Bitmap cannot be constructed, with any sentinel standing in for one.
+ */
+interface GalleryThumbnailImages<Image : Any> {
+    /** The image only if it is already decoded in memory; never touches disk or suspends. */
+    fun peek(
+        userId: UserId,
+        nodeUid: String,
+    ): Image?
+
+    /** Reads or downloads the image; null when there is none. */
+    suspend fun load(
+        userId: UserId,
+        nodeUid: String,
+    ): Image?
+}
+
+/** The Proton thumbnail store's bitmaps as the loader's images. */
+class ProtonThumbnailImages(
+    private val source: ProtonThumbnailImageSource,
+) : GalleryThumbnailImages<Bitmap> {
+    override fun peek(
+        userId: UserId,
+        nodeUid: String,
+    ): Bitmap? = source.peekThumbnail(userId, nodeUid)
+
+    override suspend fun load(
+        userId: UserId,
+        nodeUid: String,
+    ): Bitmap? = source.loadThumbnail(userId, nodeUid)
+}
+
+/**
+ * Binds decoded thumbnails to gallery cells. Decoded images live only in the Proton thumbnail
  * store's memory cache; this class peeks that cache synchronously so visible cells bind in the same
  * frame, and coalesces the asynchronous loads for everything else.
  *
@@ -33,23 +68,24 @@ fun interface GalleryThumbnailTarget {
  * that scrolled past. A load that another visible cell still waits on keeps running.
  *
  * Main thread only: the maps below are touched from bind calls and from the completions, which
- * resume on [scope]'s dispatcher.
+ * resume on [scope]'s dispatcher; the reads themselves run on [ioDispatcher].
  */
-class GalleryThumbnailLoader(
+class GalleryThumbnailLoader<Image : Any>(
     private val scope: CoroutineScope,
-    private val protonRepository: ProtonThumbnailImageSource,
+    private val images: GalleryThumbnailImages<Image>,
     private val protonUserId: () -> UserId?,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) {
-    private val callbacks = mutableMapOf<String, MutableList<Delivery>>()
+    private val callbacks = mutableMapOf<String, MutableList<Delivery<Image>>>()
     private val loadingJobs = mutableMapOf<String, Job>()
 
     /** The load key each target currently waits on; a target is present while a load is pending for it. */
-    private val interests = mutableMapOf<GalleryThumbnailTarget, String>()
+    private val interests = mutableMapOf<GalleryThumbnailTarget<Image>, String>()
 
     fun load(
         asset: GalleryAsset,
         allowSourceRead: Boolean = true,
-        target: GalleryThumbnailTarget,
+        target: GalleryThumbnailTarget<Image>,
     ) {
         val tag = asset.stableId
         if (!asset.hasThumbnail) {
@@ -58,7 +94,7 @@ class GalleryThumbnailLoader(
             return
         }
         val userId = protonUserId()
-        userId?.let { protonRepository.peekThumbnail(it, asset.nodeUid) }?.let { cached ->
+        userId?.let { images.peek(it, asset.nodeUid) }?.let { cached ->
             forget(target)
             target.onThumbnail(tag, cached)
             return
@@ -75,7 +111,7 @@ class GalleryThumbnailLoader(
     fun load(
         album: ProtonAlbum,
         allowSourceRead: Boolean = true,
-        target: GalleryThumbnailTarget,
+        target: GalleryThumbnailTarget<Image>,
     ) {
         val tag = album.nodeUid
         val coverNodeUid = album.coverPhotoNodeUid
@@ -85,7 +121,7 @@ class GalleryThumbnailLoader(
             return
         }
         val userId = protonUserId()
-        userId?.let { protonRepository.peekThumbnail(it, coverNodeUid) }?.let { cached ->
+        userId?.let { images.peek(it, coverNodeUid) }?.let { cached ->
             forget(target)
             target.onThumbnail(tag, cached)
             return
@@ -102,7 +138,7 @@ class GalleryThumbnailLoader(
      * Withdraws [target]'s interest in whatever it was waiting for, for a cell that now shows
      * nothing. The load itself is cancelled once no other target waits on it.
      */
-    fun forget(target: GalleryThumbnailTarget) {
+    fun forget(target: GalleryThumbnailTarget<Image>) {
         val key = interests.remove(target) ?: return
         val deliveries = callbacks[key] ?: return
         deliveries.removeAll { delivery -> delivery.target === target }
@@ -112,7 +148,7 @@ class GalleryThumbnailLoader(
         }
     }
 
-    /** Drops pending loads; decoded bitmaps are owned by the thumbnail store, not this loader. */
+    /** Drops pending loads; decoded images are owned by the thumbnail store, not this loader. */
     fun clear() {
         cancelPendingLoads()
     }
@@ -128,7 +164,7 @@ class GalleryThumbnailLoader(
         key: String,
         tag: String,
         nodeUid: String,
-        target: GalleryThumbnailTarget,
+        target: GalleryThumbnailTarget<Image>,
     ) {
         // Re-binding the photo a cell already waits for must not restart its decode.
         if (interests[target] == key) return
@@ -138,25 +174,25 @@ class GalleryThumbnailLoader(
         if (loadingJobs.containsKey(key)) return
         val job =
             scope.launch(start = CoroutineStart.LAZY) {
-                val bitmap = withContext(Dispatchers.IO) { runCatching { loadProtonThumbnail(nodeUid) }.getOrNull() }
+                val image = withContext(ioDispatcher) { runCatching { loadImage(nodeUid) }.getOrNull() }
                 // A cancelled load may have been replaced by a fresh one for the same key.
                 if (loadingJobs[key] === coroutineContext.job) loadingJobs.remove(key)
                 callbacks.remove(key).orEmpty().forEach { delivery ->
                     interests.remove(delivery.target)
-                    delivery.target.onThumbnail(delivery.tag, bitmap)
+                    delivery.target.onThumbnail(delivery.tag, image)
                 }
             }
         loadingJobs[key] = job
         job.start()
     }
 
-    private suspend fun loadProtonThumbnail(nodeUid: String): Bitmap? {
+    private suspend fun loadImage(nodeUid: String): Image? {
         val userId = protonUserId() ?: return null
-        return protonRepository.loadThumbnail(userId, nodeUid)
+        return images.load(userId, nodeUid)
     }
 
-    private class Delivery(
+    private class Delivery<Image : Any>(
         val tag: String,
-        val target: GalleryThumbnailTarget,
+        val target: GalleryThumbnailTarget<Image>,
     )
 }

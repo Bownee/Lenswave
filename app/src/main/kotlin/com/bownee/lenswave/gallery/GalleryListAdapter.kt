@@ -19,7 +19,7 @@ import kotlin.math.roundToInt
 
 class GalleryListAdapter(
     private val context: Context,
-    private val thumbnailLoader: GalleryThumbnailLoader,
+    private val thumbnailLoader: GalleryThumbnailLoader<Bitmap>,
     /** The tapped photo and its index in the page's flat asset list. */
     private val onPhotoClicked: (GalleryAsset, Int) -> Unit,
     private val onAlbumClicked: (ProtonAlbum) -> Unit,
@@ -489,42 +489,42 @@ class GalleryListAdapter(
     /** Shows a cell's thumbnail; a delivery for a photo the cell no longer shows is dropped. */
     private inner class PhotoTarget(
         private val cell: PhotoCell,
-    ) : GalleryThumbnailTarget {
+    ) : GalleryThumbnailTarget<Bitmap> {
         override fun onThumbnail(
             tag: String,
-            bitmap: Bitmap?,
+            image: Bitmap?,
         ) {
-            val image = cell.image
-            if (image.tag != tag) return
-            if (bitmap == null && cell.keepsShownImage) {
+            val view = cell.image
+            if (view.tag != tag) return
+            if (image == null && cell.keepsShownImage) {
                 cell.loading.visibility = View.GONE
                 return
             }
             // A rebind that delivers the bitmap already on screen must not invalidate the cell.
-            if (bitmap == null || (image.drawable as? BitmapDrawable)?.bitmap !== bitmap) image.setImageBitmap(bitmap)
-            cell.loading.visibility = if (bitmap == null && !isFastScrolling) View.VISIBLE else View.GONE
-            image.alpha = if (bitmap == null) 0.45f else 1f
+            if (image == null || (view.drawable as? BitmapDrawable)?.bitmap !== image) view.setImageBitmap(image)
+            cell.loading.visibility = if (image == null && !isFastScrolling) View.VISIBLE else View.GONE
+            view.alpha = if (image == null) 0.45f else 1f
         }
     }
 
     private inner class AlbumTarget(
         private val cell: AlbumCell,
-    ) : GalleryThumbnailTarget {
+    ) : GalleryThumbnailTarget<Bitmap> {
         override fun onThumbnail(
             tag: String,
-            bitmap: Bitmap?,
+            image: Bitmap?,
         ) {
-            val image = cell.image
+            val view = cell.image
             val album = cell.album ?: return
-            if (image.tag != tag) return
-            if (bitmap == null || (image.drawable as? BitmapDrawable)?.bitmap !== bitmap) image.setImageBitmap(bitmap)
+            if (view.tag != tag) return
+            if (image == null || (view.drawable as? BitmapDrawable)?.bitmap !== image) view.setImageBitmap(image)
             cell.loading.visibility =
-                if (bitmap == null && album.coverPhotoNodeUid != null && !isFastScrolling) {
+                if (image == null && album.coverPhotoNodeUid != null && !isFastScrolling) {
                     View.VISIBLE
                 } else {
                     View.GONE
                 }
-            image.alpha = if (bitmap == null) 0.48f else 1f
+            view.alpha = if (image == null) 0.48f else 1f
         }
     }
 

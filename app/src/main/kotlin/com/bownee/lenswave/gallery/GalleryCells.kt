@@ -2,6 +2,7 @@ package com.bownee.lenswave.gallery
 
 import android.content.Context
 import android.content.res.ColorStateList
+import android.graphics.Bitmap
 import android.graphics.Color
 import android.text.TextUtils
 import android.view.Gravity
@@ -30,7 +31,7 @@ internal class PhotoCell(
 
     /** Set at bind when the cell already shows this photo, so a cache miss does not blank it. */
     var keepsShownImage = false
-    lateinit var thumbnailTarget: GalleryThumbnailTarget
+    lateinit var thumbnailTarget: GalleryThumbnailTarget<Bitmap>
     val image =
         ImageView(context).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
@@ -89,7 +90,7 @@ internal class AlbumCell(
     context: Context,
 ) : LinearLayout(context) {
     var album: ProtonAlbum? = null
-    lateinit var thumbnailTarget: GalleryThumbnailTarget
+    lateinit var thumbnailTarget: GalleryThumbnailTarget<Bitmap>
     private val cover =
         FrameLayout(context).apply {
             UiStyle.clipRounded(this, 18)

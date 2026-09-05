@@ -91,7 +91,7 @@ internal class GalleryScreen(
                 thumbnailLoader =
                     GalleryThumbnailLoader(
                         scope = scope,
-                        protonRepository = repository,
+                        images = ProtonThumbnailImages(repository),
                         protonUserId = currentUserId,
                     ),
                 onPhotoClicked = actions.onPhotoClicked,
