@@ -57,8 +57,12 @@ jobs:
           chmod +x gradlew
           ./gradlew verifySbomLicenses --no-configuration-cache --stacktrace
 
+  # CodeQL has to run the compiler under its tracer, which the build cache cannot shorten, so it
+  # is no longer a pull-request check: every push to main and the weekly schedule still scan the
+  # merged tree, and findings land in code scanning before a release tag is cut.
   codeql:
     name: CodeQL Java and Kotlin analysis
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
