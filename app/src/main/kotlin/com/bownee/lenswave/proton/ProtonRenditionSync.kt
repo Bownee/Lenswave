@@ -98,6 +98,9 @@ internal class ProtonRenditionSync(
     /** The worker serves one user at a time, so one counter across users is enough. */
     private val batchesSinceForcedFlush = AtomicInteger()
 
+    /** Stalled batches in a row within the run; see [ProtonBackgroundBatchPolicy.endsRunAfterStall]. */
+    private val consecutiveStalledBatches = AtomicInteger()
+
     /** One [MarkPublisher] per user for the run in progress; see [finishPublishing]. */
     private val publishers = mutableMapOf<String, MarkPublisher>()
     private val publishersMutex = Mutex()
@@ -140,6 +143,7 @@ internal class ProtonRenditionSync(
         } catch (error: CancellationException) {
             // A stopped worker or the run deadline: the settles coalesced in memory would be
             // lost with the process, so they reach disk now, and whatever was stored is shown.
+            consecutiveStalledBatches.set(0)
             withContext(NonCancellable) {
                 flushQueues(userId)
                 finishPublishing(userId)
@@ -179,28 +183,29 @@ internal class ProtonRenditionSync(
 
     /**
      * What one batch came to. A batch the SDK answered is [ProtonThumbnailQueueStep.Processed]
-     * and the next one is claimed at once; a batch the SDK never answered ([BatchEnd.STALLED])
-     * ends the run instead, since the next batch would only meet the same silence: the step is
-     * an idle one whose retry is too far off to sleep for, so the worker ends waiting for it.
+     * and the next one is claimed at once. A batch the SDK never answered ([BatchEnd.STALLED])
+     * is one too, once: a slow SDK can take the whole deadline over its first answer, so one
+     * stalled batch says little. A second one in a row says the SDK is stalled, and the next
+     * batch would only meet the same silence: the step is then an idle one whose retry is too
+     * far off to sleep for, so the worker ends the run waiting for it.
      */
     private suspend fun afterBatch(
         userId: UserId,
         allowPreviews: Boolean,
         end: BatchEnd,
-    ): ProtonThumbnailQueueStep =
-        when (end) {
-            BatchEnd.PROCESSED -> {
-                flushAfterBatch(userId)
-                ProtonThumbnailQueueStep.Processed
-            }
-
-            BatchEnd.STALLED -> {
-                val idle = ProtonBackgroundBatchPolicy.afterStalledBatch(queueIdle(userId, allowPreviews))
-                flushQueues(userId)
-                finishPublishing(userId)
-                idle
-            }
+    ): ProtonThumbnailQueueStep {
+        val stalledInARow = if (end == BatchEnd.STALLED) consecutiveStalledBatches.incrementAndGet() else 0
+        if (!ProtonBackgroundBatchPolicy.endsRunAfterStall(stalledInARow)) {
+            if (stalledInARow == 0) consecutiveStalledBatches.set(0)
+            flushAfterBatch(userId)
+            return ProtonThumbnailQueueStep.Processed
         }
+        consecutiveStalledBatches.set(0)
+        val idle = ProtonBackgroundBatchPolicy.afterStalledBatch(queueIdle(userId, allowPreviews))
+        flushQueues(userId)
+        finishPublishing(userId)
+        return idle
+    }
 
     private enum class BatchEnd { PROCESSED, STALLED }
 
@@ -223,6 +228,7 @@ internal class ProtonRenditionSync(
         userId: UserId,
         allowPreviews: Boolean,
     ): ProtonThumbnailQueueStep.Idle {
+        consecutiveStalledBatches.set(0)
         val idle = queueIdle(userId, allowPreviews)
         if (ProtonBackgroundBatchPolicy.hasStaleClaims(idle)) {
             // This is the only claimer, so a ready entry nobody could claim is a claim some
