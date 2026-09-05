@@ -2,7 +2,7 @@ package com.bownee.lenswave.proton
 
 import android.graphics.Bitmap
 import com.bownee.lenswave.LenswaveOperation
-import kotlinx.coroutines.flow.asFlow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.test.runTest
 import me.proton.core.domain.entity.UserId
 import me.proton.drive.sdk.ProgressUpdate
@@ -15,7 +15,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
+import java.io.IOException
 import java.lang.reflect.Proxy
+import java.net.UnknownHostException
 import java.nio.channels.WritableByteChannel
 
 /**
@@ -87,6 +89,60 @@ class ProtonRenditionDownloadsTest {
             assertTrue(failures.isEmpty())
         }
 
+    @Test
+    fun `a thumbnail the store refuses is an ordinary failure, whatever the store threw`() =
+        runTest {
+            admission.bind { true }
+            cache.failThumbnailWrites = IOException("disk full")
+            client.thumbnails = { nodeUids -> nodeUids.map { nodeUid -> bytes(nodeUid) } }
+            client.previews = { nodeUids -> nodeUids.map { nodeUid -> noThumbnail(nodeUid) } }
+
+            val result = downloads.downloadThumbnails(USER, listOf("a")) {}
+
+            assertEquals(mapOf("a" to ThumbnailFailureKind.OTHER), result.failures)
+        }
+
+    @Test
+    fun `a progress report that throws under the pass is not a lost connection`() =
+        runTest {
+            admission.bind { true }
+            val nodeUids = ('a'..'e').map(Char::toString)
+            client.thumbnails = { requested -> requested.map { nodeUid -> bytes(nodeUid) } }
+            client.previews = { requested -> requested.map { nodeUid -> noThumbnail(nodeUid) } }
+            var thrown = false
+
+            val result =
+                downloads.downloadThumbnails(USER, nodeUids) { report ->
+                    // The first report of stored thumbnails fails once, as a queue write might.
+                    if (!thrown && report.successfulNodeUids.isNotEmpty()) {
+                        thrown = true
+                        throw IOException("queue file")
+                    }
+                }
+
+            assertTrue(thrown)
+            assertEquals(setOf("a", "b", "c", "d"), result.successfulNodeUids)
+            assertEquals(mapOf("e" to ThumbnailFailureKind.OTHER), result.failures)
+            assertEquals(
+                listOf(LenswaveOperation.THUMBNAIL_DOWNLOAD, LenswaveOperation.PREVIEW_DOWNLOAD),
+                failures.map { it.first },
+            )
+        }
+
+    @Test
+    fun `a connection lost under the batch surfaces whole for the sync to classify`() =
+        runTest {
+            client.thumbnails = { throw UnknownHostException("api.proton.me") }
+
+            val failed = runCatching { downloads.downloadThumbnails(USER, listOf("a", "b")) {} }
+
+            // The SDK's flow fails the pass's scope; the sync backs the batch off as a network
+            // failure (see ProtonRenditionSync) and the preview fallback is not tried over the
+            // same dead network.
+            assertTrue(failed.exceptionOrNull().toString(), failed.exceptionOrNull() is UnknownHostException)
+            assertEquals(listOf(ThumbnailType.THUMBNAIL), client.enumerations.map { it.first })
+        }
+
     private fun noThumbnail(nodeUid: NodeUid): FileThumbnail =
         FileThumbnail(
             nodeUid,
@@ -115,7 +171,7 @@ class ProtonRenditionDownloadsTest {
                         val type = arguments[1] as ThumbnailType
                         enumerations += type to nodeUids.map { it.value }
                         val answers = if (type == ThumbnailType.PREVIEW) previews else thumbnails
-                        answers(nodeUids).asFlow()
+                        flow { answers(nodeUids).forEach { answer -> emit(answer) } }
                     }
 
                     "toString" -> {

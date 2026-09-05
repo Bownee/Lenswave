@@ -573,18 +573,58 @@ class ProtonThumbnailQueueTest {
         }
 
     @Test
-    fun connectionFailuresNeverDropAnEntry() =
+    fun aFewConnectionFailuresInARowAreFreeAndTheNextOneStepsTheLadder() =
         runTest {
+            val store = FakeStore()
             val clock = FakeClock()
-            val queue = queue(FakeStore(), clock)
+            val queue = queue(store, clock)
             queue.replaceSource(USER_ID, "timeline", candidates("offline"))
-            repeat(ProtonThumbnailQueue.MAX_RETRY_COUNT * 2) {
+
+            repeat(ProtonThumbnailQueue.MAX_CONSECUTIVE_NETWORK_RETRIES - 1) {
                 assertEquals("offline", queue.claimReady(USER_ID, limit = 1).single().nodeUid)
                 queue.settle(USER_ID, emptySet(), mapOf("offline" to ThumbnailFailureKind.TRANSIENT_NETWORK))
                 clock.value += ProtonThumbnailQueue.NETWORK_RETRY_MILLIS
             }
+            queue.flush(USER_ID)
+            assertEquals(0, entry(store, "offline").retryCount)
+            assertEquals(0L, queue.retryDelayMillis(USER_ID))
 
-            assertEquals(1, queue.pendingCount(USER_ID))
+            // The one after that is an ordinary failure with an ordinary backoff.
+            queue.claimReady(USER_ID, limit = 1)
+            queue.settle(USER_ID, emptySet(), mapOf("offline" to ThumbnailFailureKind.TRANSIENT_NETWORK))
+            queue.flush(USER_ID)
+            assertEquals(1, entry(store, "offline").retryCount)
+            assertEquals(30_000L, queue.retryDelayMillis(USER_ID))
+
+            // And the count starts over: the next few are free again.
+            clock.value += 30_000L
+            queue.claimReady(USER_ID, limit = 1)
+            queue.settle(USER_ID, emptySet(), mapOf("offline" to ThumbnailFailureKind.TRANSIENT_NETWORK))
+            queue.flush(USER_ID)
+            assertEquals(1, entry(store, "offline").retryCount)
+            assertEquals(ProtonThumbnailQueue.NETWORK_RETRY_MILLIS, queue.retryDelayMillis(USER_ID))
+        }
+
+    @Test
+    fun aNodeThatAlwaysFailsAsAConnectionFailureIsEventuallyDropped() =
+        runTest {
+            val clock = FakeClock()
+            val queue = queue(FakeStore(), clock)
+            queue.replaceSource(USER_ID, "timeline", candidates("offline"))
+            var attempts = 0
+
+            while (queue.pendingCount(USER_ID) > 0 && attempts < 1_000) {
+                clock.value += 60L * 60L * 1_000L
+                assertEquals("offline", queue.claimReady(USER_ID, limit = 1).single().nodeUid)
+                queue.settle(USER_ID, emptySet(), mapOf("offline" to ThumbnailFailureKind.TRANSIENT_NETWORK))
+                attempts++
+            }
+
+            assertEquals(0, queue.pendingCount(USER_ID))
+            assertEquals(
+                ProtonThumbnailQueue.MAX_RETRY_COUNT * ProtonThumbnailQueue.MAX_CONSECUTIVE_NETWORK_RETRIES,
+                attempts,
+            )
         }
 
     @Test

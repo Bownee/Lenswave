@@ -63,6 +63,12 @@ internal data class ProtonThumbnailQueueEntry(
     val sourceCaptureTimes: Map<String, Long>,
     val retryCount: Int = 0,
     val retryAtMillis: Long = 0L,
+    /**
+     * Consecutive connection failures since the last ordinary retry step; see
+     * [ProtonThumbnailQueue.MAX_CONSECUTIVE_NETWORK_RETRIES]. Not in the queue file yet: a
+     * process that restarts starts the count over, which only allows a few more short retries.
+     */
+    val networkRetryCount: Int = 0,
 ) {
     val sources: Set<String> get() = sourceCaptureTimes.keys
     val captureTimeEpochSeconds: Long
@@ -308,8 +314,10 @@ internal class ProtonThumbnailQueue(
      * dropped node stays out of the queue for [SUPPRESSION_MILLIS] however often the listings
      * are reconciled; [retryNow] lifts that. A node the network failed under
      * ([ThumbnailFailureKind.TRANSIENT_NETWORK]) is not at fault: it waits [NETWORK_RETRY_MILLIS]
-     * and keeps its retry count, so a connection lost mid-batch costs no node a backoff step.
-     * A node whose thumbnail can only be had as a preview while previews are not allowed
+     * and keeps its retry count, so a connection lost mid-batch costs no node a backoff step;
+     * but only [MAX_CONSECUTIVE_NETWORK_RETRIES] times in a row, after which the failure is
+     * treated as any other, or a node that always fails that way would be asked every few
+     * seconds for good. A node whose thumbnail can only be had as a preview while previews are not allowed
      * ([ThumbnailFailureKind.PREVIEW_DEFERRED]) is parked: it keeps its retry count, waits
      * [PREVIEW_DEFERRAL_MILLIS] for a process that forgets the parking, and is otherwise
      * claimable exactly when previews are ([claimReady]).
@@ -332,8 +340,17 @@ internal class ProtonThumbnailQueue(
             failures.forEach { (nodeUid, kind) ->
                 val entry = entries[nodeUid] ?: return@forEach
                 if (kind == ThumbnailFailureKind.TRANSIENT_NETWORK) {
-                    entries[nodeUid] = entry.copy(retryAtMillis = now + NETWORK_RETRY_MILLIS)
-                    return@forEach
+                    // A few short retries are free; a connection that keeps failing for one
+                    // node is not the connection, and from here the failure is an ordinary one.
+                    val networkRetryCount = entry.networkRetryCount + 1
+                    if (networkRetryCount < MAX_CONSECUTIVE_NETWORK_RETRIES) {
+                        entries[nodeUid] =
+                            entry.copy(
+                                networkRetryCount = networkRetryCount,
+                                retryAtMillis = now + NETWORK_RETRY_MILLIS,
+                            )
+                        return@forEach
+                    }
                 }
                 if (kind == ThumbnailFailureKind.PREVIEW_DEFERRED) {
                     entries[nodeUid] = entry.copy(retryAtMillis = now + PREVIEW_DEFERRAL_MILLIS)
@@ -350,6 +367,7 @@ internal class ProtonThumbnailQueue(
                 entries[nodeUid] =
                     entry.copy(
                         retryCount = retryCount,
+                        networkRetryCount = 0,
                         retryAtMillis = now + retryDelayMillis(retryCount),
                     )
             }
@@ -587,6 +605,14 @@ internal class ProtonThumbnailQueue(
 
         /** The pause after a connection failure; long enough for the network to settle, no more. */
         const val NETWORK_RETRY_MILLIS = 10_000L
+
+        /**
+         * How many connection failures in a row are retried shortly and for free. The next one
+         * takes an ordinary backoff step and starts the count over, so a node that fails this
+         * way every time still climbs the ladder and is dropped after
+         * [MAX_RETRY_COUNT] steps, instead of being asked every ten seconds forever.
+         */
+        const val MAX_CONSECUTIVE_NETWORK_RETRIES = 3
 
         /**
          * How long a node parked for previews stays out of reach of a process that has lost

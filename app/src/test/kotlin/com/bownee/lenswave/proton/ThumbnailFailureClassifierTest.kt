@@ -44,6 +44,16 @@ class ThumbnailFailureClassifierTest {
         )
     }
 
+    @Test fun theCauseChainIsWalkedOnlySoFar() {
+        var error: Throwable = UnknownHostException("host")
+        repeat(7) { error = RuntimeException("wrapped", error) }
+        assertEquals(ThumbnailFailureKind.TRANSIENT_NETWORK, ThumbnailFailureClassifier.classify(error))
+        assertEquals(
+            ThumbnailFailureKind.OTHER,
+            ThumbnailFailureClassifier.classify(RuntimeException("one too deep", error)),
+        )
+    }
+
     @Test fun aNetworkDomainErrorWithoutAStatusCodeIsTransientAndWithOneIsNot() {
         assertEquals(
             ThumbnailFailureKind.TRANSIENT_NETWORK,

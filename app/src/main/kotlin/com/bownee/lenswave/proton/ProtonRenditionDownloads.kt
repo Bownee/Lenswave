@@ -390,6 +390,17 @@ internal class ProtonRenditionDownloads(
             return ThumbnailPassCompletionPolicy.hasResponseForEveryNode(requested, successful, failures.keys)
         }
 
+        /** Records [error] as [kind] for every node still without an answer. */
+        fun failBatch(
+            error: Throwable,
+            kind: ThumbnailFailureKind,
+        ) {
+            reportFailure(LenswaveOperation.THUMBNAIL_DOWNLOAD, error)
+            requested
+                .filterNot(successful::contains)
+                .forEach { nodeUid -> failures.record(nodeUid, kind) }
+        }
+
         var wentQuiet = false
         var answered = false
         val completed =
@@ -413,8 +424,10 @@ internal class ProtonRenditionDownloads(
                             answered = true
                             val thumbnail = next.getOrNull()
                             if (thumbnail == null) {
-                                next.exceptionOrNull()?.let { error ->
-                                    if (error !is CancellationException) throw error
+                                // The SDK's own failure, closing the whole batch: the one
+                                // failure that may be the connection's rather than the nodes'.
+                                next.exceptionOrNull()?.takeUnless { error -> error is CancellationException }?.let {
+                                    failBatch(it, ThumbnailFailureClassifier.classify(it))
                                 }
                                 break
                             }
@@ -423,11 +436,10 @@ internal class ProtonRenditionDownloads(
                     } catch (error: CancellationException) {
                         throw error
                     } catch (error: Throwable) {
-                        reportFailure(LenswaveOperation.THUMBNAIL_DOWNLOAD, error)
-                        val kind = ThumbnailFailureClassifier.classify(error)
-                        requested
-                            .filterNot(successful::contains)
-                            .forEach { nodeUid -> failures.record(nodeUid, kind) }
+                        // Not the SDK's: the progress report (a queue settle) threw under the
+                        // pass. However it is worded, it is not a lost connection, so the nodes
+                        // take an ordinary backoff step rather than a short unbounded retry.
+                        failBatch(error, ThumbnailFailureKind.OTHER)
                     } finally {
                         answers.cancel()
                     }
