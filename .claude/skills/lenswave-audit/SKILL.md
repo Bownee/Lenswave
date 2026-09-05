@@ -5,8 +5,11 @@ description: Lenswave-specific companion to the app-audit skill: the area file m
 
 # Lenswave audit companion
 
-Read this alongside the `app-audit` skill; it supplies the repo facts that skill leaves to
-the project. Nothing here replaces `CLAUDE.md`, which stays the source for build rules.
+This is the companion the `app-audit` skill expects (see its section "The companion skill this
+method expects"); it supplies the six things that skill leaves to the project, in the order
+that skill lists them: check chain, area map, where state lives, git and CI conventions,
+device tests, audit history. It holds facts only. The method stays in `app-audit`, and
+`CLAUDE.md` stays the source for build rules; when the two disagree, fix this file.
 
 ## Check chain (run before any push)
 

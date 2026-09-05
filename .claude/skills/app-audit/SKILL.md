@@ -19,6 +19,30 @@ habits, and this skill exists to keep them:
 4. **Verify the headline claims yourself** before publishing. Reviewers are usually right, but
    the report carries your name.
 
+## The companion skill this method expects
+
+This file is the method and knows nothing about any one repository. It expects a companion
+skill named `<app>-audit` in the repo's `.claude/skills/` and reads it before anything else.
+The companion must supply, in this order so prompts can be assembled from it top to bottom:
+
+1. **Check chain**: the exact commands a fixer runs before reporting, plus the repo rules that
+   are not derivable from the code (warnings as errors, coverage gates, where strings and
+   diagnostics go, anything that must never be done).
+2. **Area map**: for each reviewer area, the source root and the directories or files it owns.
+   Reviewers get files, not area names, so the map must be concrete enough to list them.
+3. **Where state lives**: what the restoration reviewer traces (saved state, preferences,
+   in-memory registries) and which class owns each.
+4. **Git and CI conventions**: merge policy, whether CI runs on plain branches, which job is the
+   device gate, worktree and squash-merge rules for parallel sessions.
+5. **Device tests**: how to run them without wiping the install, what a locked phone does to
+   them, and what to report as "not evaluated".
+6. **Audit history**: every earlier pass with what it fixed and what it deferred, so reviewers
+   look for what is still there or newly introduced instead of re-reporting closed items.
+
+If the companion is missing, write it from `CLAUDE.md` and `CONTRIBUTING.md` before the first
+reviewer is spawned, and keep it short and factual: the method belongs here, the facts belong
+there. When an audit ends, the companion's history is the one thing that must be updated.
+
 ## Before you start
 
 - Establish the exact commit under review and put a **detached, read-only worktree** at it.
@@ -27,9 +51,9 @@ habits, and this skill exists to keep them:
   `git worktree remove`.
 - Read the repo's `CLAUDE.md` / `CONTRIBUTING.md` for the check chain, the coding rules and the
   layout; reviewers need the file map, fixers need the rules.
-- Look for a project-specific companion skill or reference (for example a `<app>-audit` skill in
-  the repo's `.claude/skills/`) that carries the area file map, the check chain, where state
-  lives and what earlier audits already fixed; read it before writing reviewer prompts.
+- Read the `<app>-audit` companion (see "The companion skill this method expects" above) before
+  writing a single reviewer prompt; every prompt below draws its file lists, rules and history
+  from it.
 
 ## Run the audit
 
