@@ -15,10 +15,7 @@ data class ProtonOriginalDownloadProgress(
     val complete: Boolean = false,
 ) {
     val percent: Int?
-        get() =
-            totalBytes
-                ?.takeIf { total -> total > 0L }
-                ?.let { total -> ((downloadedBytes.coerceIn(0L, total) * 100L) / total).toInt() }
+        get() = ProtonOriginalProgressPolicy.percent(downloadedBytes, totalBytes)
 }
 
 /**
@@ -160,13 +157,13 @@ class ProtonOriginalStream(
         complete: Boolean = false,
     ) {
         val validTotal = totalBytes?.takeIf { total -> total > 0L }
-        val next =
-            ProtonOriginalDownloadProgress(
-                downloadedBytes = downloadedBytes.coerceAtLeast(0L),
-                totalBytes = validTotal,
-                complete = complete,
-            )
-        if (ProtonOriginalProgressPolicy.shouldPublish(mutableProgress.value, next)) mutableProgress.value = next
+        val validDownloaded = downloadedBytes.coerceAtLeast(0L)
+        // Decided on primitives first: a value object per channel write, under the lock, was
+        // most of the allocation of a large transfer.
+        val previous = mutableProgress.value
+        if (ProtonOriginalProgressPolicy.shouldPublish(previous, validDownloaded, validTotal, complete)) {
+            mutableProgress.value = ProtonOriginalDownloadProgress(validDownloaded, validTotal, complete)
+        }
     }
 }
 
@@ -180,15 +177,60 @@ internal object ProtonOriginalProgressPolicy {
     /** With no total to compute a percentage from, publish every this many bytes. */
     const val MIN_BYTE_DELTA = 256L * 1_024L
 
+    /** Whole percent of [downloadedBytes] in [totalBytes]; null without a usable total. */
+    fun percent(
+        downloadedBytes: Long,
+        totalBytes: Long?,
+    ): Int? =
+        totalBytes
+            ?.takeIf { total -> total > 0L }
+            ?.let { total -> ((downloadedBytes.coerceIn(0L, total) * 100L) / total).toInt() }
+
+    /** Whether a change to ([downloadedBytes], [totalBytes], [complete]) is worth publishing over [previous]. */
     fun shouldPublish(
         previous: ProtonOriginalDownloadProgress,
-        next: ProtonOriginalDownloadProgress,
+        downloadedBytes: Long,
+        totalBytes: Long?,
+        complete: Boolean,
+    ): Boolean =
+        shouldPublish(
+            previousDownloadedBytes = previous.downloadedBytes,
+            previousTotalBytes = previous.totalBytes,
+            previousComplete = previous.complete,
+            downloadedBytes = downloadedBytes,
+            totalBytes = totalBytes,
+            complete = complete,
+        )
+
+    /** The rule on primitives, so a caller allocates a progress value only for the updates it publishes. */
+    fun shouldPublish(
+        previousDownloadedBytes: Long,
+        previousTotalBytes: Long?,
+        previousComplete: Boolean,
+        downloadedBytes: Long,
+        totalBytes: Long?,
+        complete: Boolean,
     ): Boolean =
         when {
-            next.complete != previous.complete -> true
-            next.totalBytes != previous.totalBytes -> true
-            next.downloadedBytes < previous.downloadedBytes -> true
-            next.percent != null -> next.percent != previous.percent
-            else -> next.downloadedBytes - previous.downloadedBytes >= MIN_BYTE_DELTA
+            complete != previousComplete -> {
+                true
+            }
+
+            totalBytes != previousTotalBytes -> {
+                true
+            }
+
+            downloadedBytes < previousDownloadedBytes -> {
+                true
+            }
+
+            else -> {
+                val percent = percent(downloadedBytes, totalBytes)
+                if (percent != null) {
+                    percent != percent(previousDownloadedBytes, previousTotalBytes)
+                } else {
+                    downloadedBytes - previousDownloadedBytes >= MIN_BYTE_DELTA
+                }
+            }
         }
 }
