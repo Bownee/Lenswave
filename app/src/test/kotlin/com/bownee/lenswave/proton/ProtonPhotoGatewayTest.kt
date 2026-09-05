@@ -411,7 +411,7 @@ class ProtonPhotoGatewayTest {
                 assertEquals(part, stream.file)
                 assertTrue(download.plaintext.renameTo(committed))
                 events += "commitOriginal"
-                committed
+                ProtonOriginalCommit(committed, encryptedStored = true)
             }
             cache.onOriginalStored = { target ->
                 // The size accounting runs after the stream has moved to the committed file.
@@ -670,7 +670,7 @@ class ProtonPhotoGatewayTest {
         var loadPreview: () -> Bitmap? = { null }
         var readOriginal: (shouldContinue: () -> Boolean) -> File? = { null }
         var createOriginalTarget: () -> ProtonOriginalTarget = { error("no download expected") }
-        var commitOriginal: (ProtonOriginalTarget) -> File = { error("no download expected") }
+        var commitOriginal: (ProtonOriginalTarget) -> ProtonOriginalCommit = { error("no download expected") }
         var onOriginalStored: (File) -> Unit = {}
 
         override fun storedRenditions(userId: String): ProtonStoredRenditions =
@@ -844,7 +844,7 @@ class ProtonPhotoGatewayTest {
             userId: String,
             nodeUid: String,
             download: ProtonOriginalTarget,
-        ): File = commitOriginal(download)
+        ): ProtonOriginalCommit = commitOriginal(download)
 
         override fun onOriginalStored(
             userId: String,

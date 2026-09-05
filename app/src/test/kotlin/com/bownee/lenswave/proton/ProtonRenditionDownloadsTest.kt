@@ -385,7 +385,7 @@ class ProtonRenditionDownloadsTest {
             userId: String,
             nodeUid: String,
             download: ProtonOriginalTarget,
-        ): File = error("no original expected")
+        ): ProtonOriginalCommit = error("no original expected")
 
         override fun onOriginalStored(
             userId: String,

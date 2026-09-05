@@ -371,7 +371,7 @@ internal class ProtonPhotoCache
             userId: String,
             nodeUid: String,
             download: ProtonOriginalTarget,
-        ): File = originals.commit(userId, nodeUid, download)
+        ): ProtonOriginalCommit = originals.commit(userId, nodeUid, download)
 
         override fun onOriginalStored(
             userId: String,
