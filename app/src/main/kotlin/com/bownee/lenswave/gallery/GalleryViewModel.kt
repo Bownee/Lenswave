@@ -304,11 +304,14 @@ class GalleryViewModel internal constructor(
     /**
      * The answer from the privacy dialog. Runs in this scope: the dialog is a fragment that
      * survives a rotation, and its write must too, or a rotation right after the toggle loses
-     * it. The account may have gone while the dialog was up; that is reported as not saved.
+     * it. The fragment manager also restores the dialog after a process death, where a Save may
+     * land before the session has settled; like [trashPhotos] the write then waits for the
+     * account (see [awaitSessionUserId]). None arriving, or the account having gone while the
+     * dialog was up, is reported as not saved.
      */
     fun saveTelemetryPreference(enabled: Boolean) {
-        val userId = currentUserId
         viewModelScope.launch {
+            val userId = currentUserId ?: awaitSessionUserId()
             val saved =
                 userId != null &&
                     try {

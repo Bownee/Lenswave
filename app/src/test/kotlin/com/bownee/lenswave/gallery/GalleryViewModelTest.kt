@@ -301,13 +301,18 @@ class GalleryViewModelTest {
         }
 
     @Test
-    fun `saveTelemetryPreference without an account is reported as not saved and writes nothing`() =
+    fun `saveTelemetryPreference while no session ever arrives is reported as not saved and writes nothing`() =
         runTest(dispatcher) {
             val viewModel = viewModel()
             val received = mutableListOf<GalleryMutationEvent>()
             backgroundScope.launch { viewModel.mutationEvents.collect { received += it } }
 
             viewModel.saveTelemetryPreference(enabled = true)
+            advanceTimeBy(9_999L)
+            runCurrent()
+            assertTrue("the write waits for the restored session", received.isEmpty())
+
+            advanceTimeBy(2L)
             runCurrent()
 
             assertEquals(
@@ -315,6 +320,44 @@ class GalleryViewModelTest {
                 received,
             )
             assertTrue(events.none { it.startsWith("telemetry:") })
+
+            // A session that settles without an account is reported the same way, at once.
+            session.value = ProtonAccountSessionState(initialized = true)
+            viewModel.saveTelemetryPreference(enabled = true)
+            runCurrent()
+            assertEquals(2, received.size)
+            assertEquals(GalleryMutationEvent.TelemetryPreferenceSaved(saved = false), received.last())
+            assertTrue(events.none { it.startsWith("telemetry:") })
+        }
+
+    @Test
+    fun `a telemetry preference saved before the restored session has settled is written once the account arrives`() =
+        runTest(dispatcher) {
+            val viewModel = viewModel()
+            val received = mutableListOf<GalleryMutationEvent>()
+            backgroundScope.launch { viewModel.mutationEvents.collect { received += it } }
+
+            // The privacy dialog restored by the fragment manager answers before the session flow does.
+            viewModel.saveTelemetryPreference(enabled = true)
+            runCurrent()
+            assertTrue("nothing is written without an account", events.none { it.startsWith("telemetry:") })
+            assertTrue(received.isEmpty())
+
+            session.value =
+                ProtonAccountSessionState(readyAccount(USER), USER, initialized = true, transitioning = true)
+            runCurrent()
+            assertTrue("a transitioning session is not an account yet", events.none { it.startsWith("telemetry:") })
+
+            session.value = ProtonAccountSessionState(readyAccount(USER), USER, initialized = true)
+            runCurrent()
+            assertEquals(listOf("telemetry:u:true"), events.filter { it.startsWith("telemetry:") })
+            telemetryWriter.held.single().complete(Unit)
+            runCurrent()
+
+            assertEquals(
+                listOf<GalleryMutationEvent>(GalleryMutationEvent.TelemetryPreferenceSaved(saved = true)),
+                received,
+            )
         }
 
     @Test
