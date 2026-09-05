@@ -107,9 +107,23 @@ class SecureFileStore internal constructor(
         bytes: ByteArray,
         failureMessage: String,
     ) {
+        write(scope, file, bytes, failureMessage, fsync = false)
+    }
+
+    /**
+     * [write] with the option to force the record to disk before it is renamed into place, see
+     * [AtomicFileStore.write]; for the small metadata files whose loss is a whole listing.
+     */
+    fun write(
+        scope: String,
+        file: File,
+        bytes: ByteArray,
+        failureMessage: String,
+        fsync: Boolean,
+    ) {
         val key = dataKey(scope)
         val payload = encrypt(key, bytes)
-        AtomicFileStore.write(file, payload, failureMessage) { commit -> commitWith(scope, key, commit) }
+        AtomicFileStore.write(file, payload, failureMessage, fsync) { commit -> commitWith(scope, key, commit) }
     }
 
     fun writeText(
@@ -117,8 +131,9 @@ class SecureFileStore internal constructor(
         file: File,
         text: String,
         failureMessage: String,
+        fsync: Boolean = false,
     ) {
-        write(scope, file, text.toByteArray(Charsets.UTF_8), failureMessage)
+        write(scope, file, text.toByteArray(Charsets.UTF_8), failureMessage, fsync)
     }
 
     /**
@@ -469,11 +484,17 @@ class SecureFileStore internal constructor(
             // deletes both, and deleting a key that is not there is nothing), whereas a key
             // without its marker, left by a crash between the two writes, is one [keyAliases]
             // never lists and no cleaner ever removes. Best effort still: a key whose marker
-            // cannot be written is a working key.
+            // cannot be written is a working key. Both are forced to disk: a wrapped key file
+            // that survives a power loss empty would fail every read of the scope for good.
             runCatching {
-                AtomicFileStore.write(familyFile(alias(scope)), scopeFamily(scope), "Could not record the key family")
+                AtomicFileStore.write(
+                    familyFile(alias(scope)),
+                    scopeFamily(scope),
+                    "Could not record the key family",
+                    fsync = true,
+                )
             }
-            AtomicFileStore.write(file, wrap(scope, bytes), "Could not store data key")
+            AtomicFileStore.write(file, wrap(scope, bytes), "Could not store data key", fsync = true)
         }
 
     private fun wrap(

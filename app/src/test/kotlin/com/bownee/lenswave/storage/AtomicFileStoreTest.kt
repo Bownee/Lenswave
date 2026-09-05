@@ -3,6 +3,7 @@ package com.bownee.lenswave.storage
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -26,6 +27,37 @@ class AtomicFileStoreTest {
                 .orEmpty()
                 .any { it.name.endsWith(".part") },
         )
+    }
+
+    @Test
+    fun `a synced write lands the contents and leaves no temporary file`() {
+        val target = File(temporaryFolder.root, "queue.json")
+        AtomicFileStore.write(target, "first", "write failed", fsync = true)
+
+        AtomicFileStore.write(target, "second".toByteArray(), "write failed", fsync = true)
+
+        assertEquals("second", target.readText())
+        assertFalse(
+            temporaryFolder.root
+                .listFiles()
+                .orEmpty()
+                .any { it.name.endsWith(".part") },
+        )
+    }
+
+    @Test
+    fun `a synced write still honours the commit gate`() {
+        val target = File(temporaryFolder.root, "queue.json")
+        AtomicFileStore.write(target, "first", "write failed", fsync = true)
+        var gated = false
+
+        AtomicFileStore.write(target, "second".toByteArray(), "write failed", fsync = true) { commit ->
+            gated = true
+            commit()
+        }
+
+        assertTrue(gated)
+        assertEquals("second", target.readText())
     }
 
     @Test

@@ -1,6 +1,7 @@
 package com.bownee.lenswave.storage
 
 import java.io.File
+import java.io.FileOutputStream
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
@@ -11,24 +12,41 @@ internal object AtomicFileStore {
         target: File,
         contents: String,
         failureMessage: String,
+        fsync: Boolean = false,
     ) {
-        write(target, contents.toByteArray(Charsets.UTF_8), failureMessage)
+        write(target, contents.toByteArray(Charsets.UTF_8), failureMessage, fsync)
     }
 
     /**
      * Writes [contents] to a temporary file and moves it over [target]. [commitGate] wraps only
      * the move, so a caller can hold a lock across the commit without holding it across the write.
+     *
+     * With [fsync] the bytes are forced to disk before the move. A rename is journaled by the
+     * file system but the data behind it is not, so a power loss right after the move can leave
+     * [target] renamed but empty; for a queue, an index or a wrapped key that is a miss the app
+     * has to rebuild, worth one sync of a few kilobytes. Large originals and renditions stay on
+     * the fast path: an empty rendition reads as absent and is fetched again.
+     *
+     * [commitGate] stays last on purpose: callers pass it as a trailing lambda.
      */
     fun write(
         target: File,
         contents: ByteArray,
         failureMessage: String,
+        fsync: Boolean = false,
         commitGate: (commit: () -> Unit) -> Unit = { commit -> commit() },
     ) {
         target.parentFile?.mkdirs()
         val temporary = File.createTempFile("${target.name}.", ".part", target.parentFile)
         try {
-            temporary.writeBytes(contents)
+            if (fsync) {
+                FileOutputStream(temporary).use { output ->
+                    output.write(contents)
+                    output.fd.sync()
+                }
+            } else {
+                temporary.writeBytes(contents)
+            }
             commitGate { commit(temporary, target, failureMessage) }
         } catch (error: Exception) {
             temporary.delete()
