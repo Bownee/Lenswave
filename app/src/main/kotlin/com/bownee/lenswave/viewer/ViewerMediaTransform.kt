@@ -92,12 +92,14 @@ internal class ViewerMediaTransform(
             .setDuration(duration)
             .setInterpolator(ViewerVerticalSettle.interpolator)
             .start()
+        // The player moves and shrinks but never fades: its video surface must not render
+        // through the layer a partial alpha brings, which let the part of the surface the box
+        // crops flash outside the box on alternate frames (see ViewerVideoController).
         playerView
             .animate()
             .translationY(translationY)
             .scaleX(scale)
             .scaleY(scale)
-            .alpha(alpha)
             .setDuration(duration)
             .setInterpolator(ViewerVerticalSettle.interpolator)
             .start()
@@ -126,21 +128,25 @@ internal class ViewerMediaTransform(
             .start()
     }
 
-    /** Sends one media view off-screen the way a dismissed photo leaves, without an end action. */
+    /**
+     * Sends one media view off-screen the way a dismissed photo leaves, without an end action.
+     * The player only moves and shrinks; see [animateMediaDismissTransform].
+     */
     fun animateDismissedMedia(
         view: View,
         targetY: Float,
         duration: Long,
     ) {
-        view
-            .animate()
-            .translationY(targetY)
-            .scaleX(DISMISSED_SCALE)
-            .scaleY(DISMISSED_SCALE)
-            .alpha(DISMISSED_ALPHA)
-            .setDuration(duration)
-            .setInterpolator(ViewerVerticalSettle.interpolator)
-            .start()
+        val leaving =
+            view
+                .animate()
+                .translationY(targetY)
+                .scaleX(DISMISSED_SCALE)
+                .scaleY(DISMISSED_SCALE)
+                .setDuration(duration)
+                .setInterpolator(ViewerVerticalSettle.interpolator)
+        if (view !== playerView) leaving.alpha(DISMISSED_ALPHA)
+        leaving.start()
     }
 
     companion object {

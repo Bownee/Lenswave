@@ -101,6 +101,7 @@ class PhotoViewerActivity :
     private val deleteButton get() = screen.deleteButton
     private val detailsSheet get() = screen.detailsSheet
     private lateinit var mediaTransform: ViewerMediaTransform
+    private lateinit var thumbnailFraming: ViewerStandInFraming
     private lateinit var details: ViewerDetailsSheetController
     private lateinit var dismiss: ViewerDismissController
     private lateinit var swipe: ViewerSwipeController
@@ -453,6 +454,7 @@ class PhotoViewerActivity :
     }
 
     private fun buildCollaborators() {
+        thumbnailFraming = ViewerStandInFraming(thumbnailPreview)
         mediaTransform =
             ViewerMediaTransform(
                 photoView = photoView,
@@ -509,6 +511,7 @@ class PhotoViewerActivity :
             ViewerSwipeController(
                 screen = screen,
                 mediaTransform = mediaTransform,
+                peekFraming = ViewerStandInFraming(peekPreview),
                 scope = lifecycleScope,
                 loadThumbnail = ::readThumbnail,
                 peekThumbnail = { photo -> thumbnailSource.peekThumbnail(UserId(photo.userId), photo.nodeUid) },
@@ -905,6 +908,7 @@ class PhotoViewerActivity :
         hideLoadingPanel()
         previewStableId = requestedPhoto.stableId
         thumbnailPreview.setImageBitmap(bitmap)
+        thumbnailFraming.standsInFor(requestedPhoto.mediaKind)
         thumbnailPreview.visibility = View.VISIBLE
         thumbnailPreview.animate().cancel()
         photoView.alpha = 0f
@@ -1076,6 +1080,7 @@ class PhotoViewerActivity :
     private fun adoptPreview(bitmap: Bitmap) {
         previewStableId = request.stableId
         thumbnailPreview.setImageBitmap(bitmap)
+        thumbnailFraming.standsInFor(request.mediaKind)
         thumbnailPreview.alpha = 1f
         thumbnailPreview.translationX = 0f
         thumbnailPreview.visibility = View.VISIBLE

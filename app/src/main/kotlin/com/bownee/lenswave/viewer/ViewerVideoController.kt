@@ -8,9 +8,11 @@ import androidx.core.view.isVisible
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
+import androidx.media3.ui.AspectRatioFrameLayout
 import com.bownee.lenswave.LenswaveDiagnostics
 import com.bownee.lenswave.LenswaveOperation
 import com.bownee.lenswave.R
@@ -21,6 +23,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 /**
  * Owns the ExoPlayer behind the viewer's [PhotoViewerScreen.playerView]: one player for the life of
@@ -118,8 +121,26 @@ internal class ViewerVideoController(
      */
     private var showGeneration = 0L
 
+    /** The current media's picture size, once the decoder has reported it; null before and between media. */
+    private var videoSize: VideoSize? = null
+
+    init {
+        // The framing depends on the box as much as on the clip: the insets and a rotation
+        // change the box after the clip's size is known.
+        playerView.addOnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
+            if (right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop) applyFraming()
+        }
+    }
+
     private val playerListener =
         object : Player.Listener {
+            override fun onVideoSizeChanged(size: VideoSize) {
+                val activePlayer = player ?: return
+                if (activeStableId == null || !isCurrentShow(activePlayer)) return
+                videoSize = size
+                applyFraming()
+            }
+
             override fun onPlaybackStateChanged(playbackState: Int) {
                 val requestedStableId = activeStableId ?: return
                 if (host.currentStableId != requestedStableId) return
@@ -138,13 +159,14 @@ internal class ViewerVideoController(
                 // The collector stays on while the download is in flight; the panel it feeds is
                 // hidden by onVideoReady and returns only for a buffering stall.
                 host.onVideoReady(requestedStableId)
+                // No fade: the stand-in is framed exactly as the first frame, so the picture
+                // swaps in place, and the player's surface must never sit under a partial
+                // alpha. Below one the view renders through a layer, and on alternate frames
+                // the part of the surface the box crops escaped it and flashed above and
+                // below the box for the length of the fade. The stand-in stays a moment
+                // longer so the frame is on the display before it goes.
                 playerView.animate().cancel()
-                playerView.alpha = 0f
-                playerView
-                    .animate()
-                    .alpha(1f)
-                    .setDuration(FULL_QUALITY_CROSSFADE_MILLIS)
-                    .start()
+                playerView.alpha = 1f
                 if (thumbnailPreview.isVisible) {
                     thumbnailPreview.animate().cancel()
                     cancelPendingPreviewClear()
@@ -154,7 +176,7 @@ internal class ViewerVideoController(
                             if (host.currentStableId == requestedStableId) host.clearThumbnailPreview()
                         }
                     pendingPreviewClear = clear
-                    thumbnailPreview.postDelayed(clear, FULL_QUALITY_CROSSFADE_MILLIS)
+                    thumbnailPreview.postDelayed(clear, STAND_IN_LINGER_MILLIS)
                 }
             }
 
@@ -293,10 +315,39 @@ internal class ViewerVideoController(
         streamComplete = false
         activeStableId = null
         pausedWhilePlaying = false
+        videoSize = null
+        applyFraming()
         player?.let { active ->
             active.stop()
             active.clearMediaItems()
         }
+    }
+
+    /**
+     * Frames the current clip in the player's box per [ViewerVideoFramingPolicy]: spanning the
+     * width, and cropped by the box if taller, unless that would cut off too much of it. Without
+     * a clip the box goes back to fitting, so the next clip's first frame is never cropped by
+     * the framing of the last.
+     */
+    private fun applyFraming() {
+        val size = videoSize
+        val framing =
+            if (size == null) {
+                ViewerVideoFramingPolicy.Framing.FIT
+            } else {
+                ViewerVideoFramingPolicy.framing(
+                    videoWidth = (size.width * size.pixelWidthHeightRatio).roundToInt(),
+                    videoHeight = size.height,
+                    boxWidth = playerView.width - playerView.paddingLeft - playerView.paddingRight,
+                    boxHeight = playerView.height - playerView.paddingTop - playerView.paddingBottom,
+                )
+            }
+        val resizeMode =
+            when (framing) {
+                ViewerVideoFramingPolicy.Framing.FILL_WIDTH -> AspectRatioFrameLayout.RESIZE_MODE_FIXED_WIDTH
+                ViewerVideoFramingPolicy.Framing.FIT -> AspectRatioFrameLayout.RESIZE_MODE_FIT
+            }
+        if (playerView.resizeMode != resizeMode) playerView.resizeMode = resizeMode
     }
 
     /** Releases the player for good; call from the Activity's onDestroy. */
@@ -400,7 +451,8 @@ internal class ViewerVideoController(
     }
 
     private companion object {
-        const val FULL_QUALITY_CROSSFADE_MILLIS = 180L
+        /** How long the stand-in stays under the first frame before it is cleared. */
+        const val STAND_IN_LINGER_MILLIS = 180L
     }
 }
 

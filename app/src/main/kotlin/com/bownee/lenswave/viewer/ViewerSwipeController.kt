@@ -5,6 +5,7 @@ import android.graphics.drawable.BitmapDrawable
 import android.view.View
 import androidx.core.view.isVisible
 import com.bownee.lenswave.dp
+import com.bownee.lenswave.gallery.MediaKind
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -20,6 +21,7 @@ import kotlin.math.max
 internal class ViewerSwipeController(
     private val screen: PhotoViewerScreen,
     private val mediaTransform: ViewerMediaTransform,
+    private val peekFraming: ViewerStandInFraming,
     private val scope: CoroutineScope,
     private val loadThumbnail: suspend (PhotoRequest) -> Bitmap?,
     private val peekThumbnail: (PhotoRequest) -> Bitmap?,
@@ -62,6 +64,7 @@ internal class ViewerSwipeController(
     private val mediaTitle get() = screen.mediaTitle
 
     private var peekStableId: String? = null
+    private var peekMediaKind = MediaKind.IMAGE
     private var peekOffset = 0
     private var peekDragDistance = 0f
     private var peekJob: Job? = null
@@ -135,6 +138,7 @@ internal class ViewerSwipeController(
             peekJob?.cancel()
             peekJob = null
             peekStableId = adjacent.stableId
+            peekMediaKind = adjacent.mediaKind
             peekOffset = offset
             cancelPeekSettle()
             val cached = peekThumbnail(adjacent)
@@ -157,6 +161,8 @@ internal class ViewerSwipeController(
     private fun installPeek(bitmap: Bitmap) {
         cancelPeekSettle()
         peekPreview.setImageBitmap(bitmap)
+        // Framed like the neighbour will be, so adopting it as the stand-in moves nothing.
+        peekFraming.standsInFor(peekMediaKind)
         peekPreview.alpha = 1f
         peekPreview.visibility = View.VISIBLE
         positionPeek(peekDragDistance)
