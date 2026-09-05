@@ -230,8 +230,25 @@ class SecureFileStore internal constructor(
             wrappingKeys.delete(alias)
             dataKeys.remove(alias)
             wrappedKeyFile(alias).delete()
+            familyFile(alias).delete()
         }
     }
+
+    /**
+     * The aliases of every stored key whose scope belongs to [family]: the part of the scope
+     * before its first colon, `proton-media` for `proton-media:<user id>`. Aliases are hashes,
+     * so this is the only way to find the keys of users whose data is gone; a cleaner deletes
+     * every alias here except the one of the user it keeps. The family is recorded when a key is
+     * created, so a key from before the marker existed is not listed.
+     */
+    fun keyAliases(family: String): List<String> =
+        keyDirectory
+            .listFiles()
+            ?.filter { file -> file.isFile && file.extension == FAMILY_EXTENSION }
+            ?.filter { file -> runCatching { file.readText() }.getOrNull() == family }
+            ?.map(File::nameWithoutExtension)
+            ?.filter(ALIAS_PATTERN::matches)
+            .orEmpty()
 
     /**
      * Runs [commit] only while [key] is still the live data key of [scope].
@@ -404,6 +421,10 @@ class SecureFileStore internal constructor(
         ByteArray(DATA_KEY_BYTES).also { bytes ->
             SecureRandom().nextBytes(bytes)
             AtomicFileStore.write(file, wrap(scope, bytes), "Could not store data key")
+            // Best effort: a key without its family marker is still a working key, see [keyAliases].
+            runCatching {
+                AtomicFileStore.write(familyFile(alias(scope)), scopeFamily(scope), "Could not record the key family")
+            }
         }
 
     private fun wrap(
@@ -439,6 +460,11 @@ class SecureFileStore internal constructor(
 
     private fun wrappedKeyFile(alias: String): File = File(keyDirectory, "$alias.key")
 
+    private fun familyFile(alias: String): File = File(keyDirectory, "$alias.$FAMILY_EXTENSION")
+
+    /** The scope up to its first colon; the whole scope when it has none. */
+    private fun scopeFamily(scope: String): String = scope.substringBefore(':')
+
     private fun keystoreKey(scope: String): SecretKey = wrappingKeys.key(alias(scope))
 
     private fun alias(scope: String): String = ALIAS_PREFIX + AtomicFileStore.safeName(scope)
@@ -450,6 +476,7 @@ class SecureFileStore internal constructor(
         const val ALIAS_PREFIX = "lenswave.secure-file."
         val ALIAS_PATTERN = Regex(Regex.escape(ALIAS_PREFIX) + "[0-9a-f]{64}")
         const val KEY_DIRECTORY = "secure-keys"
+        const val FAMILY_EXTENSION = "family"
         const val TRANSFORMATION = "AES/GCM/NoPadding"
         const val TAG_BITS = 128
         const val DATA_KEY_BYTES = 32

@@ -94,6 +94,34 @@ class SecureFileStoreTest {
     }
 
     @Test
+    fun `key aliases are listed by scope family and go with the key`() {
+        val store = store()
+        val userA = "proton-media:user-a-${UUID.randomUUID()}"
+        val userB = "proton-media:user-b-${UUID.randomUUID()}"
+        val session = "proton-session-database-key-${UUID.randomUUID()}"
+        listOf(userA, userB, session).forEach { scope ->
+            store.write(scope, File(temporaryFolder.root, "${scope.hashCode()}.bin"), byteArrayOf(1), "write failed")
+        }
+
+        assertEquals(
+            setOf(store.keyAlias(userA), store.keyAlias(userB)),
+            store.keyAliases("proton-media").toSet(),
+        )
+        assertEquals(emptyList<String>(), store.keyAliases("proton-session-database-key"))
+        assertEquals(listOf(store.keyAlias(session)), store.keyAliases(session))
+
+        store.deleteKeyAlias(store.keyAlias(userB))
+
+        assertEquals(listOf(store.keyAlias(userA)), store.keyAliases("proton-media"))
+        assertTrue(
+            File(temporaryFolder.root, "keys")
+                .listFiles()
+                .orEmpty()
+                .none { it.name.startsWith(store.keyAlias(userB)) },
+        )
+    }
+
+    @Test
     fun `whole files round trip through the segmented envelope`() {
         val store = store()
         val plaintext =
