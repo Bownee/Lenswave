@@ -131,8 +131,19 @@ class ProtonThumbnailWorkPolicyTest {
         assertEquals(ending, ProtonThumbnailWorkPolicy.foregroundBusyStep(consecutiveBusySteps = limit + 7))
     }
 
+    @Test
+    fun `a foreground start refusal is recognised by its class name alone`() {
+        // The platform class needs API 31 and a device; the check goes by the simple name.
+        assertTrue(ProtonThumbnailWorkPolicy.isForegroundStartRefusal(ForegroundServiceStartNotAllowedException()))
+        assertFalse(ProtonThumbnailWorkPolicy.isForegroundStartRefusal(IllegalStateException("refused")))
+        assertFalse(ProtonThumbnailWorkPolicy.isForegroundStartRefusal(RuntimeException()))
+    }
+
     @Test(expected = IllegalArgumentException::class)
     fun `a busy step is at least the first one`() {
         ProtonThumbnailWorkPolicy.foregroundBusyStep(consecutiveBusySteps = 0)
     }
 }
+
+/** Named like the platform's `ForegroundServiceStartNotAllowedException`; the policy matches the simple name. */
+internal class ForegroundServiceStartNotAllowedException : IllegalStateException("refused")
