@@ -124,7 +124,7 @@ class GalleryUiStateFactoryTest {
                 GalleryUiInputs(
                     destination = GalleryDestination.Timeline,
                     protonAccountStatus = ProtonAccountStatus.CONNECTED,
-                    protonGallery = ProtonGalleryState(photos = listOf(photo), hasLoaded = true, refreshFailed = true),
+                    protonGallery = ProtonGalleryState(photos = listOf(photo), hasLoaded = true, listingRefused = true),
                 ),
             )
 
@@ -146,11 +146,11 @@ class GalleryUiStateFactoryTest {
 
         val failedAndEmpty =
             loaded.copy(protonGallery = ProtonGalleryState(hasLoaded = true, refreshFailed = true))
-        assertFalse("the empty-state panel already reports this case", factory.create(failedAndEmpty).listingRefused)
+        assertFalse("a plain failure is the panel's, not the banner's", factory.create(failedAndEmpty).listingRefused)
 
         val failedWithPhotos =
             loaded.copy(
-                protonGallery = ProtonGalleryState(photos = listOf(photo), hasLoaded = true, refreshFailed = true),
+                protonGallery = ProtonGalleryState(photos = listOf(photo), hasLoaded = true, listingRefused = true),
             )
         assertFalse(factory.skeleton(failedWithPhotos).listingRefused)
     }
@@ -169,7 +169,7 @@ class GalleryUiStateFactoryTest {
                             tags =
                                 mapOf(
                                     ProtonMediaTag.SELFIES to
-                                        ProtonTagState(photos = listOf(photo), hasLoaded = true, refreshFailed = true),
+                                        ProtonTagState(photos = listOf(photo), hasLoaded = true, listingRefused = true),
                                 ),
                         ),
                 ),
@@ -192,7 +192,7 @@ class GalleryUiStateFactoryTest {
                 GalleryUiInputs(
                     destination = GalleryDestination.Library,
                     protonAccountStatus = ProtonAccountStatus.CONNECTED,
-                    protonAlbums = ProtonAlbumsState(albums = listOf(album), hasLoaded = true, refreshFailed = true),
+                    protonAlbums = ProtonAlbumsState(albums = listOf(album), hasLoaded = true, listingRefused = true),
                 ),
             )
         assertTrue(libraryState.listingRefused)
@@ -207,7 +207,7 @@ class GalleryUiStateFactoryTest {
                             albumUid = "a1",
                             photos = listOf(photo),
                             hasLoaded = true,
-                            refreshFailed = true,
+                            listingRefused = true,
                         ),
                 ),
             )

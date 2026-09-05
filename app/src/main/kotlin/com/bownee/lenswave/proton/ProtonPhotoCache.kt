@@ -286,6 +286,7 @@ internal class ProtonPhotoCache
                             sourceCaptureTimes = sourceCaptureTimes,
                             retryCount = value.optInt("retryCount"),
                             retryAtMillis = value.optLong("retryAtMillis"),
+                            networkRetryCount = value.optInt("networkRetryCount"),
                         ),
                     )
                 }
@@ -310,7 +311,8 @@ internal class ProtonPhotoCache
                         .put("nodeUid", entry.nodeUid)
                         .put("sourceCaptureTimes", sourceCaptureTimes)
                         .put("retryCount", entry.retryCount)
-                        .put("retryAtMillis", entry.retryAtMillis),
+                        .put("retryAtMillis", entry.retryAtMillis)
+                        .put("networkRetryCount", entry.networkRetryCount),
                 )
             }
             writeAtomically(

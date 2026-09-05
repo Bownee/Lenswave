@@ -118,6 +118,7 @@ class ProtonPhotoGateway internal constructor(
                         // user's directory and data key.
                         thumbnailQueue.forget(previous.id)
                         previewQueue.forget(previous.id)
+                        renditionSync.finishPublishing(previous)
                         originals.forgetUser(previous)
                         cache.clearUser(previous.id)
                     }
@@ -369,6 +370,7 @@ class ProtonPhotoGateway internal constructor(
                 // transfers first so none can land after the user's directory is gone.
                 thumbnailQueue.forget(userId.id)
                 previewQueue.forget(userId.id)
+                renditionSync.finishPublishing(userId)
                 originals.forgetUser(userId)
                 cache.clearUser(userId.id)
                 if (wasActive) {

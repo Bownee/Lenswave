@@ -1,5 +1,6 @@
 package com.bownee.lenswave.viewer
 
+import com.bownee.lenswave.proton.ProtonOriginalCopyMissingException
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -7,13 +8,15 @@ import java.io.FileNotFoundException
 import java.io.IOException
 
 class ViewerVideoReloadPolicyTest {
-    private class ProtonOriginalCopyMissingException : IOException("copy gone")
-
     @Test
     fun `a missing file anywhere in the cause chain is a vanished copy`() {
         assertTrue(ViewerVideoReloadPolicy.copyMissing(FileNotFoundException("gone")))
         assertTrue(ViewerVideoReloadPolicy.copyMissing(RuntimeException(IOException(FileNotFoundException("gone")))))
-        assertTrue(ViewerVideoReloadPolicy.copyMissing(RuntimeException(ProtonOriginalCopyMissingException())))
+        assertTrue(
+            ViewerVideoReloadPolicy.copyMissing(
+                RuntimeException(ProtonOriginalCopyMissingException(FileNotFoundException("gone"))),
+            ),
+        )
     }
 
     @Test

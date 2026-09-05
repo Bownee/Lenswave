@@ -93,7 +93,7 @@ internal class GalleryUiStateFactory(
                     )
                 }
             }
-        return base(inputs, content, emptyState, listingRefused(inputs.protonGallery.refreshFailed, content))
+        return base(inputs, content, emptyState, inputs.protonGallery.listingRefused)
     }
 
     private fun tag(
@@ -128,7 +128,7 @@ internal class GalleryUiStateFactory(
                     )
                 }
             }
-        return base(inputs, content, emptyState, listingRefused(state.refreshFailed, content))
+        return base(inputs, content, emptyState, state.listingRefused)
     }
 
     private fun library(inputs: GalleryUiInputs): GalleryUiState {
@@ -170,7 +170,7 @@ internal class GalleryUiStateFactory(
             inputs = inputs,
             content = content,
             emptyState = emptyState,
-            listingRefused = albums.refreshFailed && albums.albums.isNotEmpty(),
+            listingRefused = albums.listingRefused,
         )
     }
 
@@ -251,17 +251,8 @@ internal class GalleryUiStateFactory(
                     )
                 }
             }
-        return base(inputs, content, emptyState, listingRefused(albumState.refreshFailed, content))
+        return base(inputs, content, emptyState, albumState.listingRefused)
     }
-
-    /**
-     * Until the data layer publishes a refused listing of its own, the case the empty-state panel
-     * cannot show stands in for it: the refresh failed while cached photos are on screen.
-     */
-    private fun listingRefused(
-        refreshFailed: Boolean,
-        content: GalleryContent.Photos,
-    ): Boolean = refreshFailed && content.assets.isNotEmpty()
 
     private fun protonUnavailable(inputs: GalleryUiInputs): GalleryUiState? =
         when (inputs.protonAccountStatus) {
