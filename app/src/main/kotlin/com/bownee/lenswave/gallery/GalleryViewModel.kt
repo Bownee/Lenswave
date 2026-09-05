@@ -642,9 +642,14 @@ class GalleryViewModel internal constructor(
         if (position == null) {
             savedStateHandle.remove<Int>(STATE_SCROLL_FIRST_VISIBLE)
             savedStateHandle.remove<Int>(STATE_SCROLL_TOP_OFFSET)
+            savedStateHandle.remove<Int>(STATE_SCROLL_COLUMNS)
+            savedStateHandle.remove<Int>(STATE_SCROLL_ASSET_INDEX)
         } else {
             savedStateHandle[STATE_SCROLL_FIRST_VISIBLE] = position.firstVisiblePosition
             savedStateHandle[STATE_SCROLL_TOP_OFFSET] = position.topOffset
+            // The span and first photo let a restore into a rotated grid find the same photo again.
+            savedStateHandle[STATE_SCROLL_COLUMNS] = position.photoColumns
+            savedStateHandle[STATE_SCROLL_ASSET_INDEX] = position.firstVisibleAssetIndex
         }
     }
 
@@ -655,6 +660,8 @@ class GalleryViewModel internal constructor(
         const val STATE_TAG = "gallery.proton-tag"
         const val STATE_SCROLL_FIRST_VISIBLE = "gallery.scroll-first-visible"
         const val STATE_SCROLL_TOP_OFFSET = "gallery.scroll-top-offset"
+        const val STATE_SCROLL_COLUMNS = "gallery.scroll-columns"
+        const val STATE_SCROLL_ASSET_INDEX = "gallery.scroll-asset-index"
         const val STATE_SELECTION = "gallery.selection"
         const val MUTATION_EVENT_BUFFER = 16
         const val UI_STATE_STOP_TIMEOUT_MILLIS = 5_000L
@@ -697,7 +704,12 @@ class GalleryViewModel internal constructor(
         fun restoreScrollPosition(state: SavedStateHandle): GalleryScrollPosition? {
             val firstVisible = state.get<Int>(STATE_SCROLL_FIRST_VISIBLE) ?: return null
             val topOffset = state.get<Int>(STATE_SCROLL_TOP_OFFSET) ?: return null
-            return GalleryScrollPosition(firstVisiblePosition = firstVisible, topOffset = topOffset)
+            return GalleryScrollPosition(
+                firstVisiblePosition = firstVisible,
+                topOffset = topOffset,
+                photoColumns = state.get<Int>(STATE_SCROLL_COLUMNS) ?: GalleryScrollPosition.UNKNOWN_COLUMNS,
+                firstVisibleAssetIndex = state.get<Int>(STATE_SCROLL_ASSET_INDEX),
+            )
         }
     }
 }

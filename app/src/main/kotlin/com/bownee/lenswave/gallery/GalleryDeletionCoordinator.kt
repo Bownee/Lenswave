@@ -12,8 +12,25 @@ import me.proton.core.domain.entity.UserId
  * a rotation while it is in flight neither cancels it nor loses its result.
  */
 internal class GalleryDeletionCoordinator(
-    private val activity: FragmentActivity,
+    private val host: Host,
+    private val text: GalleryText,
 ) {
+    /** The activity's side: the fragment manager's state, the confirmation dialog and the toasts. */
+    internal interface Host {
+        val stateSaved: Boolean
+        val trashConfirmationShowing: Boolean
+
+        fun showTrashConfirmation(
+            userId: UserId,
+            nodeUids: List<String>,
+        )
+
+        fun showMessage(
+            message: String,
+            long: Boolean,
+        )
+    }
+
     /** [userId] is the account the selection belongs to; the confirmation is bound to it. */
     fun delete(
         userId: UserId,
@@ -29,20 +46,24 @@ internal class GalleryDeletionCoordinator(
     fun showOutcome(event: GalleryMutationEvent.Trash) {
         when (event) {
             is GalleryMutationEvent.Trashed -> {
-                showMessage(
-                    q(R.plurals.moved_to_proton_trash_count_result, event.successfulCount, event.successfulCount),
-                    Toast.LENGTH_SHORT,
+                host.showMessage(
+                    text.quantity(
+                        R.plurals.moved_to_proton_trash_count_result,
+                        event.successfulCount,
+                        event.successfulCount,
+                    ),
+                    long = false,
                 )
                 if (event.failedCount > 0) {
-                    showMessage(
-                        q(R.plurals.could_not_move_count, event.failedCount, event.failedCount),
-                        Toast.LENGTH_LONG,
+                    host.showMessage(
+                        text.quantity(R.plurals.could_not_move_count, event.failedCount, event.failedCount),
+                        long = true,
                     )
                 }
             }
 
             GalleryMutationEvent.TrashFailed -> {
-                showMessage(activity.getString(R.string.could_not_move_photos_to_proton_trash), Toast.LENGTH_LONG)
+                host.showMessage(text.string(R.string.could_not_move_photos_to_proton_trash), long = true)
             }
         }
     }
@@ -60,29 +81,39 @@ internal class GalleryDeletionCoordinator(
         userId: UserId,
         photos: List<PhotoTarget>,
     ) {
-        val fragmentManager = activity.supportFragmentManager
         // The confirmation answers a tap that just happened; one that cannot show now is simply not shown.
         val decision =
             GalleryDialogPromptPolicy.decide(
-                stateSaved = fragmentManager.isStateSaved,
-                dialogShowing = fragmentManager.findFragmentByTag(TrashConfirmationDialogFragment.TAG) != null,
+                stateSaved = host.stateSaved,
+                dialogShowing = host.trashConfirmationShowing,
             )
         if (decision != GalleryDialogPromptPolicy.Decision.SHOW) return
-        TrashConfirmationDialogFragment
-            .create(userId, photos.map(PhotoTarget::nodeUid), singlePhoto = false)
-            .show(fragmentManager, TrashConfirmationDialogFragment.TAG)
+        host.showTrashConfirmation(userId, photos.map(PhotoTarget::nodeUid))
     }
 
-    private fun showMessage(
-        message: String,
-        duration: Int,
-    ) {
-        Toast.makeText(activity, message, duration).show()
-    }
+    /** The activity as the coordinator's host. */
+    internal class ActivityHost(
+        private val activity: FragmentActivity,
+    ) : Host {
+        override val stateSaved: Boolean get() = activity.supportFragmentManager.isStateSaved
 
-    private fun q(
-        resource: Int,
-        count: Int,
-        vararg arguments: Any,
-    ): String = activity.resources.getQuantityString(resource, count, *arguments)
+        override val trashConfirmationShowing: Boolean
+            get() = activity.supportFragmentManager.findFragmentByTag(TrashConfirmationDialogFragment.TAG) != null
+
+        override fun showTrashConfirmation(
+            userId: UserId,
+            nodeUids: List<String>,
+        ) {
+            TrashConfirmationDialogFragment
+                .create(userId, nodeUids, singlePhoto = false)
+                .show(activity.supportFragmentManager, TrashConfirmationDialogFragment.TAG)
+        }
+
+        override fun showMessage(
+            message: String,
+            long: Boolean,
+        ) {
+            Toast.makeText(activity, message, if (long) Toast.LENGTH_LONG else Toast.LENGTH_SHORT).show()
+        }
+    }
 }

@@ -19,7 +19,7 @@ import kotlin.math.roundToInt
 
 class GalleryListAdapter(
     private val context: Context,
-    private val thumbnailLoader: GalleryThumbnailLoader,
+    private val thumbnailLoader: GalleryThumbnailLoader<Bitmap>,
     /** The tapped photo and its index in the page's flat asset list. */
     private val onPhotoClicked: (GalleryAsset, Int) -> Unit,
     private val onAlbumClicked: (ProtonAlbum) -> Unit,
@@ -28,6 +28,13 @@ class GalleryListAdapter(
 ) : BaseAdapter() {
     private val selected = linkedMapOf<String, GalleryAsset>()
     private var rows: List<GalleryRow> = emptyList()
+
+    /** The photos per row the current rows were chunked with; cells are built to match (see [GallerySpanPolicy]). */
+    var photoColumns: Int = GallerySpanPolicy.MIN_COLUMNS
+        private set
+
+    /** The rows on show, for mapping a scroll position through its first visible photo. */
+    val currentRows: List<GalleryRow> get() = rows
     private var dateLabels: List<String?> = emptyList()
     private var isFastScrolling = false
 
@@ -68,6 +75,7 @@ class GalleryListAdapter(
     fun submitRows(rowSet: GalleryRowSet) {
         rows = rowSet.rows
         dateLabels = rowSet.dateLabels
+        photoColumns = rowSet.photoColumns
         val missing = GallerySelectionPolicy.missingSelection(rows, selected.keys)
         if (missing.isNotEmpty()) selected.keys.removeAll(missing)
         notifyDataSetChanged()
@@ -229,9 +237,10 @@ class GalleryListAdapter(
         convertView: View?,
         parent: ViewGroup?,
     ): View {
-        val container = (convertView as? FittedRow) ?: createPhotoRow()
+        val columns = photoColumns
+        val container = reusablePhotoRow(convertView, columns) ?: createPhotoRow(columns)
         fitRowHeight(container, parent, ::photoRowHeight)
-        for (column in 0 until COLUMN_COUNT) {
+        for (column in 0 until columns) {
             val cell = container.getChildAt(column) as PhotoCell
             val image = cell.image
             val photo = row.items.getOrNull(column)
@@ -278,14 +287,31 @@ class GalleryListAdapter(
         cell.image.scaleY = if (isSelected) 0.9f else 1f
     }
 
+    /**
+     * A recycled photo row built for the current span; a row from before a span change has the
+     * wrong number of cells and is let go, its cells withdrawn from the loader first so a pending
+     * decode does not deliver into a view that is never shown again.
+     */
+    private fun reusablePhotoRow(
+        convertView: View?,
+        columns: Int,
+    ): FittedRow? {
+        val row = convertView as? FittedRow ?: return null
+        if (row.childCount == columns) return row
+        for (column in 0 until row.childCount) {
+            (row.getChildAt(column) as? PhotoCell)?.let { cell -> thumbnailLoader.forget(cell.thumbnailTarget) }
+        }
+        return null
+    }
+
     /** The row's height is fitted to the list width at bind (see [fitRowHeight]); it starts unsized. */
-    private fun createPhotoRow() =
+    private fun createPhotoRow(columns: Int) =
         FittedRow(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             val gap = photoGap
             layoutParams = AbsListView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0)
-            repeat(COLUMN_COUNT) { column ->
+            repeat(columns) { column ->
                 addView(
                     PhotoCell(context).also { cell ->
                         cell.setOnClickListener(photoClick)
@@ -295,7 +321,7 @@ class GalleryListAdapter(
                     },
                     LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
                         if (column > 0) marginStart = gap / 2
-                        if (column < COLUMN_COUNT - 1) marginEnd = gap - gap / 2
+                        if (column < columns - 1) marginEnd = gap - gap / 2
                         bottomMargin = gap
                     },
                 )
@@ -359,7 +385,7 @@ class GalleryListAdapter(
     }
 
     private fun photoRowHeight(rowWidth: Int): Int =
-        (rowWidth - photoGap * (COLUMN_COUNT - 1)) / COLUMN_COUNT + photoGap
+        (rowWidth - photoGap * (photoColumns - 1)) / photoColumns + photoGap
 
     private fun albumRowHeight(rowWidth: Int): Int {
         val cellWidth = (rowWidth - edgePadding * 2 - albumGap) / ALBUM_COLUMN_COUNT
@@ -463,42 +489,42 @@ class GalleryListAdapter(
     /** Shows a cell's thumbnail; a delivery for a photo the cell no longer shows is dropped. */
     private inner class PhotoTarget(
         private val cell: PhotoCell,
-    ) : GalleryThumbnailTarget {
+    ) : GalleryThumbnailTarget<Bitmap> {
         override fun onThumbnail(
             tag: String,
-            bitmap: Bitmap?,
+            image: Bitmap?,
         ) {
-            val image = cell.image
-            if (image.tag != tag) return
-            if (bitmap == null && cell.keepsShownImage) {
+            val view = cell.image
+            if (view.tag != tag) return
+            if (image == null && cell.keepsShownImage) {
                 cell.loading.visibility = View.GONE
                 return
             }
             // A rebind that delivers the bitmap already on screen must not invalidate the cell.
-            if (bitmap == null || (image.drawable as? BitmapDrawable)?.bitmap !== bitmap) image.setImageBitmap(bitmap)
-            cell.loading.visibility = if (bitmap == null && !isFastScrolling) View.VISIBLE else View.GONE
-            image.alpha = if (bitmap == null) 0.45f else 1f
+            if (image == null || (view.drawable as? BitmapDrawable)?.bitmap !== image) view.setImageBitmap(image)
+            cell.loading.visibility = if (image == null && !isFastScrolling) View.VISIBLE else View.GONE
+            view.alpha = if (image == null) 0.45f else 1f
         }
     }
 
     private inner class AlbumTarget(
         private val cell: AlbumCell,
-    ) : GalleryThumbnailTarget {
+    ) : GalleryThumbnailTarget<Bitmap> {
         override fun onThumbnail(
             tag: String,
-            bitmap: Bitmap?,
+            image: Bitmap?,
         ) {
-            val image = cell.image
+            val view = cell.image
             val album = cell.album ?: return
-            if (image.tag != tag) return
-            if (bitmap == null || (image.drawable as? BitmapDrawable)?.bitmap !== bitmap) image.setImageBitmap(bitmap)
+            if (view.tag != tag) return
+            if (image == null || (view.drawable as? BitmapDrawable)?.bitmap !== image) view.setImageBitmap(image)
             cell.loading.visibility =
-                if (bitmap == null && album.coverPhotoNodeUid != null && !isFastScrolling) {
+                if (image == null && album.coverPhotoNodeUid != null && !isFastScrolling) {
                     View.VISIBLE
                 } else {
                     View.GONE
                 }
-            image.alpha = if (bitmap == null) 0.48f else 1f
+            view.alpha = if (image == null) 0.48f else 1f
         }
     }
 
@@ -508,7 +534,6 @@ class GalleryListAdapter(
         const val TYPE_PHOTOS = 2
         const val TYPE_ALBUMS = 3
         const val TYPE_ENTRIES = 4
-        const val COLUMN_COUNT = 3
         const val ALBUM_COLUMN_COUNT = 2
         const val ENTRY_COLUMN_COUNT = 2
         const val EDGE_DP = 16
