@@ -22,6 +22,19 @@ class ProtonThumbnailNotificationProgressTest {
     }
 
     @Test
+    fun yieldingKeepsTheLastKnownCounts() {
+        val progress = ProtonThumbnailWorkProgress(stored = 8, pending = 2).notificationProgress()
+
+        val yielding = progress.copy(yielding = true)
+
+        assertTrue(yielding.yielding)
+        assertFalse(progress.yielding)
+        assertEquals(progress.downloaded, yielding.downloaded)
+        assertEquals(progress.total, yielding.total)
+        assertEquals(progress.phase, yielding.phase)
+    }
+
+    @Test
     fun workProgressUsesThePersistentStoredCount() {
         val progress = ProtonThumbnailWorkProgress(stored = 800, pending = 1_191)
 

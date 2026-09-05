@@ -5,6 +5,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import androidx.work.WorkManager
+import com.bownee.lenswave.storage.AtomicFileStore
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
 import dagger.hilt.android.EntryPointAccessors
@@ -39,7 +40,13 @@ class ProtonThumbnailPauseReceiver : BroadcastReceiver() {
     companion object {
         private const val ACTION_PAUSE = "com.bownee.lenswave.action.PAUSE_THUMBNAIL_DOWNLOADS"
         private const val EXTRA_USER_ID = "user-id"
-        private const val REQUEST_CODE = 1_206
+
+        /**
+         * The request code is what tells two PendingIntents with the same action apart: with a
+         * constant code and FLAG_UPDATE_CURRENT, the pause action of one account overwrote the
+         * extras of another's, so the notification paused whichever account registered last.
+         */
+        fun requestCode(userId: UserId): Int = AtomicFileStore.safeName(userId.id).hashCode()
 
         fun pendingIntent(
             context: Context,
@@ -47,7 +54,7 @@ class ProtonThumbnailPauseReceiver : BroadcastReceiver() {
         ): PendingIntent =
             PendingIntent.getBroadcast(
                 context,
-                REQUEST_CODE,
+                requestCode(userId),
                 Intent(context, ProtonThumbnailPauseReceiver::class.java)
                     .setAction(ACTION_PAUSE)
                     .putExtra(EXTRA_USER_ID, userId.id),

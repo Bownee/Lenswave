@@ -12,6 +12,7 @@ import androidx.work.OneTimeWorkRequest
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
+import com.bownee.lenswave.LenswaveClock
 import com.bownee.lenswave.LenswaveDiagnostics
 import com.bownee.lenswave.LenswaveOperation
 import dagger.hilt.EntryPoint
@@ -83,12 +84,25 @@ class ProtonThumbnailWorker(
                 return run.end(ProtonThumbnailWorkOutcome.WAITING_FOR_NETWORK, initialProgress, lastIdle = null)
             }
             val foregroundInfoFactory = ProtonThumbnailForegroundInfoFactory(applicationContext, requestedUserId)
-            publishForeground(foregroundInfoFactory, initialProgress.notificationProgress(), force = true)
+            var lastProgress = initialProgress
+            publishForeground(foregroundInfoFactory, lastProgress.notificationProgress(), force = true)
             var lastIdle: ProtonThumbnailQueueStep.Idle? = null
+            var consecutiveBusySteps = 0
             val outcome =
                 withTimeoutOrNull(ProtonThumbnailWorkPolicy.MAX_RUN_MILLIS) {
                     var runOutcome: ProtonThumbnailWorkOutcome
                     while (true) {
+                        // Without the notification the platform stops the job at ten minutes,
+                        // and a refusal may mean the day's foreground allowance is spent: the
+                        // run ends on its own terms, with a follow-up that waits it out.
+                        if (ProtonThumbnailWorkPolicy.backgroundOnlyDeadlineReached(
+                                foregroundUnavailableSinceMillis,
+                                SystemClock.elapsedRealtime(),
+                            )
+                        ) {
+                            runOutcome = ProtonThumbnailWorkOutcome.FOREGROUND_UNAVAILABLE
+                            break
+                        }
                         if (!monitor.awaitValidatedUnmeteredNetwork(NETWORK_READY_TIMEOUT_MILLIS)) {
                             runOutcome = ProtonThumbnailWorkOutcome.WAITING_FOR_NETWORK
                             break
@@ -96,19 +110,33 @@ class ProtonThumbnailWorker(
                         // Media the user opened comes first. The wait is short and the answer
                         // is an idle step, so the loop below decides what a busy viewer means
                         // for this run instead of the claim sitting on the viewer's download.
+                        // A viewer that stays busy ends the run rather than keeping the
+                        // foreground service awake to ask every few seconds.
                         val step =
                             if (!run.transferCoordinator.awaitNoForegroundTransfer(FOREGROUND_YIELD_TIMEOUT_MILLIS)) {
-                                ProtonThumbnailWorkPolicy.foregroundBusyStep()
+                                consecutiveBusySteps++
+                                publishForeground(
+                                    foregroundInfoFactory,
+                                    lastProgress.notificationProgress().copy(yielding = true),
+                                )
+                                ProtonThumbnailWorkPolicy.foregroundBusyStep(consecutiveBusySteps)
                             } else {
+                                if (consecutiveBusySteps > 0) {
+                                    consecutiveBusySteps = 0
+                                    publishForeground(foregroundInfoFactory, lastProgress.notificationProgress())
+                                }
                                 run.repository.downloadNextQueuedThumbnailBatch(
                                     requestedUserId,
                                     previewsAllowed(),
                                 ) { progress ->
+                                    lastProgress = progress
                                     publishForeground(foregroundInfoFactory, progress.notificationProgress())
                                 }
                             }
                         when (step) {
-                            ProtonThumbnailQueueStep.Processed -> {}
+                            ProtonThumbnailQueueStep.Processed -> {
+                                run.processedBatch = true
+                            }
 
                             is ProtonThumbnailQueueStep.Idle -> {
                                 // Every idle step is remembered, the one before a sleep too: a
@@ -163,12 +191,22 @@ class ProtonThumbnailWorker(
         private val userId: UserId,
     ) {
         val repository = entryPoint.thumbnailWork()
+
+        /** The network backoff ladder this run was started on; see [ProtonThumbnailFollowUpPolicy]. */
+        private val networkWaitAttempt = inputData.getInt(KEY_NETWORK_WAIT_ATTEMPT, 0)
+
+        /** A run that got a batch through resets the network backoff ladder. */
+        var processedBatch = false
         val transferCoordinator = entryPoint.transferCoordinator()
         private val followUps = entryPoint.followUpScheduler()
+        private val foregroundBudget = entryPoint.foregroundBudgetStore()
+        private val clock = entryPoint.clock()
 
         /**
          * Enqueues the follow-up before returning, while this run is still the running job under
          * the unique name, so the scheduler chains it rather than dropping or cancelling it.
+         * The time this run spent under the foreground service is recorded first, so the
+         * follow-up is held back when another run would take the day past its allowance.
          */
         fun end(
             outcome: ProtonThumbnailWorkOutcome,
@@ -176,6 +214,15 @@ class ProtonThumbnailWorker(
             lastIdle: ProtonThumbnailQueueStep.Idle?,
         ): Result {
             val allowPreviews = previewsAllowed()
+            val now = clock.nowMillis()
+            foregroundStartedAtMillis?.let { startedAt ->
+                val duration = (SystemClock.elapsedRealtime() - startedAt).coerceAtLeast(0L)
+                foregroundBudget.record(
+                    userId,
+                    ProtonForegroundRun(endedAtMillis = now, durationMillis = duration),
+                    now,
+                )
+            }
             val followUp =
                 ProtonThumbnailFollowUpPolicy.followUp(
                     outcome,
@@ -183,6 +230,12 @@ class ProtonThumbnailWorker(
                     previewsDeferred =
                         lastIdle?.previewsDeferred == true || (!allowPreviews && progress.previewsPending > 0),
                     retryAfterMillis = lastIdle?.retryAfterMillis,
+                    networkWaitAttempt = if (processedBatch) 0 else networkWaitAttempt,
+                    foregroundBudgetDelayMillis =
+                        ProtonThumbnailForegroundBudgetPolicy.delayUntilAffordableMillis(
+                            foregroundBudget.runs(userId),
+                            now,
+                        ),
                 )
             if (followUp != null) followUps.enqueueFollowUp(userId, followUp)
             return finish(outcome)
@@ -190,6 +243,12 @@ class ProtonThumbnailWorker(
     }
 
     private var foregroundUnavailable = false
+
+    /** When the promotion was refused, by the monotonic clock; null while the notification is up or untried. */
+    private var foregroundUnavailableSinceMillis: Long? = null
+
+    /** When the run first became a foreground service, by the monotonic clock. */
+    private var foregroundStartedAtMillis: Long? = null
     private var lastForegroundPublishMillis: Long? = null
 
     private val batteryManager by lazy { applicationContext.getSystemService(BatteryManager::class.java) }
@@ -223,8 +282,10 @@ class ProtonThumbnailWorker(
 
     /**
      * Promotes the run to a foreground service so it can outlive the ten-minute background limit.
-     * Android 12+ refuses that while the app is in the background; rather than failing the run,
-     * it continues without a notification and lets the platform stop it at the background limit.
+     * Android 12+ may refuse that while the app is in the background, and Android 15 refuses it
+     * once the day's dataSync allowance is spent; rather than failing the run, it goes on
+     * without a notification for [ProtonThumbnailForegroundBudgetPolicy.BACKGROUND_ONLY_RUN_MILLIS]
+     * and then ends with a follow-up that waits (see the run loop).
      *
      * Progress updates are rate limited: re-posting the notification after every few files is
      * wasted work for the system and the battery.
@@ -240,9 +301,11 @@ class ProtonThumbnailWorker(
         try {
             setForeground(factory.create(progress))
             lastForegroundPublishMillis = now
+            if (foregroundStartedAtMillis == null) foregroundStartedAtMillis = now
         } catch (error: IllegalStateException) {
             if (!ProtonThumbnailWorkPolicy.isForegroundStartRefusal(error)) throw error
             foregroundUnavailable = true
+            foregroundUnavailableSinceMillis = now
             reportState("background-only")
         }
     }
@@ -274,6 +337,10 @@ class ProtonThumbnailWorker(
 
         fun transferCoordinator(): ProtonTransferCoordinator
 
+        fun foregroundBudgetStore(): ProtonThumbnailForegroundBudgetStore
+
+        fun clock(): LenswaveClock
+
         fun pauseStore(): ProtonThumbnailPauseStore
 
         fun previewAdmission(): ProtonPreviewAdmission
@@ -281,6 +348,7 @@ class ProtonThumbnailWorker(
 
     companion object {
         const val KEY_USER_ID = "user-id"
+        const val KEY_NETWORK_WAIT_ATTEMPT = "network-wait-attempt"
         private const val SESSION_READY_TIMEOUT_MILLIS = 30_000L
         private const val NETWORK_READY_TIMEOUT_MILLIS = 5_000L
         private const val FOREGROUND_YIELD_TIMEOUT_MILLIS = 5_000L
@@ -290,9 +358,10 @@ class ProtonThumbnailWorker(
             userId: UserId,
             requiresCharging: Boolean = false,
             initialDelayMillis: Long = 0L,
+            networkWaitAttempt: Int = 0,
         ): OneTimeWorkRequest =
             OneTimeWorkRequestBuilder<ProtonThumbnailWorker>()
-                .setInputData(workDataOf(KEY_USER_ID to userId.id))
+                .setInputData(workDataOf(KEY_USER_ID to userId.id, KEY_NETWORK_WAIT_ATTEMPT to networkWaitAttempt))
                 .setConstraints(
                     Constraints
                         .Builder()
@@ -321,6 +390,9 @@ internal enum class ProtonThumbnailWorkOutcome(
     WAITING_FOR_RETRY("waiting-retry"),
     PREVIEWS_DEFERRED("previews-deferred"),
     TIMED_OUT("timeout"),
+
+    /** The promotion to a foreground service was refused; the run stopped before the platform would. */
+    FOREGROUND_UNAVAILABLE("foreground-unavailable"),
     SESSION_UNAVAILABLE("session-unavailable"),
 
     /** Another run of this process holds the queues; it schedules whatever follow-up is due. */
@@ -350,6 +422,18 @@ internal object ProtonThumbnailWorkPolicy {
     fun isForegroundStartRefusal(error: Throwable): Boolean =
         error::class.java.simpleName == "ForegroundServiceStartNotAllowedException"
 
+    /**
+     * Whether a run whose promotion was refused at [unavailableSinceMillis] has had its
+     * [ProtonThumbnailForegroundBudgetPolicy.BACKGROUND_ONLY_RUN_MILLIS]; never while the
+     * notification is up.
+     */
+    fun backgroundOnlyDeadlineReached(
+        unavailableSinceMillis: Long?,
+        nowMillis: Long,
+    ): Boolean =
+        unavailableSinceMillis != null &&
+            nowMillis - unavailableSinceMillis >= ProtonThumbnailForegroundBudgetPolicy.BACKGROUND_ONLY_RUN_MILLIS
+
     fun shouldRetryAfterError(runAttemptCount: Int): Boolean = runAttemptCount + 1 < MAX_ERROR_ATTEMPTS
 
     /** Previews wait for the charger unless the app is on screen; thumbnails never wait. */
@@ -375,11 +459,31 @@ internal object ProtonThumbnailWorkPolicy {
     const val FOREGROUND_BUSY_RETRY_MILLIS = 3_000L
 
     /**
-     * The step a run takes while the viewer is downloading: the queues were not consulted, so
-     * the work is still pending and worth asking about again shortly.
+     * How many times in a row the viewer may be found busy before the run ends. Each busy step
+     * is a few seconds of waiting plus the retry sleep under the foreground service; a viewer
+     * fetching a large original kept that up until the run limit.
      */
-    fun foregroundBusyStep(): ProtonThumbnailQueueStep.Idle =
-        ProtonThumbnailQueueStep.Idle(hasPending = true, retryAfterMillis = FOREGROUND_BUSY_RETRY_MILLIS)
+    const val MAX_CONSECUTIVE_BUSY_STEPS = 3
+
+    /** The follow-up's delay once the viewer stayed busy; long enough for a large original to finish. */
+    const val FOREGROUND_BUSY_END_DELAY_MILLIS = 60_000L
+
+    /**
+     * The step a run takes while the viewer is downloading: the queues were not consulted, so
+     * the work is still pending. The first few times it is worth asking again shortly; after
+     * [MAX_CONSECUTIVE_BUSY_STEPS] the retry is too far off to sleep for, so the run ends and
+     * the follow-up carries it as its initial delay.
+     */
+    fun foregroundBusyStep(consecutiveBusySteps: Int): ProtonThumbnailQueueStep.Idle {
+        require(consecutiveBusySteps > 0) { "A busy step is at least the first one" }
+        val retryAfterMillis =
+            if (consecutiveBusySteps >= MAX_CONSECUTIVE_BUSY_STEPS) {
+                FOREGROUND_BUSY_END_DELAY_MILLIS
+            } else {
+                FOREGROUND_BUSY_RETRY_MILLIS
+            }
+        return ProtonThumbnailQueueStep.Idle(hasPending = true, retryAfterMillis = retryAfterMillis)
+    }
 
     /** The notification is re-posted at most every [PROGRESS_PUBLISH_INTERVAL_MILLIS] unless forced. */
     fun shouldPublishProgress(
@@ -390,4 +494,14 @@ internal object ProtonThumbnailWorkPolicy {
         force ||
             lastPublishedAtMillis == null ||
             nowMillis - lastPublishedAtMillis >= PROGRESS_PUBLISH_INTERVAL_MILLIS
+
+    /** How long until the next progress publication is allowed; zero when it is allowed now. */
+    fun progressPublishWaitMillis(
+        lastPublishedAtMillis: Long?,
+        nowMillis: Long,
+    ): Long {
+        if (lastPublishedAtMillis == null) return 0L
+        return (lastPublishedAtMillis + PROGRESS_PUBLISH_INTERVAL_MILLIS - nowMillis)
+            .coerceIn(0L, PROGRESS_PUBLISH_INTERVAL_MILLIS)
+    }
 }

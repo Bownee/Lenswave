@@ -22,6 +22,8 @@ internal data class ProtonThumbnailNotificationProgress(
     val downloaded: Int,
     val total: Int,
     val phase: ProtonDownloadPhase = ProtonDownloadPhase.THUMBNAILS,
+    /** The run is standing aside for media the user opened; the counts are the last known ones. */
+    val yielding: Boolean = false,
 ) {
     init {
         require(downloaded >= 0) { "Downloaded thumbnail count cannot be negative" }
@@ -140,6 +142,10 @@ internal class ProtonThumbnailForegroundInfoFactory(
 
     private fun ProtonThumbnailNotificationProgress.contentText(): String =
         when {
+            yielding -> {
+                context.getString(R.string.thumbnail_download_notification_yielding)
+            }
+
             !isDeterminate -> {
                 context.getString(R.string.thumbnail_download_notification_detail)
             }

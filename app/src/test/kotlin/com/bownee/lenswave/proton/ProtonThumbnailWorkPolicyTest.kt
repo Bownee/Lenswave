@@ -2,6 +2,8 @@ package com.bownee.lenswave.proton
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -28,6 +30,15 @@ class ProtonThumbnailWorkPolicyTest {
             assertTrue(outcome.name, safe.matches(outcome.diagnosticState))
         }
         assertEquals("complete", ProtonThumbnailWorkOutcome.COMPLETE.diagnosticState)
+    }
+
+    @Test
+    fun `a run without its notification ends after the background-only allowance`() {
+        val allowance = ProtonThumbnailForegroundBudgetPolicy.BACKGROUND_ONLY_RUN_MILLIS
+
+        assertFalse(ProtonThumbnailWorkPolicy.backgroundOnlyDeadlineReached(null, nowMillis = Long.MAX_VALUE))
+        assertFalse(ProtonThumbnailWorkPolicy.backgroundOnlyDeadlineReached(1_000L, nowMillis = 1_000L + allowance - 1))
+        assertTrue(ProtonThumbnailWorkPolicy.backgroundOnlyDeadlineReached(1_000L, nowMillis = 1_000L + allowance))
     }
 
     @Test
@@ -71,12 +82,57 @@ class ProtonThumbnailWorkPolicyTest {
     }
 
     @Test
+    fun `the wait until the next publication is the rest of the interval`() {
+        val interval = ProtonThumbnailWorkPolicy.PROGRESS_PUBLISH_INTERVAL_MILLIS
+
+        assertEquals(0L, ProtonThumbnailWorkPolicy.progressPublishWaitMillis(null, 10L))
+        assertEquals(interval, ProtonThumbnailWorkPolicy.progressPublishWaitMillis(10L, 10L))
+        assertEquals(interval - 100L, ProtonThumbnailWorkPolicy.progressPublishWaitMillis(10L, 110L))
+        assertEquals(0L, ProtonThumbnailWorkPolicy.progressPublishWaitMillis(10L, 10L + interval))
+        assertEquals(0L, ProtonThumbnailWorkPolicy.progressPublishWaitMillis(10L, 10L + interval * 3))
+        // A clock that went backwards waits one interval at most.
+        assertEquals(interval, ProtonThumbnailWorkPolicy.progressPublishWaitMillis(10_000L, 10L))
+    }
+
+    @Test
     fun `a busy viewer is an idle step that keeps the work pending and asks again soon`() {
-        val step = ProtonThumbnailWorkPolicy.foregroundBusyStep()
+        val step = ProtonThumbnailWorkPolicy.foregroundBusyStep(consecutiveBusySteps = 1)
 
         assertTrue(step.hasPending)
         assertFalse(step.previewsDeferred)
         assertEquals(ProtonThumbnailWorkPolicy.FOREGROUND_BUSY_RETRY_MILLIS, step.retryAfterMillis)
         assertTrue(ProtonThumbnailWorkPolicy.FOREGROUND_BUSY_RETRY_MILLIS <= 10_000L)
+        assertNotNull(ProtonBackgroundBatchPolicy.idleWaitMillis(step))
+    }
+
+    @Test
+    fun `a viewer that stays busy ends the run with a real delay`() {
+        val limit = ProtonThumbnailWorkPolicy.MAX_CONSECUTIVE_BUSY_STEPS
+        assertTrue(limit in 2..10)
+
+        val stillSoon = ProtonThumbnailWorkPolicy.foregroundBusyStep(consecutiveBusySteps = limit - 1)
+        assertEquals(ProtonThumbnailWorkPolicy.FOREGROUND_BUSY_RETRY_MILLIS, stillSoon.retryAfterMillis)
+
+        val ending = ProtonThumbnailWorkPolicy.foregroundBusyStep(consecutiveBusySteps = limit)
+        assertTrue(ending.hasPending)
+        assertEquals(ProtonThumbnailWorkPolicy.FOREGROUND_BUSY_END_DELAY_MILLIS, ending.retryAfterMillis)
+        // Too long to sleep for: the run ends and the follow-up carries the delay.
+        assertNull(ProtonBackgroundBatchPolicy.idleWaitMillis(ending))
+        assertEquals(
+            ProtonThumbnailWorkPolicy.FOREGROUND_BUSY_END_DELAY_MILLIS,
+            ProtonThumbnailFollowUpPolicy
+                .followUp(
+                    ProtonThumbnailWorkOutcome.WAITING_FOR_RETRY,
+                    workRemaining = true,
+                    previewsDeferred = false,
+                    retryAfterMillis = ending.retryAfterMillis,
+                )?.initialDelayMillis,
+        )
+        assertEquals(ending, ProtonThumbnailWorkPolicy.foregroundBusyStep(consecutiveBusySteps = limit + 7))
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun `a busy step is at least the first one`() {
+        ProtonThumbnailWorkPolicy.foregroundBusyStep(consecutiveBusySteps = 0)
     }
 }

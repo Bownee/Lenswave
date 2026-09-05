@@ -6,7 +6,13 @@ import dagger.Module
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -58,265 +64,337 @@ internal interface ProtonRenditionAvailability {
  * Serves the background worker one batch at a time: claims from the thumbnail queue first and the
  * preview queue second, downloads, and settles every result back into the queue that owns it.
  * Session guarding is the gateway's job, so this class can be exercised with fakes.
+ *
+ * Marking renditions available copies every listing the gallery observes, so it runs on
+ * [publishScope], a coroutine of the sync's own, never on the download coroutine: it used to be
+ * called from the progress callback while the downloader was still receiving from the SDK
+ * channel against a six-second idle timeout, and a slow publication read as a quiet SDK.
  */
 @Singleton
-internal class ProtonRenditionSync
+internal class ProtonRenditionSync(
+    private val source: ProtonRenditionSource,
+    private val availability: ProtonRenditionAvailability,
+    private val thumbnailQueue: ProtonThumbnailQueue,
+    private val previewQueue: ProtonThumbnailQueue,
+    private val clock: LenswaveClock,
+    private val publishScope: CoroutineScope,
+) {
     @Inject
     constructor(
-        private val source: ProtonRenditionSource,
-        private val availability: ProtonRenditionAvailability,
-        @ThumbnailQueue private val thumbnailQueue: ProtonThumbnailQueue,
-        @PreviewQueue private val previewQueue: ProtonThumbnailQueue,
-        private val clock: LenswaveClock,
-    ) {
-        /** The worker serves one user at a time, so one counter across users is enough. */
-        private val batchesSinceForcedFlush = AtomicInteger()
+        source: ProtonRenditionSource,
+        availability: ProtonRenditionAvailability,
+        @ThumbnailQueue thumbnailQueue: ProtonThumbnailQueue,
+        @PreviewQueue previewQueue: ProtonThumbnailQueue,
+        clock: LenswaveClock,
+    ) : this(
+        source,
+        availability,
+        thumbnailQueue,
+        previewQueue,
+        clock,
+        CoroutineScope(SupervisorJob() + Dispatchers.Default),
+    )
 
-        suspend fun downloadNextBatch(
-            userId: UserId,
-            allowPreviews: Boolean,
-            onProgress: suspend (ProtonThumbnailWorkProgress) -> Unit,
-        ): ProtonThumbnailQueueStep {
-            val batch =
-                ProtonBackgroundBatchPolicy.choose(
-                    thumbnailBatch =
-                        thumbnailQueue.claimReady(userId.id, ProtonThumbnailDownloadPolicy.BACKGROUND_CLAIM_SIZE),
-                    allowPreviews = allowPreviews,
-                    claimPreviews = {
-                        previewQueue.claimReady(userId.id, ProtonThumbnailDownloadPolicy.BACKGROUND_CLAIM_SIZE)
-                    },
-                )
-            try {
-                return when (batch?.queue) {
-                    ProtonQueueName.THUMBNAILS -> {
-                        processThumbnailBatch(userId, batch.entries, onProgress).also { flushAfterBatch(userId) }
-                    }
+    /** The worker serves one user at a time, so one counter across users is enough. */
+    private val batchesSinceForcedFlush = AtomicInteger()
 
-                    ProtonQueueName.PREVIEWS -> {
-                        processPreviewBatch(userId, batch.entries, onProgress).also { flushAfterBatch(userId) }
-                    }
-
-                    null -> {
-                        idle(userId, allowPreviews)
-                    }
-                }
-            } catch (error: CancellationException) {
-                // A stopped worker or the run deadline: the settles coalesced in memory would be
-                // lost with the process, so they reach disk now.
-                withContext(NonCancellable) { flushQueues(userId) }
-                throw error
-            }
-        }
-
-        suspend fun flushQueues(userId: UserId) {
-            batchesSinceForcedFlush.set(0)
-            thumbnailQueue.flush(userId.id)
-            previewQueue.flush(userId.id)
-        }
-
-        /**
-         * Settles are left to the queues' own debounce, which writes once per few seconds
-         * however many batches ran; forcing a write after every batch rewrote the whole queue
-         * over a thousand times across a large backfill. A forced write every few batches only
-         * bounds what a killed process downloads again.
-         */
-        private suspend fun flushAfterBatch(userId: UserId) {
-            if (ProtonQueueFlushPolicy.shouldFlushAfterBatch(batchesSinceForcedFlush.incrementAndGet())) {
-                flushQueues(userId)
-            }
-        }
-
-        /** Nothing is claimable; the run may end here, so whatever is unflushed is written. */
-        private suspend fun idle(
-            userId: UserId,
-            allowPreviews: Boolean,
-        ): ProtonThumbnailQueueStep.Idle {
-            val idle =
-                ProtonBackgroundBatchPolicy.idle(
-                    thumbnailsPending = thumbnailQueue.hasPending(userId.id),
-                    previewsPending = previewQueue.hasPending(userId.id),
-                    thumbnailRetryDelayMillis = thumbnailQueue.retryDelayMillis(userId.id),
-                    previewRetryDelayMillis = previewQueue.retryDelayMillis(userId.id),
-                    allowPreviews = allowPreviews,
-                )
-            if (ProtonBackgroundBatchPolicy.hasStaleClaims(idle)) {
-                // This is the only claimer, so a ready entry nobody could claim is a claim some
-                // earlier batch never gave back. Clearing them lets the next step process it
-                // instead of the worker polling every second until the run deadline.
-                thumbnailQueue.releaseAll(userId.id)
-                previewQueue.releaseAll(userId.id)
-            }
-            flushQueues(userId)
-            return idle
-        }
-
-        suspend fun progress(userId: UserId): ProtonThumbnailWorkProgress =
-            ProtonThumbnailWorkProgress(
-                stored = source.storedThumbnailCount(userId),
-                pending = thumbnailQueue.pendingCount(userId.id),
-                previewsStored = source.storedPreviewCount(userId),
-                previewsPending = previewQueue.pendingCount(userId.id),
+    suspend fun downloadNextBatch(
+        userId: UserId,
+        allowPreviews: Boolean,
+        onProgress: suspend (ProtonThumbnailWorkProgress) -> Unit,
+    ): ProtonThumbnailQueueStep {
+        val batch =
+            ProtonBackgroundBatchPolicy.choose(
+                thumbnailBatch =
+                    thumbnailQueue.claimReady(userId.id, ProtonThumbnailDownloadPolicy.BACKGROUND_CLAIM_SIZE),
+                allowPreviews = allowPreviews,
+                claimPreviews = {
+                    previewQueue.claimReady(userId.id, ProtonThumbnailDownloadPolicy.BACKGROUND_CLAIM_SIZE)
+                },
             )
+        try {
+            return when (batch?.queue) {
+                ProtonQueueName.THUMBNAILS -> {
+                    processThumbnailBatch(userId, batch.entries, onProgress).also { flushAfterBatch(userId) }
+                }
 
-        private suspend fun processThumbnailBatch(
-            userId: UserId,
-            entries: List<ProtonThumbnailQueueEntry>,
-            onProgress: suspend (ProtonThumbnailWorkProgress) -> Unit,
-        ): ProtonThumbnailQueueStep {
-            val nodeUids = entries.map(ProtonThumbnailQueueEntry::nodeUid)
-            val progressMutex = Mutex()
-            val marks = PendingMarks()
-            val settledSuccesses = mutableSetOf<String>()
-            try {
-                source.downloadThumbnails(userId, nodeUids) { result ->
+                ProtonQueueName.PREVIEWS -> {
+                    processPreviewBatch(userId, batch.entries, onProgress).also { flushAfterBatch(userId) }
+                }
+
+                null -> {
+                    idle(userId, allowPreviews)
+                }
+            }
+        } catch (error: CancellationException) {
+            // A stopped worker or the run deadline: the settles coalesced in memory would be
+            // lost with the process, so they reach disk now.
+            withContext(NonCancellable) { flushQueues(userId) }
+            throw error
+        }
+    }
+
+    suspend fun flushQueues(userId: UserId) {
+        batchesSinceForcedFlush.set(0)
+        thumbnailQueue.flush(userId.id)
+        previewQueue.flush(userId.id)
+    }
+
+    /**
+     * Settles are left to the queues' own debounce, which writes once per few seconds
+     * however many batches ran; forcing a write after every batch rewrote the whole queue
+     * over a thousand times across a large backfill. A forced write every few batches only
+     * bounds what a killed process downloads again.
+     */
+    private suspend fun flushAfterBatch(userId: UserId) {
+        if (ProtonQueueFlushPolicy.shouldFlushAfterBatch(batchesSinceForcedFlush.incrementAndGet())) {
+            flushQueues(userId)
+        }
+    }
+
+    /** Nothing is claimable; the run may end here, so whatever is unflushed is written. */
+    private suspend fun idle(
+        userId: UserId,
+        allowPreviews: Boolean,
+    ): ProtonThumbnailQueueStep.Idle {
+        val idle =
+            ProtonBackgroundBatchPolicy.idle(
+                thumbnailsPending = thumbnailQueue.hasPending(userId.id),
+                previewsPending = previewQueue.hasPending(userId.id),
+                thumbnailRetryDelayMillis = thumbnailQueue.retryDelayMillis(userId.id),
+                previewRetryDelayMillis = previewQueue.retryDelayMillis(userId.id),
+                allowPreviews = allowPreviews,
+            )
+        if (ProtonBackgroundBatchPolicy.hasStaleClaims(idle)) {
+            // This is the only claimer, so a ready entry nobody could claim is a claim some
+            // earlier batch never gave back. Clearing them lets the next step process it
+            // instead of the worker polling every second until the run deadline.
+            thumbnailQueue.releaseAll(userId.id)
+            previewQueue.releaseAll(userId.id)
+        }
+        flushQueues(userId)
+        return idle
+    }
+
+    suspend fun progress(userId: UserId): ProtonThumbnailWorkProgress =
+        ProtonThumbnailWorkProgress(
+            stored = source.storedThumbnailCount(userId),
+            pending = thumbnailQueue.pendingCount(userId.id),
+            previewsStored = source.storedPreviewCount(userId),
+            previewsPending = previewQueue.pendingCount(userId.id),
+        )
+
+    private suspend fun processThumbnailBatch(
+        userId: UserId,
+        entries: List<ProtonThumbnailQueueEntry>,
+        onProgress: suspend (ProtonThumbnailWorkProgress) -> Unit,
+    ): ProtonThumbnailQueueStep {
+        val nodeUids = entries.map(ProtonThumbnailQueueEntry::nodeUid)
+        val progressMutex = Mutex()
+        val marks = MarkPublisher(userId)
+        val settledSuccesses = mutableSetOf<String>()
+        try {
+            source.downloadThumbnails(userId, nodeUids) { result ->
+                progressMutex.withLock {
+                    settleThumbnails(userId, result, marks, settledSuccesses)
+                    onProgress(progress(userId))
+                }
+            }
+        } catch (error: CancellationException) {
+            // The release takes the queue mutex; from a cancelled coroutine that suspension
+            // would throw instead and leave the claims behind for the rest of the process.
+            withContext(NonCancellable) { thumbnailQueue.release(userId.id, nodeUids) }
+            throw error
+        } catch (error: Throwable) {
+            // A connection lost under the batch is not the nodes' fault; see the classifier.
+            thumbnailQueue.settle(userId.id, emptySet(), nodeUids.associateWith { classifyBatchFailure(error) })
+            onProgress(progress(userId))
+        } finally {
+            // Whatever was stored is shown, however the batch ended.
+            withContext(NonCancellable) { marks.finish() }
+        }
+        return ProtonThumbnailQueueStep.Processed
+    }
+
+    private suspend fun processPreviewBatch(
+        userId: UserId,
+        entries: List<ProtonThumbnailQueueEntry>,
+        onProgress: suspend (ProtonThumbnailWorkProgress) -> Unit,
+    ): ProtonThumbnailQueueStep {
+        val nodeUids = entries.map(ProtonThumbnailQueueEntry::nodeUid)
+        val progressMutex = Mutex()
+        val marks = MarkPublisher(userId)
+        val settledFailures = mutableSetOf<String>()
+        try {
+            val result =
+                source.downloadPreviews(userId, nodeUids) { progress ->
                     progressMutex.withLock {
-                        settleThumbnails(userId, result, marks, settledSuccesses)
-                        publishMarks(userId, marks, force = false)
+                        settlePreviews(userId, progress, marks, settledFailures)
                         onProgress(progress(userId))
                     }
                 }
-            } catch (error: CancellationException) {
-                // The release takes the queue mutex; from a cancelled coroutine that suspension
-                // would throw instead and leave the claims behind for the rest of the process.
-                withContext(NonCancellable) { thumbnailQueue.release(userId.id, nodeUids) }
-                throw error
-            } catch (_: Throwable) {
-                thumbnailQueue.settle(userId.id, emptySet(), nodeUids.toSet())
-                onProgress(progress(userId))
-            } finally {
-                // Whatever was stored is shown, however the batch ended.
-                publishMarks(userId, marks, force = true)
-            }
-            return ProtonThumbnailQueueStep.Processed
+            // Settling the final result as well guarantees no claimed entry is left behind,
+            // which would otherwise keep the run spinning on a queue it can never drain. A
+            // failure already settled from a progress report is not settled again: every
+            // settle is a backoff step, and a pass is one failure.
+            progressMutex.withLock { settlePreviews(userId, result, marks, settledFailures) }
+        } catch (error: CancellationException) {
+            withContext(NonCancellable) { previewQueue.release(userId.id, nodeUids) }
+            throw error
+        } catch (error: Throwable) {
+            previewQueue.settle(userId.id, emptySet(), nodeUids.associateWith { classifyBatchFailure(error) })
+            onProgress(progress(userId))
+        } finally {
+            withContext(NonCancellable) { marks.finish() }
         }
+        return ProtonThumbnailQueueStep.Processed
+    }
 
-        private suspend fun processPreviewBatch(
-            userId: UserId,
-            entries: List<ProtonThumbnailQueueEntry>,
-            onProgress: suspend (ProtonThumbnailWorkProgress) -> Unit,
-        ): ProtonThumbnailQueueStep {
-            val nodeUids = entries.map(ProtonThumbnailQueueEntry::nodeUid)
-            val progressMutex = Mutex()
-            val marks = PendingMarks()
-            val settledFailures = mutableSetOf<String>()
-            try {
-                val result =
-                    source.downloadPreviews(userId, nodeUids) { progress ->
-                        progressMutex.withLock {
-                            settlePreviews(userId, progress, marks, settledFailures)
-                            publishMarks(userId, marks, force = false)
-                            onProgress(progress(userId))
-                        }
-                    }
-                // Settling the final result as well guarantees no claimed entry is left behind,
-                // which would otherwise keep the run spinning on a queue it can never drain. A
-                // failure already settled from a progress report is not settled again: every
-                // settle is a backoff step, and a pass is one failure.
-                progressMutex.withLock { settlePreviews(userId, result, marks, settledFailures) }
-            } catch (error: CancellationException) {
-                withContext(NonCancellable) { previewQueue.release(userId.id, nodeUids) }
-                throw error
-            } catch (_: Throwable) {
-                previewQueue.settle(userId.id, emptySet(), nodeUids.toSet())
-                onProgress(progress(userId))
-            } finally {
-                publishMarks(userId, marks, force = true)
-            }
-            return ProtonThumbnailQueueStep.Processed
-        }
+    /**
+     * What a batch that threw as a whole means for each of its nodes. A missing rendition is a
+     * per-node answer and never the whole batch's, so it is not taken from here: dropping every
+     * node of a batch on one exception would be wrong however it was worded.
+     */
+    private fun classifyBatchFailure(error: Throwable): ThumbnailFailureKind =
+        ThumbnailFailureClassifier.classify(error).takeIf { kind -> kind == ThumbnailFailureKind.TRANSIENT_NETWORK }
+            ?: ThumbnailFailureKind.OTHER
 
-        private suspend fun settlePreviews(
-            userId: UserId,
-            result: ThumbnailBatchResult,
-            marks: PendingMarks,
-            settledFailures: MutableSet<String>,
-        ) {
-            val failures = result.failures.filterKeys { nodeUid -> settledFailures.add(nodeUid) }
-            previewQueue.settle(userId.id, result.successfulNodeUids, failures)
-            marks.previews += result.successfulNodeUids
-        }
+    private suspend fun settlePreviews(
+        userId: UserId,
+        result: ThumbnailBatchResult,
+        marks: MarkPublisher,
+        settledFailures: MutableSet<String>,
+    ) {
+        val failures = result.failures.filterKeys { nodeUid -> settledFailures.add(nodeUid) }
+        previewQueue.settle(userId.id, result.successfulNodeUids, failures)
+        if (result.successfulNodeUids.isNotEmpty()) marks.add { previews += result.successfulNodeUids }
+    }
 
-        /**
-         * [settledSuccesses] are the nodes earlier reports of the same batch already settled: the
-         * SDK sometimes answers a node twice, and the second answer must not read as "nobody
-         * asked for this".
-         */
-        private suspend fun settleThumbnails(
-            userId: UserId,
-            result: ThumbnailBatchResult,
-            marks: PendingMarks,
-            settledSuccesses: MutableSet<String>,
-        ) {
-            val completed = thumbnailQueue.settle(userId.id, result.successfulNodeUids, result.failures)
-            val completedNodeUids = completed.mapTo(mutableSetOf(), ProtonThumbnailQueueEntry::nodeUid)
-            // A thumbnail nothing asked for (never queued, or its photo left every listing while
-            // the batch ran and the queue dropped the entry) would only take up space. One this
-            // batch already settled is wanted; it is simply reported again.
-            result.successfulNodeUids
-                .filterNot { nodeUid -> nodeUid in completedNodeUids || nodeUid in settledSuccesses }
-                .forEach { nodeUid -> source.removeThumbnail(userId, nodeUid) }
-            settledSuccesses += completedNodeUids
+    /**
+     * [settledSuccesses] are the nodes earlier reports of the same batch already settled: the
+     * SDK sometimes answers a node twice, and the second answer must not read as "nobody
+     * asked for this".
+     */
+    private suspend fun settleThumbnails(
+        userId: UserId,
+        result: ThumbnailBatchResult,
+        marks: MarkPublisher,
+        settledSuccesses: MutableSet<String>,
+    ) {
+        val completed = thumbnailQueue.settle(userId.id, result.successfulNodeUids, result.failures)
+        val completedNodeUids = completed.mapTo(mutableSetOf(), ProtonThumbnailQueueEntry::nodeUid)
+        // A thumbnail nothing asked for (never queued, or its photo left every listing while
+        // the batch ran and the queue dropped the entry) would only take up space. One this
+        // batch already settled is wanted; it is simply reported again.
+        result.successfulNodeUids
+            .filterNot { nodeUid -> nodeUid in completedNodeUids || nodeUid in settledSuccesses }
+            .forEach { nodeUid -> source.removeThumbnail(userId, nodeUid) }
+        settledSuccesses += completedNodeUids
+        // A preview fetched in place of a missing thumbnail is a preview already; the preview
+        // queue must not download it a second time.
+        if (result.previewsStored.isNotEmpty()) previewQueue.settle(userId.id, result.previewsStored, emptySet())
+        if (completed.isEmpty() && result.previewsStored.isEmpty()) return
+        marks.add {
             completed.forEach { entry ->
-                if (ProtonSyncKeys.QueueSource.TIMELINE in entry.sources) marks.timeline += entry.nodeUid
-                if (ProtonSyncKeys.QueueSource.ALBUM_COVERS in entry.sources) marks.albumCovers += entry.nodeUid
-                if (entry.sources.any(ProtonSyncKeys.QueueSource::isAlbumPhotos)) marks.albumPhotos += entry.nodeUid
+                if (ProtonSyncKeys.QueueSource.TIMELINE in entry.sources) timeline += entry.nodeUid
+                if (ProtonSyncKeys.QueueSource.ALBUM_COVERS in entry.sources) albumCovers += entry.nodeUid
+                if (entry.sources.any(ProtonSyncKeys.QueueSource::isAlbumPhotos)) albumPhotos += entry.nodeUid
             }
-            // A preview fetched in place of a missing thumbnail is a preview already; the preview
-            // queue must not download it a second time.
-            if (result.previewsStored.isNotEmpty()) {
-                previewQueue.settle(userId.id, result.previewsStored, emptySet())
-                marks.previews += result.previewsStored
-            }
-        }
-
-        /**
-         * Marking renditions available copies every listing the gallery observes, so the marks
-         * gathered over a batch are published at most every
-         * [ProtonThumbnailWorkPolicy.PROGRESS_PUBLISH_INTERVAL_MILLIS], and once more when the
-         * batch ends so nothing stored waits for the next one.
-         */
-        private fun publishMarks(
-            userId: UserId,
-            marks: PendingMarks,
-            force: Boolean,
-        ) {
-            if (marks.isEmpty()) return
-            val now = clock.nowMillis()
-            if (!ProtonThumbnailWorkPolicy.shouldPublishProgress(marks.lastPublishedMillis, now, force)) return
-            if (marks.timeline.isNotEmpty() || marks.albumCovers.isNotEmpty() || marks.albumPhotos.isNotEmpty()) {
-                availability.thumbnailsAvailable(
-                    userId,
-                    marks.timeline.toSet(),
-                    marks.albumCovers.toSet(),
-                    marks.albumPhotos.toSet(),
-                )
-            }
-            if (marks.previews.isNotEmpty()) availability.previewsAvailable(userId, marks.previews.toSet())
-            marks.clear(now)
-        }
-
-        /** Renditions stored since the last publication, and when that was. */
-        private class PendingMarks {
-            val timeline = mutableSetOf<String>()
-            val albumCovers = mutableSetOf<String>()
-            val albumPhotos = mutableSetOf<String>()
-            val previews = mutableSetOf<String>()
-
-            /** Null until the first publication so the first stored rendition shows at once. */
-            var lastPublishedMillis: Long? = null
-
-            fun isEmpty(): Boolean =
-                timeline.isEmpty() && albumCovers.isEmpty() && albumPhotos.isEmpty() && previews.isEmpty()
-
-            fun clear(publishedAtMillis: Long) {
-                timeline.clear()
-                albumCovers.clear()
-                albumPhotos.clear()
-                previews.clear()
-                lastPublishedMillis = publishedAtMillis
-            }
+            previews += result.previewsStored
         }
     }
+
+    /**
+     * Publishes the marks of one batch from a coroutine of its own. The marks gathered are
+     * published at most every [ProtonThumbnailWorkPolicy.PROGRESS_PUBLISH_INTERVAL_MILLIS],
+     * and once more when the batch ends ([finish]) so nothing stored waits for the next one.
+     * Wake-ups are conflated: however many settles arrive during a wait, the next publication
+     * carries them all.
+     */
+    private inner class MarkPublisher(
+        private val userId: UserId,
+    ) {
+        private val marks = PendingMarks()
+        private val lock = Mutex()
+        private val wakeUps = Channel<Unit>(Channel.CONFLATED)
+        private val job = publishScope.launch { drain() }
+
+        suspend fun add(update: PendingMarks.() -> Unit) {
+            lock.withLock { marks.update() }
+            wakeUps.trySend(Unit)
+        }
+
+        /** Publishes whatever is left and returns once it has been published. */
+        suspend fun finish() {
+            wakeUps.close()
+            job.join()
+        }
+
+        private suspend fun drain() {
+            for (wakeUp in wakeUps) {
+                val waitMillis =
+                    lock.withLock {
+                        ProtonThumbnailWorkPolicy.progressPublishWaitMillis(
+                            marks.lastPublishedMillis,
+                            clock.nowMillis(),
+                        )
+                    }
+                if (waitMillis > 0L) delay(waitMillis)
+                publish()
+            }
+            publish()
+        }
+
+        private suspend fun publish() {
+            val snapshot = lock.withLock { marks.take(clock.nowMillis()) } ?: return
+            if (snapshot.timeline.isNotEmpty() || snapshot.albumCovers.isNotEmpty() ||
+                snapshot.albumPhotos.isNotEmpty()
+            ) {
+                availability.thumbnailsAvailable(
+                    userId,
+                    snapshot.timeline,
+                    snapshot.albumCovers,
+                    snapshot.albumPhotos,
+                )
+            }
+            if (snapshot.previews.isNotEmpty()) availability.previewsAvailable(userId, snapshot.previews)
+        }
+    }
+
+    /** Renditions stored since the last publication, and when that was. */
+    private class PendingMarks {
+        val timeline = mutableSetOf<String>()
+        val albumCovers = mutableSetOf<String>()
+        val albumPhotos = mutableSetOf<String>()
+        val previews = mutableSetOf<String>()
+
+        /** Null until the first publication so the first stored rendition shows at once. */
+        var lastPublishedMillis: Long? = null
+
+        fun isEmpty(): Boolean =
+            timeline.isEmpty() && albumCovers.isEmpty() && albumPhotos.isEmpty() && previews.isEmpty()
+
+        /** Hands over everything gathered and starts the next interval, or null when there is nothing. */
+        fun take(publishedAtMillis: Long): PublishedMarks? {
+            if (isEmpty()) return null
+            val snapshot =
+                PublishedMarks(timeline.toSet(), albumCovers.toSet(), albumPhotos.toSet(), previews.toSet())
+            timeline.clear()
+            albumCovers.clear()
+            albumPhotos.clear()
+            previews.clear()
+            lastPublishedMillis = publishedAtMillis
+            return snapshot
+        }
+    }
+
+    private class PublishedMarks(
+        val timeline: Set<String>,
+        val albumCovers: Set<String>,
+        val albumPhotos: Set<String>,
+        val previews: Set<String>,
+    )
+}
 
 /** Publishes stored renditions into the timeline and album state the gallery observes. */
 internal class ProtonRenditionAvailabilityPublisher
