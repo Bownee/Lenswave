@@ -320,6 +320,49 @@ class ProtonRenditionSyncTest {
         }
 
     @Test
+    fun `thumbnails deferred to a preview-fetching run are parked, not claimed again and again`() =
+        test { sync ->
+            thumbnails.replaceSource(USER.id, ProtonSyncKeys.QueueSource.TIMELINE, candidates("a", "b"))
+            // Proton has no thumbnail for either and previews are not allowed: the downloader
+            // reports both as deferred, in the result only.
+            source.thumbnailProgress = emptyList()
+            source.thumbnailResult = ThumbnailBatchResult(emptySet(), emptyMap(), deferredNodeUids = setOf("a", "b"))
+
+            assertEquals(ProtonThumbnailQueueStep.Processed, sync.downloadNextBatch(USER, allowPreviews = false) {})
+            val idle = sync.downloadNextBatch(USER, allowPreviews = false) {}
+
+            // The run ends with a charging follow-up instead of claiming, enumerating and
+            // releasing the same two nodes every second until its deadline.
+            assertEquals(ProtonThumbnailQueueStep.Idle(hasPending = false, previewsDeferred = true), idle)
+            assertEquals(1, source.thumbnailCalls)
+            assertEquals(2, thumbnails.pendingCount(USER.id))
+            thumbnails.flush(USER.id)
+            assertTrue(store.readQueue(USER.id, ProtonQueueName.THUMBNAILS).all { entry -> entry.retryCount == 0 })
+
+            // A run that may fetch previews serves them at once.
+            source.thumbnailResult = ThumbnailBatchResult(setOf("a", "b"), emptyMap(), previewsStored = setOf("a", "b"))
+            assertEquals(ProtonThumbnailQueueStep.Processed, sync.downloadNextBatch(USER, allowPreviews = true) {})
+            assertEquals(listOf(listOf("a", "b")), source.thumbnailRequests.drop(1).map { it.sorted() })
+            assertEquals(0, thumbnails.pendingCount(USER.id))
+        }
+
+    @Test
+    fun `a thumbnail failure reported in progress and in the result is one backoff step`() =
+        test { sync ->
+            thumbnails.replaceSource(USER.id, ProtonSyncKeys.QueueSource.TIMELINE, candidates("a", "b"))
+            val failure = mapOf("b" to ThumbnailFailureKind.OTHER)
+            source.thumbnailProgress = listOf(ThumbnailBatchResult(setOf("a"), failure))
+            source.thumbnailResult = ThumbnailBatchResult(setOf("a"), failure)
+
+            sync.downloadNextBatch(USER, allowPreviews = true) {}
+            thumbnails.flush(USER.id)
+
+            val entry = store.readQueue(USER.id, ProtonQueueName.THUMBNAILS).single()
+            assertEquals("b", entry.nodeUid)
+            assertEquals(1, entry.retryCount)
+        }
+
+    @Test
     fun `a preview stored in place of a missing thumbnail leaves the preview queue`() =
         test { sync ->
             thumbnails.replaceSource(USER.id, ProtonSyncKeys.QueueSource.TIMELINE, candidates("a"))
@@ -344,6 +387,8 @@ class ProtonRenditionSyncTest {
         var previewProgress: List<ThumbnailBatchResult> = emptyList()
         var previewResult = ThumbnailBatchResult(emptySet(), emptyMap())
         var previewCalls = 0
+        var thumbnailCalls = 0
+        val thumbnailRequests = mutableListOf<List<String>>()
         var storedThumbnails = 0
         var storedPreviews = 0
         val removedThumbnails = mutableListOf<String>()
@@ -353,6 +398,8 @@ class ProtonRenditionSyncTest {
             nodeUids: Collection<String>,
             onProgress: suspend (ThumbnailBatchResult) -> Unit,
         ): ThumbnailBatchResult {
+            thumbnailCalls++
+            thumbnailRequests += nodeUids.toList()
             (thumbnailProgress ?: listOf(thumbnailResult)).forEach { result ->
                 beforeProgress()
                 onProgress(result)

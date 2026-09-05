@@ -7,6 +7,7 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -651,6 +652,78 @@ class ProtonThumbnailQueueTest {
             queue.release(USER_ID, listOf("stubborn"))
             queue.replaceSource(USER_ID, "timeline", candidates("stubborn"))
             assertEquals(1, queue.pendingCount(USER_ID))
+        }
+
+    @Test
+    fun aNodeParkedForPreviewsIsClaimableExactlyWhenPreviewsAre() =
+        runTest {
+            val store = FakeStore()
+            val clock = FakeClock()
+            val queue = queue(store, clock)
+            queue.replaceSource(USER_ID, "timeline", candidates("parked", "plain"))
+            queue.claimReady(USER_ID, limit = 2, previewsAllowed = false)
+
+            queue.settle(
+                USER_ID,
+                emptySet(),
+                mapOf("parked" to ThumbnailFailureKind.PREVIEW_DEFERRED, "plain" to ThumbnailFailureKind.OTHER),
+            )
+            queue.flush(USER_ID)
+
+            // No backoff step, but a horizon on disk for a process that forgets the parking.
+            assertEquals(0, entry(store, "parked").retryCount)
+            assertEquals(
+                clock.value + ProtonThumbnailQueue.PREVIEW_DEFERRAL_MILLIS,
+                entry(store, "parked").retryAtMillis,
+            )
+            assertTrue(queue.hasEntriesAwaitingPreviews(USER_ID))
+            // While previews are not allowed the parked node is neither pending nor due.
+            assertTrue(queue.hasPending(USER_ID, previewsAllowed = false))
+            assertEquals(30_000L, queue.retryDelayMillis(USER_ID, previewsAllowed = false))
+            clock.value += ProtonThumbnailQueue.PREVIEW_DEFERRAL_MILLIS
+            assertEquals(
+                listOf("plain"),
+                queue.claimReady(USER_ID, limit = 2, previewsAllowed = false).map { it.nodeUid },
+            )
+            queue.settle(USER_ID, setOf("plain"), emptySet())
+            assertFalse(queue.hasPending(USER_ID, previewsAllowed = false))
+            assertEquals(null, queue.retryDelayMillis(USER_ID, previewsAllowed = false))
+            assertEquals(1, queue.pendingCount(USER_ID))
+
+            // Once they are, it is due at once, however far off its horizon is.
+            clock.value -= ProtonThumbnailQueue.PREVIEW_DEFERRAL_MILLIS
+            assertTrue(queue.hasPending(USER_ID, previewsAllowed = true))
+            assertEquals(0L, queue.retryDelayMillis(USER_ID, previewsAllowed = true))
+            assertEquals(
+                listOf("parked"),
+                queue.claimReady(USER_ID, limit = 2, previewsAllowed = true).map { it.nodeUid },
+            )
+            assertFalse(queue.hasEntriesAwaitingPreviews(USER_ID))
+        }
+
+    @Test
+    fun anExplicitAskAndAListingChangeLiftTheParking() =
+        runTest {
+            val queue = queue(FakeStore(), FakeClock())
+            queue.replaceSource(USER_ID, "timeline", candidates("asked", "gone"))
+            queue.claimReady(USER_ID, limit = 2)
+            queue.settle(
+                USER_ID,
+                emptySet(),
+                mapOf(
+                    "asked" to ThumbnailFailureKind.PREVIEW_DEFERRED,
+                    "gone" to ThumbnailFailureKind.PREVIEW_DEFERRED,
+                ),
+            )
+
+            queue.retryNow(USER_ID, candidate("asked", 5), setOf("timeline"))
+            assertEquals(
+                listOf("asked"),
+                queue.claimReady(USER_ID, limit = 2, previewsAllowed = false).map { it.nodeUid },
+            )
+
+            queue.replaceSource(USER_ID, "timeline", candidates("asked"))
+            assertFalse(queue.hasEntriesAwaitingPreviews(USER_ID))
         }
 
     @Test
