@@ -23,4 +23,6 @@
     <color name="lenswave_on_error">#690005</color>
     <color name="lenswave_success">#83D6A4</color>
     <color name="lenswave_warning">#F3C969</color>
+    <!-- The surface colour with the alpha the fast-scroll handle uses over photos. -->
+    <color name="lenswave_fast_scroll_thumb">#ED171A20</color>
 </resources>
