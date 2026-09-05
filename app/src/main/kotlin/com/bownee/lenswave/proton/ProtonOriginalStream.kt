@@ -27,6 +27,13 @@ data class ProtonOriginalDownloadProgress(
  * once the whole original verified, so [complete] may move [file]; a reader that finds its path
  * gone waits for [awaitCompletion] and opens [file] again.
  *
+ * The end of the bytes and the end of the file's travels are two moments. A download has every
+ * byte on disk the moment the transfer ends ([finishInput]) but the file is renamed only after
+ * the original has been encrypted into the cache, which takes as long as reading the whole file
+ * once more; a reader that has consumed every byte reaches end-of-input at the first moment
+ * rather than waiting for the second with the viewer showing the download panel over a finished
+ * download. [complete] marks the second moment, and implies the first.
+ *
  * A reader announces itself through [readerOpened] and [readerClosed]; while one holds the file
  * it is reported to [readers], and its age restarts on every open and close, so the plaintext
  * TTL counts from the last use rather than from the decrypt.
@@ -40,6 +47,11 @@ class ProtonOriginalStream(
     private val mutableProgress = MutableStateFlow(ProtonOriginalDownloadProgress())
     private var availableBytes = file.length()
     private var failure: Throwable? = null
+
+    /** No more bytes are coming; see [finishInput]. */
+    private var inputFinished = false
+
+    /** Every byte is in [file] and [file] is where it stays; see [complete]. */
     private var downloadComplete = false
     private var openReaders = 0
 
@@ -61,7 +73,7 @@ class ProtonOriginalStream(
 
     fun bytesWritten(byteCount: Int) =
         lock.withLock {
-            if (byteCount <= 0 || downloadComplete || failure != null) return@withLock
+            if (byteCount <= 0 || inputFinished || failure != null) return@withLock
             availableBytes += byteCount
             publish(downloadedBytes = availableBytes)
             changed.signalAll()
@@ -70,7 +82,7 @@ class ProtonOriginalStream(
     /** The readable prefix is now [totalBytes] long; a total behind what is known is ignored. */
     fun availableBytes(totalBytes: Long) =
         lock.withLock {
-            if (totalBytes <= availableBytes || downloadComplete || failure != null) return@withLock
+            if (totalBytes <= availableBytes || inputFinished || failure != null) return@withLock
             availableBytes = totalBytes
             publish(downloadedBytes = availableBytes)
             changed.signalAll()
@@ -80,7 +92,7 @@ class ProtonOriginalStream(
         downloadedBytes: Long,
         totalBytes: Long?,
     ) = lock.withLock {
-        if (downloadComplete || failure != null) return@withLock
+        if (inputFinished || failure != null) return@withLock
         publish(
             downloadedBytes = maxOf(availableBytes, downloadedBytes),
             totalBytes = totalBytes ?: mutableProgress.value.totalBytes,
@@ -111,6 +123,18 @@ class ProtonOriginalStream(
     val isComplete: Boolean
         get() = lock.withLock { downloadComplete }
 
+    /**
+     * Every byte is in [file] and no more are coming, while [file] may still be renamed: the
+     * transfer is over and the cache commit is about to run. Readers reach end-of-input from
+     * here on; a reader whose path goes missing still waits for [complete].
+     */
+    fun finishInput() =
+        lock.withLock {
+            if (inputFinished || failure != null) return@withLock
+            finishInputLocked()
+            changed.signalAll()
+        }
+
     /** Every byte is on disk, in [committed]: the same file, or the name the growing file was renamed to. */
     fun complete(committed: File = file) =
         lock.withLock {
@@ -120,15 +144,21 @@ class ProtonOriginalStream(
                 readers.opened(committed)
             }
             file = committed
-            availableBytes = maxOf(availableBytes, committed.length())
+            finishInputLocked()
             downloadComplete = true
-            publish(
-                downloadedBytes = availableBytes,
-                totalBytes = mutableProgress.value.totalBytes ?: availableBytes,
-                complete = true,
-            )
             changed.signalAll()
         }
+
+    /** Only under [lock]. */
+    private fun finishInputLocked() {
+        availableBytes = maxOf(availableBytes, file.length())
+        inputFinished = true
+        publish(
+            downloadedBytes = availableBytes,
+            totalBytes = mutableProgress.value.totalBytes ?: availableBytes,
+            complete = true,
+        )
+    }
 
     fun fail(error: Throwable) =
         lock.withLock {
@@ -140,11 +170,11 @@ class ProtonOriginalStream(
     @Throws(IOException::class)
     fun awaitReadable(position: Long): ProtonOriginalReadState =
         lock.withLock {
-            if (availableBytes <= position && !downloadComplete && failure == null) {
+            if (availableBytes <= position && !inputFinished && failure == null) {
                 blockedReaders++
                 mutableWaitingForBytes.value = true
                 try {
-                    while (availableBytes <= position && !downloadComplete && failure == null) {
+                    while (availableBytes <= position && !inputFinished && failure == null) {
                         changed.await()
                     }
                 } catch (error: InterruptedException) {
@@ -155,7 +185,7 @@ class ProtonOriginalStream(
                 }
             }
             failure?.let { error -> throw IOException("Proton media download failed", error) }
-            ProtonOriginalReadState(availableBytes, downloadComplete)
+            ProtonOriginalReadState(availableBytes, inputFinished)
         }
 
     /**
@@ -166,7 +196,7 @@ class ProtonOriginalStream(
     @Throws(IOException::class)
     fun awaitChange(timeoutMillis: Long) =
         lock.withLock {
-            if (downloadComplete || failure != null) return@withLock
+            if (inputFinished || failure != null) return@withLock
             blockedReaders++
             mutableWaitingForBytes.value = true
             try {
@@ -253,6 +283,7 @@ class ProtonOriginalCopyMissingException(
 
 data class ProtonOriginalReadState(
     val availableBytes: Long,
+    /** No byte beyond [availableBytes] is coming: a reader there is at end-of-input. */
     val complete: Boolean,
 )
 

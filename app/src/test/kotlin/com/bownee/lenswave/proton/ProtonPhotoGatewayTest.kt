@@ -24,6 +24,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
+import java.nio.ByteBuffer
 import java.nio.channels.WritableByteChannel
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
@@ -393,6 +394,46 @@ class ProtonPhotoGatewayTest {
         }
 
     @Test
+    fun `a downloaded original reaches its end before the commit and moves to its committed path after`() =
+        runBlocking {
+            val directory = createTempDirectory("lenswave-originals").toFile()
+            val part = File(directory, "video.image.part")
+            val committed = File(directory, "video.image")
+            cache.createOriginalTarget = { ProtonOriginalTarget(part, File(directory, "video.enc"), removalEpoch = 0L) }
+            clients.downloadTo = { output -> output.write(ByteBuffer.wrap(ByteArray(1_024))) }
+            lateinit var stream: ProtonOriginalStream
+            cache.commitOriginal = { download ->
+                // The transfer is over: a reader at the end of the bytes is at end-of-input while
+                // the file is still the download's own, before the encrypt has read it once more.
+                assertEquals(ProtonOriginalReadState(1_024L, complete = true), stream.awaitReadable(1_024L))
+                assertTrue(stream.progress.value.complete)
+                assertFalse(stream.isComplete)
+                assertEquals(part, stream.file)
+                assertTrue(download.plaintext.renameTo(committed))
+                events += "commitOriginal"
+                committed
+            }
+            cache.onOriginalStored = { target ->
+                // The size accounting runs after the stream has moved to the committed file.
+                assertTrue(stream.isComplete)
+                assertEquals(committed, stream.file)
+                events += "onOriginalStored:${target.name}"
+            }
+            try {
+                val file =
+                    withContext(Dispatchers.IO) {
+                        originals.downloadOriginalProgressively(USER_A, "a3") { ready -> stream = ready }
+                    }
+
+                assertEquals(committed, file)
+                assertEquals(listOf("commitOriginal", "onOriginalStored:video.enc"), events.toList())
+                assertEquals(ProtonOriginalDownloadProgress(1_024L, 1_024L, complete = true), stream.progress.value)
+            } finally {
+                directory.deleteRecursively()
+            }
+        }
+
+    @Test
     fun `a plaintext copy already on disk is handed to the player complete`() =
         runBlocking {
             val copy = File.createTempFile("lenswave-original", ".image").apply { writeBytes(ByteArray(300)) }
@@ -580,12 +621,15 @@ class ProtonPhotoGatewayTest {
             events += "disconnect:${userId.id}"
         }
 
+        /** Writes the original's bytes into the channel; the SDK is refused unless a test scripts it. */
+        var downloadTo: (WritableByteChannel) -> Unit = { error("The SDK must not be reached") }
+
         override suspend fun downloadTo(
             userId: UserId,
             nodeUid: String,
             output: WritableByteChannel,
             onProgress: (ProgressUpdate) -> Unit,
-        ) = error("The SDK must not be reached")
+        ) = downloadTo(output)
     }
 
     /** The progressive decrypt of a cached original, scripted per test; nothing is cached by default. */
@@ -625,6 +669,9 @@ class ProtonPhotoGatewayTest {
         var peekThumbnail: () -> Bitmap? = { null }
         var loadPreview: () -> Bitmap? = { null }
         var readOriginal: (shouldContinue: () -> Boolean) -> File? = { null }
+        var createOriginalTarget: () -> ProtonOriginalTarget = { error("no download expected") }
+        var commitOriginal: (ProtonOriginalTarget) -> File = { error("no download expected") }
+        var onOriginalStored: (File) -> Unit = {}
 
         override fun storedRenditions(userId: String): ProtonStoredRenditions =
             ProtonStoredRenditions(thumbnails.toSet(), previews.toSet()) { nodeUid -> nodeUid }
@@ -791,18 +838,19 @@ class ProtonPhotoGatewayTest {
         override fun createOriginalTarget(
             userId: String,
             nodeUid: String,
-        ): ProtonOriginalTarget = error("no download expected")
+        ): ProtonOriginalTarget = createOriginalTarget()
 
         override fun commitOriginal(
             userId: String,
             nodeUid: String,
             download: ProtonOriginalTarget,
-        ): File = error("no download expected")
+        ): File = commitOriginal(download)
 
         override fun onOriginalStored(
             userId: String,
             target: File,
         ) {
+            onOriginalStored(target)
         }
 
         override fun clearUser(userId: String) {

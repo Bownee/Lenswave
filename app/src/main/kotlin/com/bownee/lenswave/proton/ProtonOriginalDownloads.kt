@@ -173,24 +173,30 @@ internal class ProtonOriginalDownloads
                         stream.updateProgress(progress.bytesCompleted, progress.bytesInTotal)
                     }
                 }
+                // Every byte is on disk: a player that has consumed them all reaches the end of
+                // the video now, not after the commit below has read the whole file once more
+                // to encrypt it.
+                stream.finishInput()
                 // The commit moves the plaintext to its shared path, so the stream completes with
                 // that path, as a decrypt does. A cache that cannot keep the original is not a
                 // failed download: the plaintext the viewer is already reading stays where it is.
                 // A cancellation is one, and so is a photo trashed meanwhile; both go below.
-                val committed =
+                val stored =
                     try {
-                        cache.commitOriginal(userId.id, nodeUid, download).also {
-                            cache.onOriginalStored(userId.id, download.encrypted)
-                        }
+                        cache.commitOriginal(userId.id, nodeUid, download)
                     } catch (error: CancellationException) {
                         throw error
                     } catch (error: ProtonOriginalRemovedException) {
                         throw error
                     } catch (error: Throwable) {
                         LenswaveDiagnostics.reportFailure(LenswaveOperation.ORIGINAL_CACHE_STORE, error)
-                        temporary
+                        null
                     }
+                val committed = stored ?: temporary
                 stream.complete(committed)
+                // The size accounting lists the directory and may trim it; a reader that lost
+                // its path to the rename waits for the completion above, not for that.
+                if (stored != null) cache.onOriginalStored(userId.id, download.encrypted)
                 committed
             } catch (error: CancellationException) {
                 stream.fail(error)
