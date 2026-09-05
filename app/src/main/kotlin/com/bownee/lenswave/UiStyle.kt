@@ -9,6 +9,7 @@ import android.graphics.Typeface
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.RippleDrawable
+import android.os.LocaleList
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -28,8 +29,9 @@ import androidx.core.widget.TextViewCompat
 
 /** Colours, typography and the small set of view factories every screen is built from. */
 object UiStyle {
-    // The palette has no configuration qualifiers, so every colour, the typeface and the two
-    // state strings are resolved once in initialize() instead of on each property read or bind.
+    // The palette has no configuration qualifiers, so every colour and the typeface are resolved
+    // once in initialize() instead of on each property read or bind. The two state strings are
+    // localized: they are cached too, but against the locales they were resolved for.
     var background: Int = 0
         private set
     var surface: Int = 0
@@ -56,8 +58,11 @@ object UiStyle {
     lateinit var medium: Typeface
         private set
 
-    private lateinit var selectedDescription: String
-    private lateinit var notSelectedDescription: String
+    private var selectedDescription: String = ""
+    private var notSelectedDescription: String = ""
+
+    /** The locales [selectedDescription] and [notSelectedDescription] were resolved for; null until the first bind. */
+    private var descriptionLocales: LocaleList? = null
 
     fun initialize(context: Context) {
         val applicationContext = context.applicationContext
@@ -75,8 +80,23 @@ object UiStyle {
         danger = color(R.color.lenswave_error)
         dangerSoft = color(R.color.lenswave_error_soft)
         medium = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-        selectedDescription = applicationContext.getString(R.string.selected)
-        notSelectedDescription = applicationContext.getString(R.string.not_selected)
+        refreshDescriptions(applicationContext)
+    }
+
+    /**
+     * Re-resolves the state strings from [context] when its locales differ from the ones they were
+     * resolved for, so a locale change reaches every later bind without a process restart. The
+     * comparison is a LocaleList equality on the configuration already held by the resources.
+     */
+    private fun descriptionsFor(context: Context) {
+        val locales = context.resources.configuration.locales
+        if (locales != descriptionLocales) refreshDescriptions(context)
+    }
+
+    private fun refreshDescriptions(context: Context) {
+        descriptionLocales = context.resources.configuration.locales
+        selectedDescription = context.getString(R.string.selected)
+        notSelectedDescription = context.getString(R.string.not_selected)
     }
 
     internal fun withAlpha(
@@ -203,6 +223,7 @@ object UiStyle {
         selected: Boolean,
     ) {
         view.isSelected = selected
+        descriptionsFor(view.context)
         ViewCompat.setStateDescription(view, if (selected) selectedDescription else notSelectedDescription)
     }
 

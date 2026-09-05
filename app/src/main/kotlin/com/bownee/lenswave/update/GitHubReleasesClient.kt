@@ -52,7 +52,7 @@ internal class GitHubReleasesClient
                                 ?: return LatestReleaseResult.Unavailable
                         LatestReleaseResult.Modified(
                             versionName = versionName.removePrefix("v").removePrefix("V"),
-                            etag = connection.getHeaderField("ETag"),
+                            etag = ReleaseEtagPolicy.accept(connection.getHeaderField("ETag")),
                         )
                     }
 

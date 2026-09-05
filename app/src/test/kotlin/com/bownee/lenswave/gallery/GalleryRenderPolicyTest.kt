@@ -17,14 +17,14 @@ class GalleryRenderPolicyTest {
     }
 
     @Test
-    fun `library pages compare structurally`() {
+    fun `library pages compare by reference too`() {
         val section = LibrarySection(key = "albums", title = "", items = emptyList())
+        val page = GalleryContent.Library(listOf(section))
 
-        assertFalse(
-            GalleryRenderPolicy.contentChanged(
-                GalleryContent.Library(listOf(section)),
-                GalleryContent.Library(listOf(section)),
-            ),
+        assertFalse(GalleryRenderPolicy.contentChanged(page, page))
+        assertTrue(
+            "an equal but distinct instance is a change; the memo keeps the instance while nothing changed",
+            GalleryRenderPolicy.contentChanged(page, GalleryContent.Library(listOf(section))),
         )
         assertTrue(
             GalleryRenderPolicy.contentChanged(

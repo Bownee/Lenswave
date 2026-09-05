@@ -20,7 +20,8 @@ import kotlin.math.roundToInt
 class GalleryListAdapter(
     private val context: Context,
     private val thumbnailLoader: GalleryThumbnailLoader,
-    private val onPhotoClicked: (GalleryAsset) -> Unit,
+    /** The tapped photo and its index in the page's flat asset list. */
+    private val onPhotoClicked: (GalleryAsset, Int) -> Unit,
     private val onAlbumClicked: (ProtonAlbum) -> Unit,
     private val onLibraryAction: (LibraryAction) -> Unit,
     private val onSelectionChanged: (List<GalleryAsset>) -> Unit,
@@ -34,11 +35,19 @@ class GalleryListAdapter(
     private var attachedList: ViewGroup? = null
     private val photoDescription = context.getString(R.string.photo)
 
+    // Row geometry in pixels, resolved once; the density does not change under a running adapter.
+    // The photo gap is half of the old 3dp; dp() rounds whole values, so the pixel size is halved instead.
+    private val photoGap = (context.dp((PHOTO_GAP_DP * 2).toInt()) / 2).coerceAtLeast(1)
+    private val albumGap = context.dp(ALBUM_GAP_DP)
+    private val edgePadding = context.dp(EDGE_DP)
+    private val albumTextHeight = context.dp(ALBUM_TEXT_HEIGHT_DP)
+
     // One listener per role, bound once per cell; the cell carries the item it currently shows.
     private val photoClick =
         View.OnClickListener { view ->
-            val photo = (view as PhotoCell).asset ?: return@OnClickListener
-            if (selected.isEmpty()) onPhotoClicked(photo) else toggleSelection(photo)
+            val cell = view as PhotoCell
+            val photo = cell.asset ?: return@OnClickListener
+            if (selected.isEmpty()) onPhotoClicked(photo, cell.assetIndex) else toggleSelection(photo)
         }
     private val photoLongClick =
         View.OnLongClickListener { view ->
@@ -220,12 +229,14 @@ class GalleryListAdapter(
         convertView: View?,
         parent: ViewGroup?,
     ): View {
-        val container = (convertView as? LinearLayout) ?: createPhotoRow(parent)
+        val container = (convertView as? LinearLayout) ?: createPhotoRow()
+        fitRowHeight(container, parent, ::photoRowHeight)
         for (column in 0 until COLUMN_COUNT) {
             val cell = container.getChildAt(column) as PhotoCell
             val image = cell.image
             val photo = row.items.getOrNull(column)
             cell.asset = photo
+            cell.assetIndex = row.startIndex + column
             if (photo == null) {
                 cell.visibility = View.INVISIBLE
                 image.tag = null
@@ -267,17 +278,13 @@ class GalleryListAdapter(
         cell.image.scaleY = if (isSelected) 0.9f else 1f
     }
 
-    private fun createPhotoRow(parent: ViewGroup?) =
+    /** The row's height is fitted to the list width at bind (see [fitRowHeight]); it starts unsized. */
+    private fun createPhotoRow() =
         LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            // Half of the old 3dp gap; dp() rounds whole values, so the pixel size is halved instead.
-            val gap = (context.dp((PHOTO_GAP_DP * 2).toInt()) / 2).coerceAtLeast(1)
-            layoutParams =
-                AbsListView.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    (rowWidth(parent) - gap * (COLUMN_COUNT - 1)) / COLUMN_COUNT + gap,
-                )
+            val gap = photoGap
+            layoutParams = AbsListView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0)
             repeat(COLUMN_COUNT) { column ->
                 addView(
                     PhotoCell(context).also { cell ->
@@ -307,11 +314,12 @@ class GalleryListAdapter(
         parent: ViewGroup?,
     ): View {
         val container = (convertView as? LinearLayout) ?: createAlbumRow(parent)
+        fitRowHeight(container, parent, ::albumRowHeight)
         for (column in 0 until ALBUM_COLUMN_COUNT) {
             val cell = container.getChildAt(column) as AlbumCell
-            val album = row.items.getOrNull(column)
-            cell.album = album
-            if (album == null) {
+            val tile = row.items.getOrNull(column)
+            cell.album = tile?.album
+            if (tile == null) {
                 cell.visibility = View.INVISIBLE
                 cell.image.tag = null
                 thumbnailLoader.forget(cell.thumbnailTarget)
@@ -320,36 +328,52 @@ class GalleryListAdapter(
                 continue
             }
             cell.visibility = View.VISIBLE
-            val albumName = album.name.ifBlank { context.getString(R.string.untitled_album) }
-            val photoCount =
-                context.resources.getQuantityString(
-                    R.plurals.photo_count,
-                    album.photoCount.toInt(),
-                    album.photoCount,
-                )
-            val details =
-                if (album.isShared) {
-                    context.getString(R.string.shared_album_details, photoCount)
-                } else {
-                    photoCount
-                }
-            cell.name.text = albumName
-            cell.details.text = details
-            cell.contentDescription = context.getString(R.string.album_accessibility, albumName, details)
-            bindAlbumCover(cell, album)
+            // The texts were resolved once at row build (see GalleryAlbumTile); a bind only assigns them.
+            cell.name.text = tile.name
+            cell.details.text = tile.details
+            cell.contentDescription = tile.contentDescription
+            bindAlbumCover(cell, tile.album)
         }
         return container
+    }
+
+    /**
+     * Rows square their cells against the list width they were built at; the width changes when
+     * the list is first laid out (the display width stood in before) or the window resizes, so a
+     * recycled row is re-measured against the current width instead of keeping its first height.
+     */
+    private fun fitRowHeight(
+        row: LinearLayout,
+        parent: ViewGroup?,
+        heightFor: (rowWidth: Int) -> Int,
+    ) {
+        val width = rowWidth(parent)
+        if (row.tag == width) return
+        row.tag = width
+        val params = row.layoutParams as AbsListView.LayoutParams
+        val height = heightFor(width)
+        if (params.height != height) {
+            params.height = height
+            row.layoutParams = params
+        }
+    }
+
+    private fun photoRowHeight(rowWidth: Int): Int =
+        (rowWidth - photoGap * (COLUMN_COUNT - 1)) / COLUMN_COUNT + photoGap
+
+    private fun albumRowHeight(rowWidth: Int): Int {
+        val cellWidth = (rowWidth - edgePadding * 2 - albumGap) / ALBUM_COLUMN_COUNT
+        return (cellWidth * ALBUM_COVER_ASPECT).roundToInt() + albumTextHeight
     }
 
     private fun createAlbumRow(parent: ViewGroup?) =
         LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.TOP
-            val gap = context.dp(ALBUM_GAP_DP)
-            setPadding(context.dp(EDGE_DP), 0, context.dp(EDGE_DP), 0)
-            val cellWidth = (rowWidth(parent) - context.dp(EDGE_DP) * 2 - gap) / ALBUM_COLUMN_COUNT
-            val rowHeight = (cellWidth * ALBUM_COVER_ASPECT).roundToInt() + context.dp(58)
-            layoutParams = AbsListView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, rowHeight)
+            val gap = albumGap
+            setPadding(edgePadding, 0, edgePadding, 0)
+            layoutParams =
+                AbsListView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, albumRowHeight(rowWidth(parent)))
             repeat(ALBUM_COLUMN_COUNT) { column ->
                 addView(
                     AlbumCell(context).also { cell ->
@@ -493,5 +517,6 @@ class GalleryListAdapter(
         const val ALBUM_COVER_ASPECT = 0.82f
         const val PHOTO_GAP_DP = 1.5f
         const val ALBUM_GAP_DP = 12
+        const val ALBUM_TEXT_HEIGHT_DP = 58
     }
 }

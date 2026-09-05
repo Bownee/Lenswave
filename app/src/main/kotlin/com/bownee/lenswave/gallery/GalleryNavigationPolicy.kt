@@ -46,4 +46,20 @@ object GalleryNavigationPolicy {
 
     /** Where a destination lands once the account is gone: collections return to their tab root. */
     fun withoutAccount(destination: GalleryDestination): GalleryDestination = parent(destination) ?: destination
+
+    /**
+     * Where an album page goes once the album is gone, or null when it stays. The data layer does
+     * not distinguish an absent album from an empty one, so absence is "not in the album list once
+     * that list has loaded": a restored page of a deleted album would otherwise show "album is
+     * empty" under a stale name forever.
+     */
+    fun withoutAlbum(
+        destination: GalleryDestination,
+        albumsLoaded: Boolean,
+        hasAlbum: (nodeUid: String) -> Boolean,
+    ): GalleryDestination? {
+        if (destination !is GalleryDestination.AlbumPhotos || !albumsLoaded) return null
+        if (hasAlbum(destination.album.nodeUid)) return null
+        return parent(destination)
+    }
 }

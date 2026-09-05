@@ -12,6 +12,7 @@ import com.bownee.lenswave.proton.ProtonAlbumsState
 import com.bownee.lenswave.proton.ProtonGalleryPhoto
 import com.bownee.lenswave.proton.ProtonGalleryState
 import com.bownee.lenswave.proton.ProtonMediaTag
+import com.bownee.lenswave.proton.ProtonSessionChangedException
 import com.bownee.lenswave.proton.ProtonTagState
 import com.bownee.lenswave.proton.ProtonThumbnailScheduler
 import kotlinx.coroutines.CompletableDeferred
@@ -271,6 +272,34 @@ class GalleryViewModelTest {
         }
 
     @Test
+    fun `a trash cancelled by an account change is reported as failed and frees the next trash`() =
+        runTest(dispatcher) {
+            val viewModel = connectedViewModel()
+            val received = mutableListOf<GalleryMutationEvent>()
+            backgroundScope.launch { viewModel.mutationEvents.collect { received += it } }
+            viewModel.setSelection(setOf("p1"))
+            deletionExecutor.failure = ProtonSessionChangedException()
+
+            viewModel.trashPhotos(listOf("p1"))
+            runCurrent()
+            deletionExecutor.held.single().complete(Unit)
+            runCurrent()
+
+            assertEquals(listOf<GalleryMutationEvent>(GalleryMutationEvent.TrashFailed), received)
+            assertEquals(
+                "the photos were not trashed, so the selection stands",
+                setOf("p1"),
+                viewModel.selectedStableIds,
+            )
+
+            deletionExecutor.failure = null
+            viewModel.trashPhotos(listOf("p1"))
+            runCurrent()
+
+            assertEquals("the in-flight guard was released", listOf("trash:u:p1", "trash:u:p1"), events)
+        }
+
+    @Test
     fun `a manual refresh stays refreshing until the latest manual refresh has finished`() =
         runTest(dispatcher) {
             val viewModel = connectedViewModel()
@@ -446,7 +475,8 @@ class GalleryViewModelTest {
             // With the metadata loaded (a recreation): the startup refresh loads the cached album first.
             events.clear()
             reader.state.value = loadedTimeline("p1")
-            reader.albumsState.value = ProtonAlbumsState(userId = USER.id, hasLoaded = true)
+            reader.albumsState.value =
+                ProtonAlbumsState(userId = USER.id, albums = listOf(album("al")), hasLoaded = true)
             reader.albumPhotosState.value = ProtonAlbumPhotosState()
             val recreated = viewModel()
             backgroundScope.launch { recreated.uiState.collect {} }
@@ -466,19 +496,68 @@ class GalleryViewModelTest {
         }
 
     @Test
+    fun `a restored album that the loaded album list no longer has returns to the album list`() =
+        runTest(dispatcher) {
+            savedState["gallery.destination"] = "proton-album"
+            savedState["gallery.album-uid"] = "gone"
+            savedState["gallery.album-name"] = "Album gone"
+            reader.state.value = loadedTimeline("p1")
+            reader.albumsState.value =
+                ProtonAlbumsState(userId = USER.id, albums = listOf(album("al")), hasLoaded = true)
+            session.value = ProtonAccountSessionState(readyAccount(USER), USER, initialized = true)
+
+            val viewModel = viewModel()
+            backgroundScope.launch { viewModel.uiState.collect {} }
+            runCurrent()
+
+            assertEquals(GalleryDestination.Library, viewModel.uiState.value.destination)
+            assertEquals("library", savedState.get<String>("gallery.destination"))
+
+            // An album that is still listed stays, and stays while the list is merely reloading.
+            viewModel.openAlbum(album("al"))
+            runCurrent()
+            reader.albumsState.value = ProtonAlbumsState(userId = USER.id, albums = emptyList(), hasLoaded = false)
+            runCurrent()
+            assertEquals(GalleryDestination.AlbumPhotos(album("al").reference()), viewModel.uiState.value.destination)
+
+            reader.albumsState.value = ProtonAlbumsState(userId = USER.id, albums = emptyList(), hasLoaded = true)
+            runCurrent()
+            assertEquals(GalleryDestination.Library, viewModel.uiState.value.destination)
+        }
+
+    @Test
     fun `runPeriodicSync checks at the policy interval and skips a transitioning session`() =
         runTest(dispatcher) {
             val viewModel = connectedViewModel()
             val periodic = backgroundScope.launch { viewModel.runPeriodicSync() }
             runCurrent()
 
-            assertEquals("the first check is immediate", listOf("syncTimeline:u:false", "enqueue:u"), events)
+            assertTrue(
+                "the start-up refresh just completed, so the immediate check does nothing: $events",
+                events.isEmpty(),
+            )
 
-            events.clear()
             advanceTimeBy(GalleryPeriodicSyncPolicy.CHECK_INTERVAL_MILLIS - 1L)
             runCurrent()
             assertTrue(events.isEmpty())
             advanceTimeBy(1L)
+            runCurrent()
+            assertEquals(listOf("syncTimeline:u:false", "enqueue:u"), events)
+
+            // A user-driven refresh shortly before a tick leaves the listing fresh: the tick does nothing.
+            events.clear()
+            advanceTimeBy(GalleryPeriodicSyncPolicy.CHECK_INTERVAL_MILLIS - 60_000L)
+            runCurrent()
+            viewModel.refreshAfterMutation()
+            runCurrent()
+            assertEquals(listOf("syncTimeline:u:false", "enqueue:u"), events)
+            events.clear()
+            advanceTimeBy(60_000L)
+            runCurrent()
+            assertTrue("a tick within the freshness limit of a refresh is skipped: $events", events.isEmpty())
+
+            // The next tick finds that refresh a freshness limit old and enumerates again.
+            advanceTimeBy(GalleryPeriodicSyncPolicy.CHECK_INTERVAL_MILLIS)
             runCurrent()
             assertEquals(listOf("syncTimeline:u:false", "enqueue:u"), events)
 

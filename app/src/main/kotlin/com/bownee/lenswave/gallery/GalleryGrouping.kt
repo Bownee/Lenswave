@@ -7,6 +7,7 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.zone.ZoneRules
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 
 sealed interface GalleryRow {
     data class DateHeader(
@@ -21,16 +22,29 @@ sealed interface GalleryRow {
 
     data class Photos(
         val items: List<GalleryAsset>,
+        /** Index of `items[0]` in the page's flat asset list, so a tap knows its position without a search. */
+        val startIndex: Int = 0,
     ) : GalleryRow
 
     data class Albums(
-        val items: List<ProtonAlbum>,
+        val items: List<GalleryAlbumTile>,
     ) : GalleryRow
 
     data class Entries(
         val items: List<LibraryItem.Entry>,
     ) : GalleryRow
 }
+
+/**
+ * An album with the texts its cell shows, resolved once at row build rather than on every bind:
+ * three resource lookups and two formats per cell per scroll frame added up on the album grid.
+ */
+data class GalleryAlbumTile(
+    val album: ProtonAlbum,
+    val name: String,
+    val details: String,
+    val contentDescription: String,
+)
 
 /** Finished list rows plus the per-row sticky date label, built off the main thread for the adapter. */
 class GalleryRowSet(
@@ -64,11 +78,13 @@ object GalleryGrouping {
     /**
      * Groups [photos] into a date header followed by rows of [columns] photos per day.
      *
-     * [photos] must already be in display order (see [sortPhotos]); the grouping keeps that order
-     * and merges any later photos of an already-seen day into that day's rows, so it never needs
-     * to sort. Days are bucketed with integer arithmetic on the epoch millis and the zone offset
-     * in force at each instant, which is what `LocalDate.from(instant.atZone(zoneId))` yields,
-     * and the calendar date and its label are only built once per day group.
+     * [photos] must already be in display order (see [sortPhotos]), which keeps every day's
+     * photos contiguous, so a day group is a run of the list: the grouping walks it once with a
+     * running day and allocates neither a map nor a boxed key per photo. Days are bucketed with
+     * integer arithmetic on the epoch millis and the zone offset in force at each instant, which
+     * is what `LocalDate.from(instant.atZone(zoneId))` yields, and each day's label comes from
+     * [dayLabels], which formats a day once and answers from its cache afterwards. Every photo
+     * row carries the index of its first photo in [photos].
      */
     fun createRows(
         photos: List<GalleryAsset>,
@@ -76,33 +92,75 @@ object GalleryGrouping {
         locale: Locale = Locale.getDefault(),
         columns: Int = 3,
         unknownDateLabel: String,
+        dayLabels: DayLabels = DayLabels(locale),
     ): List<GalleryRow> {
         require(columns > 0) { "Columns must be positive" }
         if (photos.isEmpty()) return emptyList()
-        val groups = LinkedHashMap<Long, ArrayList<GalleryAsset>>()
         val offsets = ZoneOffsetLookup(zoneId.rules)
-        photos.forEach { photo ->
+        val rows = ArrayList<GalleryRow>(photos.size / columns + ROW_CAPACITY_HEADROOM)
+        var currentDay = 0L
+        var runStart = 0
+        photos.forEachIndexed { index, photo ->
             val millis = photo.capturedAtEpochMillis
-            groups.getOrPut(epochDay(millis, offsets.offsetSeconds(millis)), ::ArrayList).add(photo)
-        }
-        val formatter = DateTimeFormatter.ofPattern("EEE, d MMM uuuu", locale)
-        val rows = ArrayList<GalleryRow>(groups.size + photos.size / columns + groups.size)
-        groups.forEach { (day, items) ->
-            if (day == UNKNOWN_DAY) {
-                rows.add(GalleryRow.DateHeader("unknown", unknownDateLabel))
-            } else {
-                val date = LocalDate.ofEpochDay(day)
-                val label = date.format(formatter).replaceFirstChar { it.titlecase(locale) }
-                rows.add(GalleryRow.DateHeader(date.toString(), label))
-            }
-            var start = 0
-            while (start < items.size) {
-                val end = minOf(start + columns, items.size)
-                rows.add(GalleryRow.Photos(items.subList(start, end)))
-                start = end
+            val day = epochDay(millis, offsets.offsetSeconds(millis))
+            if (index == 0 || day != currentDay) {
+                addPhotoRows(rows, photos, runStart, index, columns)
+                rows.add(dayHeader(day, unknownDateLabel, dayLabels))
+                currentDay = day
+                runStart = index
             }
         }
+        addPhotoRows(rows, photos, runStart, photos.size, columns)
         return rows
+    }
+
+    private fun dayHeader(
+        day: Long,
+        unknownDateLabel: String,
+        dayLabels: DayLabels,
+    ): GalleryRow.DateHeader =
+        if (day == UNKNOWN_DAY) {
+            GalleryRow.DateHeader("unknown", unknownDateLabel)
+        } else {
+            GalleryRow.DateHeader(dayLabels.key(day), dayLabels.label(day))
+        }
+
+    /** Chunks the photos of one day, `[start, end)` in [photos], into rows of [columns]. */
+    private fun addPhotoRows(
+        rows: MutableList<GalleryRow>,
+        photos: List<GalleryAsset>,
+        start: Int,
+        end: Int,
+        columns: Int,
+    ) {
+        var rowStart = start
+        while (rowStart < end) {
+            val rowEnd = minOf(rowStart + columns, end)
+            rows.add(GalleryRow.Photos(photos.subList(rowStart, rowEnd), startIndex = rowStart))
+            rowStart = rowEnd
+        }
+    }
+
+    /**
+     * Day header labels by epoch day. Formatting through java.time costs a calendar date, a
+     * formatter pass and a titlecase per day, so the label is built once per day and reused
+     * across renders; the owner drops the cache when the locale changes. Renders may overlap
+     * (a cancelled row build on a worker thread and its successor), hence the concurrent map.
+     */
+    class DayLabels(
+        private val locale: Locale = Locale.getDefault(),
+    ) {
+        private val formatter = DateTimeFormatter.ofPattern("EEE, d MMM uuuu", locale)
+        private val labels = ConcurrentHashMap<Long, String>()
+        private val keys = ConcurrentHashMap<Long, String>()
+
+        fun label(day: Long): String =
+            labels.getOrPut(day) {
+                LocalDate.ofEpochDay(day).format(formatter).replaceFirstChar { it.titlecase(locale) }
+            }
+
+        /** The ISO date, a locale-independent header key. */
+        fun key(day: Long): String = keys.getOrPut(day) { LocalDate.ofEpochDay(day).toString() }
     }
 
     /**
@@ -131,10 +189,12 @@ object GalleryGrouping {
         }
     }
 
+    /** [describeAlbum] resolves each album's cell texts once; the default carries the bare name for tests. */
     fun createLibraryRows(
         sections: List<LibrarySection>,
         albumColumns: Int = 2,
         entryColumns: Int = 2,
+        describeAlbum: (ProtonAlbum) -> GalleryAlbumTile = ::plainAlbumTile,
     ): List<GalleryRow> {
         require(albumColumns > 0 && entryColumns > 0) { "Columns must be positive" }
         return buildList {
@@ -142,7 +202,7 @@ object GalleryGrouping {
                 if (section.title.isNotEmpty()) add(GalleryRow.SectionHeading(section.key, section.title))
                 section.items
                     .filterIsInstance<LibraryItem.Album>()
-                    .map(LibraryItem.Album::album)
+                    .map { describeAlbum(it.album) }
                     .chunked(albumColumns)
                     .forEach { add(GalleryRow.Albums(it)) }
                 section.items
@@ -189,7 +249,11 @@ object GalleryGrouping {
         }
     }
 
+    private fun plainAlbumTile(album: ProtonAlbum) =
+        GalleryAlbumTile(album, name = album.name, details = "", contentDescription = album.name)
+
     const val UNKNOWN_DAY = Long.MIN_VALUE
+    private const val ROW_CAPACITY_HEADROOM = 16
     private const val MILLIS_PER_SECOND = 1_000L
     private const val MILLIS_PER_DAY = 86_400_000L
 }

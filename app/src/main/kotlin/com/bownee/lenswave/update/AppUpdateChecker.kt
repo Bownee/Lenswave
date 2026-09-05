@@ -5,6 +5,10 @@ import com.bownee.lenswave.LenswaveDiagnostics
 import com.bownee.lenswave.LenswaveDispatchers
 import com.bownee.lenswave.LenswaveOperation
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -25,6 +29,37 @@ class AppUpdateChecker
         private val dispatchers: LenswaveDispatchers,
     ) {
         private val checkMutex = Mutex()
+
+        // The startup check runs in this singleton's scope, not the activity's: a rotation while it
+        // is in flight recreates the activity, which awaits the same check instead of starting or
+        // skipping one.
+        private val startupScope = CoroutineScope(SupervisorJob() + dispatchers.io)
+        private val startupMutex = Mutex()
+        private var startupCheck: Deferred<AvailableUpdate?>? = null
+        private var startupUpdateConsumed = false
+
+        /**
+         * The result of the process's one startup check, handed out once: the first caller to
+         * receive the update owns showing it, and every later caller (a recreated activity, once
+         * the dialog has been shown or snoozed) gets null. A caller cancelled while awaiting has
+         * not consumed it, so the next activity still receives it.
+         */
+        internal suspend fun awaitStartupUpdate(currentVersionName: String): AvailableUpdate? {
+            val check =
+                startupMutex.withLock {
+                    startupCheck
+                        ?: startupScope.async { findAvailableUpdate(currentVersionName) }.also { startupCheck = it }
+                }
+            val update = check.await() ?: return null
+            return startupMutex.withLock {
+                if (startupUpdateConsumed) {
+                    null
+                } else {
+                    startupUpdateConsumed = true
+                    update
+                }
+            }
+        }
 
         internal suspend fun findAvailableUpdate(currentVersionName: String): AvailableUpdate? =
             try {
