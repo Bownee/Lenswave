@@ -3,6 +3,7 @@ import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.application) apply false
+    alias(libs.plugins.android.library) apply false
     alias(libs.plugins.ksp) apply false
     alias(libs.plugins.hilt) apply false
     alias(libs.plugins.kotlin.compose) apply false
@@ -85,7 +86,8 @@ tasks.register("verifySbomLicenses") {
                 val name = component["name"]?.toString().orEmpty()
                 val version = component["version"]?.toString().orEmpty()
                 val module = "$group:$name"
-                if (module == "com.bownee.lenswave:app") return@forEach
+                // Lenswave's own modules carry no POM license metadata; the policy is about third parties.
+                if (group == "com.bownee.lenswave") return@forEach
 
                 @Suppress("UNCHECKED_CAST")
                 val licenses = (component["licenses"] as? List<Map<String, Any?>>).orEmpty()

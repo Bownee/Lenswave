@@ -1,5 +1,6 @@
 package com.bownee.lenswave.gallery
 
+import com.bownee.lenswave.proton.ProtonPhotoMutations
 import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn

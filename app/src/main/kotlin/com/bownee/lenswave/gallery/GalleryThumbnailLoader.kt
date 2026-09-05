@@ -2,6 +2,7 @@ package com.bownee.lenswave.gallery
 
 import android.graphics.Bitmap
 import com.bownee.lenswave.proton.ProtonAlbum
+import com.bownee.lenswave.proton.ProtonThumbnailImageSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers

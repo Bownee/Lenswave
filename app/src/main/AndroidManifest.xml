@@ -229,17 +229,6 @@
                 tools:node="remove" />
         </provider>
 
-        <!-- The pause action of the thumbnail download notification; only this app holds its PendingIntent. -->
-        <receiver
-            android:name=".proton.ProtonThumbnailPauseReceiver"
-            android:exported="false" />
-
-        <!-- WorkManager promotes long-running thumbnail downloads to a data-sync service. -->
-        <service
-            android:name="androidx.work.impl.foreground.SystemForegroundService"
-            android:foregroundServiceType="dataSync"
-            tools:node="merge" />
-
         <!-- WorkManager uses JobScheduler on Lenswave's API 29+ devices. -->
         <service
             android:name="androidx.work.impl.background.systemalarm.SystemAlarmService"

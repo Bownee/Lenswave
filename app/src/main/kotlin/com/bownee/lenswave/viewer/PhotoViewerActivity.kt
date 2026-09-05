@@ -35,12 +35,12 @@ import com.bownee.lenswave.gallery.GalleryNavigationCodec
 import com.bownee.lenswave.gallery.MediaKind
 import com.bownee.lenswave.gallery.PhotoDeletionDecision
 import com.bownee.lenswave.gallery.PhotoDeletionPolicy
-import com.bownee.lenswave.gallery.ProtonOriginalMediaSource
-import com.bownee.lenswave.gallery.ProtonThumbnailImageSource
 import com.bownee.lenswave.gallery.StoredGalleryNavigation
 import com.bownee.lenswave.gallery.TrashConfirmationDialogFragment
 import com.bownee.lenswave.metadata.PhotoMetadataHints
 import com.bownee.lenswave.metadata.PhotoMetadataReader
+import com.bownee.lenswave.proton.ProtonOriginalMediaSource
+import com.bownee.lenswave.proton.ProtonThumbnailImageSource
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers

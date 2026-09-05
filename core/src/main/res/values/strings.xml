@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="metadata_file_name">File name</string>
+    <string name="metadata_captured">Captured</string>
+    <string name="metadata_dimensions">Dimensions</string>
+    <string name="metadata_dimensions_value">%1$d × %2$d px</string>
+    <string name="metadata_file_size">File size</string>
+    <string name="metadata_format">Format</string>
+    <string name="metadata_camera">Camera</string>
+    <string name="metadata_lens">Lens</string>
+    <string name="metadata_aperture">Aperture</string>
+    <string name="metadata_aperture_value">f/%1$s</string>
+    <string name="metadata_exposure">Exposure</string>
+    <string name="metadata_exposure_value">%1$s s</string>
+    <string name="metadata_iso">ISO</string>
+    <string name="metadata_focal_length">Focal length</string>
+    <string name="metadata_focal_length_value">%1$s mm</string>
+    <string name="metadata_description">Description</string>
+    <string name="metadata_artist">Artist</string>
+    <string name="metadata_copyright">Copyright</string>
+    <string name="metadata_coordinates">Coordinates</string>
+    <string name="metadata_gps_altitude">GPS altitude</string>
+    <string name="metadata_gps_altitude_value">%1$.1f m</string>
+    <string name="metadata_gps_direction">GPS direction</string>
+    <string name="metadata_gps_direction_value">%1$s°</string>
+</resources>
