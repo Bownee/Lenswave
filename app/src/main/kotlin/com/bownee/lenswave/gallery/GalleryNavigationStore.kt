@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.core.content.edit
 import com.bownee.lenswave.proton.ProtonAlbumReference
 import com.bownee.lenswave.proton.ProtonMediaTag
+import com.bownee.lenswave.proton.SharedPreferencesProtonThumbnailPauseStore
 import com.bownee.lenswave.viewer.ViewerPrivacySettings
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -85,18 +86,12 @@ internal object GalleryNavigationCodec {
  * is no guarantee the load has finished by the time the activity starts.
  */
 internal object GalleryPreferenceWarmUp {
-    /**
-     * Mirrors SharedPreferencesProtonThumbnailPauseStore.PREFERENCES_NAME, which is private to
-     * the proton package; a mismatch only costs the warm-up, the store still reads its own file.
-     */
-    private const val THUMBNAIL_PAUSE_PREFERENCES_NAME = "thumbnail-downloads"
-
     fun warm(context: Context) {
         context.getSharedPreferences(SharedPreferencesGalleryNavigationStore.PREFERENCES_NAME, Context.MODE_PRIVATE).all
         context.getSharedPreferences(GalleryNotificationPermissionPrompter.PREFERENCES_NAME, Context.MODE_PRIVATE).all
         context.getSharedPreferences(ViewerPrivacySettings.PREFERENCES_NAME, Context.MODE_PRIVATE).all
         // The pause flag is read by every thumbnail run request, the first of them from the gallery's resume.
-        context.getSharedPreferences(THUMBNAIL_PAUSE_PREFERENCES_NAME, Context.MODE_PRIVATE).all
+        context.getSharedPreferences(SharedPreferencesProtonThumbnailPauseStore.PREFERENCES_NAME, Context.MODE_PRIVATE).all
     }
 }
 
