@@ -371,6 +371,7 @@ internal class ProtonThumbnailQueue(
                         retryAtMillis = now + retryDelayMillis(retryCount),
                     )
             }
+            if (dropped > 0) pruneSuppressed(userId, now)
             val settled = successfulNodeUids + failedNodeUids
             claimedNodeUids[userId]?.let { claimed ->
                 claimed.removeAll(settled)
@@ -571,11 +572,31 @@ internal class ProtonThumbnailQueue(
 
     /** Only under [mutex]: the nodes still kept out of the queue, with the expired ones forgotten. */
     private fun suppressedNodeUids(userId: String): Set<String> {
-        val suppressed = suppressedUntilByUser[userId] ?: return emptySet()
-        val now = clock.nowMillis()
+        pruneSuppressed(userId, clock.nowMillis())
+        return suppressedUntilByUser[userId]?.keys.orEmpty()
+    }
+
+    /**
+     * Only under [mutex]. Forgets the suppressions that have expired and, past
+     * [MAX_SUPPRESSED_NODES], the ones that expire soonest: the map is per process and used to
+     * grow with every dropped node for as long as the process lived, and a reconciliation is
+     * not the only place that has to keep it in check, since a process that never reconciles
+     * again still drops nodes.
+     */
+    private fun pruneSuppressed(
+        userId: String,
+        now: Long,
+    ) {
+        val suppressed = suppressedUntilByUser[userId] ?: return
         suppressed.values.removeAll { until -> until <= now }
+        val excess = suppressed.size - MAX_SUPPRESSED_NODES
+        if (excess > 0) {
+            suppressed.entries
+                .sortedBy { (_, until) -> until }
+                .take(excess)
+                .forEach { (nodeUid, _) -> suppressed.remove(nodeUid) }
+        }
         if (suppressed.isEmpty()) suppressedUntilByUser.remove(userId)
-        return suppressed.keys
     }
 
     private fun retryDelayMillis(retryCount: Int): Long {
@@ -602,6 +623,9 @@ internal class ProtonThumbnailQueue(
 
         /** How long a dropped node stays out of the queue whatever the listings say. */
         const val SUPPRESSION_MILLIS = 7L * 24L * 60L * 60L * 1_000L
+
+        /** How many dropped nodes per user are remembered at most; the newest drops win. */
+        const val MAX_SUPPRESSED_NODES = 10_000
 
         /** The pause after a connection failure; long enough for the network to settle, no more. */
         const val NETWORK_RETRY_MILLIS = 10_000L

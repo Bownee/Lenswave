@@ -767,6 +767,42 @@ class ProtonThumbnailQueueTest {
         }
 
     @Test
+    fun suppressionsAreCappedAtTheNewestDrops() =
+        runTest {
+            val clock = FakeClock()
+            val queue = queue(FakeStore(), clock)
+            val newer = (1..ProtonThumbnailQueue.MAX_SUPPRESSED_NODES).map { index -> "newer-$index" }
+            queue.replaceSource(USER_ID, "timeline", candidates("oldest", *newer.toTypedArray()))
+            queue.claimReady(USER_ID, limit = newer.size + 1)
+            queue.settle(USER_ID, emptySet(), mapOf("oldest" to ThumbnailFailureKind.NOT_FOUND))
+            clock.value += 1_000L
+
+            queue.settle(USER_ID, emptySet(), newer.associateWith { ThumbnailFailureKind.NOT_FOUND })
+            assertEquals(0, queue.pendingCount(USER_ID))
+
+            // The cap made room by forgetting the drop that expires soonest; the rest hold.
+            queue.replaceSource(USER_ID, "timeline", candidates("oldest", *newer.toTypedArray()))
+            assertEquals(listOf("oldest"), queue.claimReady(USER_ID, limit = 5).map { it.nodeUid })
+        }
+
+    @Test
+    fun anExpiredSuppressionIsForgottenBySettleToo() =
+        runTest {
+            val clock = FakeClock()
+            val queue = queue(FakeStore(), clock)
+            queue.replaceSource(USER_ID, "timeline", candidates("expired", "fresh", "fine"))
+            queue.claimReady(USER_ID, limit = 3)
+            queue.settle(USER_ID, emptySet(), mapOf("expired" to ThumbnailFailureKind.NOT_FOUND))
+            clock.value += ProtonThumbnailQueue.SUPPRESSION_MILLIS
+
+            // No reconciliation in between: the drop below is what prunes the expired one.
+            queue.settle(USER_ID, setOf("fine"), mapOf("fresh" to ThumbnailFailureKind.NOT_FOUND))
+            queue.replaceSource(USER_ID, "timeline", candidates("expired", "fresh"))
+
+            assertEquals(listOf("expired"), queue.claimReady(USER_ID, limit = 3).map { it.nodeUid })
+        }
+
+    @Test
     fun forgettingAUserForgetsItsSuppressions() =
         runTest {
             val queue = queue(FakeStore(), FakeClock())
