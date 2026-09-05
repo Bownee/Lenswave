@@ -16,8 +16,6 @@ class ProtonThumbnailForegroundBudgetPolicyTest {
                 ProtonForegroundRun(endedAtMillis = now - window - 1L, durationMillis = hour),
                 ProtonForegroundRun(endedAtMillis = now - window + 1L, durationMillis = 2 * hour),
                 ProtonForegroundRun(endedAtMillis = now - hour, durationMillis = hour),
-                // A run from a clock that jumped forward is not counted against today.
-                ProtonForegroundRun(endedAtMillis = now + hour, durationMillis = hour),
             )
 
         assertEquals(3 * hour, ProtonThumbnailForegroundBudgetPolicy.usedMillis(runs, now))
@@ -25,6 +23,29 @@ class ProtonThumbnailForegroundBudgetPolicyTest {
             listOf(now - window + 1L, now - hour),
             ProtonThumbnailForegroundBudgetPolicy.prune(runs, now).map(ProtonForegroundRun::endedAtMillis),
         )
+    }
+
+    @Test
+    fun `a clock that went backwards keeps the history instead of erasing it`() {
+        // Two runs recorded, then the wall clock is set back by half a day.
+        val recorded =
+            ProtonThumbnailForegroundBudgetPolicy.record(
+                listOf(ProtonForegroundRun(endedAtMillis = now - hour, durationMillis = 2 * hour)),
+                ProtonForegroundRun(endedAtMillis = now, durationMillis = 2 * hour),
+                now,
+            )
+        val earlier = now - 12 * hour
+
+        val pruned = ProtonThumbnailForegroundBudgetPolicy.prune(recorded, earlier)
+
+        // Both count as having just ended, and the budget still holds them.
+        assertEquals(listOf(earlier, earlier), pruned.map(ProtonForegroundRun::endedAtMillis))
+        assertEquals(4 * hour, ProtonThumbnailForegroundBudgetPolicy.usedMillis(recorded, earlier))
+        assertEquals(window, ProtonThumbnailForegroundBudgetPolicy.delayUntilAffordableMillis(recorded, earlier))
+        // Recording under the earlier clock writes the clamped stamps, so the history stays consistent.
+        val rerecorded =
+            ProtonThumbnailForegroundBudgetPolicy.record(recorded, ProtonForegroundRun(earlier, 1L), earlier)
+        assertEquals(listOf(earlier, earlier, earlier), rerecorded.map(ProtonForegroundRun::endedAtMillis))
     }
 
     @Test
