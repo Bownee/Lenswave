@@ -71,14 +71,25 @@ jobs:
         with:
           persist-credentials: false
 
-      # Build mode "none" extracts the Kotlin and Java sources without compiling them, so the job
-      # needs neither the Android SDK nor a Gradle build: the traced assembleDebug it replaced was
-      # a full uncached compile that took 6 to 16 minutes on the hosted runner.
+      - name: Set up Android build environment
+        uses: ./.github/actions/setup-android
+
+      # Build mode "none" is not an option: the buildless Java extractor sees no Kotlin sources and
+      # the database ends up empty, so the compiler has to run under CodeQL's tracer.
       - name: Initialize CodeQL
         uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
         with:
           languages: java-kotlin
-          build-mode: none
+          build-mode: manual
+
+      # CodeQL only sees code the compiler processes in this job. Pull request builds save the
+      # Gradle build cache, so without --no-build-cache the compile tasks would be restored from it
+      # and the database would end up empty. Only the Kotlin compile (and the KSP run it depends
+      # on) is traced; dexing and packaging add nothing to the database.
+      - name: Compile analyzed sources
+        run: |
+          chmod +x gradlew
+          ./gradlew compileDebugKotlin --no-build-cache --stacktrace
 
       - name: Analyze
         uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
