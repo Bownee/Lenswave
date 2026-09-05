@@ -1,6 +1,7 @@
 package com.bownee.lenswave.proton
 
 import com.bownee.lenswave.gallery.ProtonSessionLifecycle
+import com.bownee.lenswave.viewer.ViewerMutationCoordinator
 import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
@@ -14,6 +15,11 @@ fun interface ProtonAccountCacheCleaner {
     fun retainOnlyUser(userId: String?)
 }
 
+/** Drops queued and in-flight photo mutation outcomes; they belong to the account that is going. */
+fun interface ProtonAccountMutationForgetter {
+    fun forgetAll()
+}
+
 @Singleton
 class ProtonAccountTransitionCoordinator
     @Inject
@@ -21,6 +27,7 @@ class ProtonAccountTransitionCoordinator
         private val sessionLifecycle: ProtonSessionLifecycle,
         private val cacheCleaner: ProtonAccountCacheCleaner,
         private val thumbnailScheduler: ProtonThumbnailScheduler,
+        private val mutationForgetter: ProtonAccountMutationForgetter,
     ) {
         private val swept = AtomicBoolean()
 
@@ -41,6 +48,9 @@ class ProtonAccountTransitionCoordinator
 
             previousUserId?.let { thumbnailScheduler.cancelAndAwait(it) }
             previousUserId?.let { sessionLifecycle.disconnect(it) }
+            // After the disconnect: a mutation still running ends with a session change and
+            // would otherwise re-queue a failed outcome for a viewer of the next account.
+            mutationForgetter.forgetAll()
             nextUserId?.let { sessionLifecycle.activate(it) }
             cacheCleaner.retainOnlyUser(nextUserId?.id)
             swept.set(true)
@@ -52,4 +62,9 @@ class ProtonAccountTransitionCoordinator
 @InstallIn(SingletonComponent::class)
 internal abstract class ProtonAccountTransitionModule {
     @Binds abstract fun bindProtonAccountCacheCleaner(implementation: ProtonPhotoCache): ProtonAccountCacheCleaner
+
+    @Binds
+    abstract fun bindProtonAccountMutationForgetter(
+        implementation: ViewerMutationCoordinator,
+    ): ProtonAccountMutationForgetter
 }

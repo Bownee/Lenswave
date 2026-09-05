@@ -133,6 +133,7 @@ class ProtonAccountSessionManagerTest {
                             if (failRetains-- > 0) error("cache directory is busy")
                         },
                     thumbnailScheduler = FakeThumbnailScheduler(events),
+                    mutationForgetter = ProtonAccountMutationForgetter {},
                 ),
             reportFailure = { operation, _ -> failures += operation },
             scope = scope,

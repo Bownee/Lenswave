@@ -522,11 +522,17 @@ class GalleryActivity :
         if (viewerLaunched) return
         viewerLaunched = true
         val assets = currentUiState.visibleAssets
-        // Verified here so createIntent can take the index instead of searching the list once its
-        // signature (viewer-owned) accepts one; until then it still locates the photo itself.
+        // Verified here so createIntent can trust the index instead of searching the whole list.
         val tapped = assets.getOrNull(index)?.takeIf { it.stableId == photo.stableId } ?: photo
         viewerLauncher.launch(
-            PhotoViewerActivity.createIntent(this, tapped, userId, assets, currentUiState.destination),
+            PhotoViewerActivity.createIntent(
+                this,
+                tapped,
+                userId,
+                assets,
+                currentUiState.destination,
+                currentIndex = index,
+            ),
         )
     }
 

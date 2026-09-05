@@ -313,8 +313,10 @@ class ProtonPhotoGateway internal constructor(
                         .map { it.nodeUid.value }
                         .toSet()
                 if (successful.isNotEmpty()) {
-                    timeline.removePhotos(userId, successful)
+                    // Listings before renditions: the timeline removal deletes the files, so the
+                    // album indexes must have dropped the photo first.
                     albums.removePhotos(userId, successful)
+                    timeline.removePhotos(userId, successful)
                 }
                 ProtonTrashResult(
                     trashedCount = successful.size,

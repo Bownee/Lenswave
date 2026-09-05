@@ -4,6 +4,7 @@ import android.app.Application
 import com.bownee.lenswave.gallery.GalleryPreferenceWarmUp
 import com.bownee.lenswave.proton.ProtonAccountSessionManager
 import com.bownee.lenswave.proton.ProtonCoreDatabase
+import com.bownee.lenswave.proton.ProtonSessionCache
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
 import dagger.hilt.android.EntryPointAccessors
@@ -32,9 +33,28 @@ class LenswaveApplication : Application() {
         fun accountManager(): AccountManager
 
         fun accountSessionManager(): ProtonAccountSessionManager
+
+        fun sessionCache(): ProtonSessionCache
     }
 
     private val startupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /**
+     * The UI leaving the screen is the one process-wide "app went to the background" signal
+     * available without a lifecycle dependency; the plaintext copies of originals advertise a
+     * 30 minute TTL, and this is where a long-lived idle process honours it.
+     */
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= TRIM_MEMORY_UI_HIDDEN) {
+            startupScope.launch {
+                EntryPointAccessors
+                    .fromApplication(this@LenswaveApplication, StartupEntryPoint::class.java)
+                    .sessionCache()
+                    .sweepExpiredDecryptedCopies()
+            }
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()

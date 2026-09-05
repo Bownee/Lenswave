@@ -50,7 +50,8 @@ class ProtonPhotoCacheInstrumentedTest {
             activeTarget.writeText("in progress")
             cache.reconcilePhotos(userId, emptyList(), listOf("active"))
             assertTrue(activeTarget.exists())
-            cache.reconcilePhotos(userId, emptyList(), emptyList())
+            // A reconcile that changes nothing sweeps nothing; the removal has to be visible to it.
+            cache.reconcilePhotos(userId, cachedNodeUids = listOf("active"), remoteNodeUids = emptyList())
             assertFalse(activeTarget.exists())
 
             val (plaintext, encrypted) = cache.createOriginalTarget(userId, "bounded")

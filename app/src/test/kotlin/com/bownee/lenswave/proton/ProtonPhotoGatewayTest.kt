@@ -746,6 +746,10 @@ class ProtonPhotoGatewayTest {
             onTrimUser(userId)
         }
 
+        override fun sweepExpiredDecryptedCopies() {
+            events += "sweepExpiredDecryptedCopies"
+        }
+
         private fun List<ProtonGalleryPhoto>.hydrated(availability: ProtonStoredRenditions) =
             map { photo -> availability.photo(photo.nodeUid, photo.captureTimeEpochSeconds) }
     }

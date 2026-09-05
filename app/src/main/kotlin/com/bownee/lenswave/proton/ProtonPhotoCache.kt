@@ -387,6 +387,10 @@ internal class ProtonPhotoCache
             forgetRenditions(userId)
         }
 
+        override fun sweepExpiredDecryptedCopies() {
+            originals.sweepExpiredDecryptedCopies()
+        }
+
         /**
          * An atomic write leaves its `.part` file beside the target when the process dies between
          * the write and the rename, and nothing else ever removes it. Only the directories the
@@ -554,6 +558,16 @@ internal class ProtonPhotoCache
                     LenswaveOperation.CACHE_CLEAR,
                     IllegalStateException("Could not remove all orphaned Proton caches; residue is swept later"),
                 )
+            }
+            // A user who only ever cached originals has no metadata directory and so no alias
+            // marker; the key family recorded beside each wrapped key finds that key anyway.
+            val retainedAlias = userId?.let { secureFiles.keyAlias(scope(it)) }
+            secureFiles.keyAliases(MEDIA_KEY_FAMILY).filter { alias -> alias != retainedAlias }.forEach { alias ->
+                try {
+                    secureFiles.deleteKeyAlias(alias)
+                } catch (error: IllegalArgumentException) {
+                    LenswaveDiagnostics.reportFailure(LenswaveOperation.CACHE_CLEAR, error)
+                }
             }
             originals.retainOnly(userId)
             thumbnails.retainMemoryFor(userId)
@@ -734,6 +748,9 @@ internal class ProtonPhotoCache
 
         private companion object {
             const val KEY_ALIAS_FILE = "key-alias"
+
+            /** The scope family of every media key: [ProtonStorageLayout.mediaScope] before the user id. */
+            val MEDIA_KEY_FAMILY = ProtonStorageLayout.mediaScope("").substringBefore(':')
             const val TAGS_DIRECTORY = "tags"
             const val SYNC_DIRECTORY = "sync"
         }

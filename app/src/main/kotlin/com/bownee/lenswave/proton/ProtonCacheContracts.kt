@@ -201,6 +201,9 @@ interface ProtonSessionCache {
 
     /** Expiry and size-cap housekeeping; safe to run while the session is in use. */
     fun trimUser(userId: String)
+
+    /** Deletes every plaintext copy past its TTL, for any user; run when the app leaves the screen. */
+    fun sweepExpiredDecryptedCopies()
 }
 
 /** Persistence for the download queues; each [ProtonQueueName] maps to its own file per user. */

@@ -68,13 +68,30 @@ class ProtonAccountTransitionCoordinatorTest {
             assertEquals(listOf("activate:a", "retain:a", "enqueue:a"), events)
         }
 
+    @Test
+    fun aRealTransitionForgetsQueuedMutationOutcomesAfterTheDisconnect() =
+        runBlocking {
+            val events = mutableListOf<String>()
+            val coordinator =
+                coordinator(events, mutationForgetter = ProtonAccountMutationForgetter { events += "forget-mutations" })
+
+            coordinator.transition(UserId("a"), UserId("b"))
+
+            assertEquals(
+                listOf("cancel:a", "disconnect:a", "forget-mutations", "activate:b", "retain:b", "enqueue:b"),
+                events,
+            )
+        }
+
     private fun coordinator(
         events: MutableList<String>,
         sessionLifecycle: ProtonSessionLifecycle = FakeSessionLifecycle(events),
+        mutationForgetter: ProtonAccountMutationForgetter = ProtonAccountMutationForgetter {},
     ) = ProtonAccountTransitionCoordinator(
         sessionLifecycle = sessionLifecycle,
         cacheCleaner = ProtonAccountCacheCleaner { userId -> events += "retain:$userId" },
         thumbnailScheduler = FakeThumbnailScheduler(events),
+        mutationForgetter = mutationForgetter,
     )
 
     private class FakeThumbnailScheduler(

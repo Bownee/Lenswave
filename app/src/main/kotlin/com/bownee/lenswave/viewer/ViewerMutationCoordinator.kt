@@ -2,6 +2,7 @@ package com.bownee.lenswave.viewer
 
 import com.bownee.lenswave.gallery.PhotoDeletionExecutor
 import com.bownee.lenswave.gallery.ProtonPhotoMutations
+import com.bownee.lenswave.proton.ProtonAccountMutationForgetter
 import com.bownee.lenswave.proton.ProtonSessionChangedException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -32,7 +33,7 @@ class ViewerMutationCoordinator internal constructor(
     private val photoMutations: ProtonPhotoMutations,
     private val deletionExecutor: PhotoDeletionExecutor,
     private val scope: CoroutineScope,
-) {
+) : ProtonAccountMutationForgetter {
     @Inject
     constructor(
         photoMutations: ProtonPhotoMutations,
@@ -95,7 +96,7 @@ class ViewerMutationCoordinator internal constructor(
      * must find its buttons held by them. A call still running ends with a session change and
      * would re-queue a failed outcome; clearing after the transition's disconnect avoids that.
      */
-    fun forgetAll() {
+    override fun forgetAll() {
         pending.value = emptyList()
         inFlight.value = emptySet()
     }
