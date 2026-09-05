@@ -129,6 +129,10 @@ class GalleryActivity :
     private var pendingScrollRestore: GalleryDestination? = null
     private var pendingSelectionRestore = false
     private var viewerLaunched = false
+
+    // Set while consumeViewerOutcomes drains: each consume republishes the pending list and the
+    // Main.immediate collector re-enters with the remainder before the loop has finished with it.
+    private var drainingOutcomes = false
     private var safeBottom = 0
     private var thumbnailCacheIdentity: GalleryThumbnailCacheIdentity? = null
 
@@ -312,9 +316,15 @@ class GalleryActivity :
      * While a viewer launched from here is up, its own collector owns them.
      */
     private fun consumeViewerOutcomes(outcomes: List<ViewerMutationCoordinator.Outcome>) {
-        if (!GalleryViewerOutcomePolicy.consumesNow(viewerLaunched, outcomes)) return
+        if (drainingOutcomes || !GalleryViewerOutcomePolicy.consumesNow(viewerLaunched, outcomes)) return
         val summary = GalleryViewerOutcomePolicy.summarize(outcomes)
-        outcomes.forEach(mutationCoordinator::consume)
+        // TODO(consumeAll): replace the loop with mutationCoordinator.consumeAll(outcomes) once it lands.
+        drainingOutcomes = true
+        try {
+            outcomes.forEach(mutationCoordinator::consume)
+        } finally {
+            drainingOutcomes = false
+        }
         if (summary.refresh) viewModel.refreshAfterMutation()
         if (summary.failedFavorite) Toast.makeText(this, R.string.could_not_update_favorite, Toast.LENGTH_LONG).show()
         if (summary.failedTrash) Toast.makeText(this, R.string.could_not_move_to_proton_trash, Toast.LENGTH_LONG).show()
