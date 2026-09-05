@@ -83,6 +83,23 @@ class ProtonDatabaseKeyMigrationTest {
     }
 
     @Test
+    fun `a marker that cannot be written is reported and the process still probes only once`() {
+        val database = database().apply { writeText("db") }
+        // A directory where the marker file should go: createNewFile cannot succeed.
+        val marker = ProtonDatabaseKeyMigration.keyedMarker(database).apply { mkdirs() }
+        val probe = FakeProbe(keyedWith = passphrase)
+
+        migrate(database, probe)
+        val opensAfterFirst = probe.opens
+        migrate(database, probe)
+
+        assertTrue(marker.isDirectory)
+        assertEquals(1, reported.size)
+        assertTrue(opensAfterFirst > 0)
+        assertEquals(opensAfterFirst, probe.opens)
+    }
+
+    @Test
     fun `a failed rekey discards the database`() {
         val database = database().apply { writeText("db") }
         val probe = FakeProbe(keyedWith = legacyPassphrase, rekeyFails = true)

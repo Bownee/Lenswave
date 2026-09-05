@@ -4,6 +4,8 @@ import com.bownee.lenswave.LenswaveDiagnostics
 import com.bownee.lenswave.LenswaveOperation
 import net.zetetic.database.sqlcipher.SQLiteDatabase
 import java.io.File
+import java.io.IOException
+import java.util.concurrent.ConcurrentHashMap
 
 /** The SQLCipher operations the migration needs; a seam so its decisions run without the native library. */
 internal interface DatabaseKeyProbe {
@@ -59,13 +61,37 @@ internal object ProtonDatabaseKeyMigration {
     ) {
         val marker = keyedMarker(databaseFile)
         if (passphraseReplaced) {
+            verifiedInProcess.remove(databaseFile.path)
             marker.delete()
-        } else if (marker.isFile) {
+        } else if (databaseFile.path in verifiedInProcess || marker.isFile) {
             return
         }
         if (!rekey(databaseFile, passphrase, probe, reportFailure)) return
-        marker.parentFile?.mkdirs()
-        runCatching { marker.createNewFile() }
+        verifiedInProcess.add(databaseFile.path)
+        recordKeyed(marker, reportFailure)
+    }
+
+    /**
+     * A marker that cannot be written is reported rather than swallowed: the probe would
+     * otherwise run silently on every launch. The in-process set still spares this process a
+     * second probe.
+     */
+    private fun recordKeyed(
+        marker: File,
+        reportFailure: (Throwable) -> Unit,
+    ) {
+        try {
+            marker.parentFile?.mkdirs()
+            if (!marker.createNewFile() && !marker.isFile) {
+                reportFailure(
+                    IllegalStateException(
+                        "Could not record the session database key; the probe runs again next launch",
+                    ),
+                )
+            }
+        } catch (error: IOException) {
+            reportFailure(error)
+        }
     }
 
     /** Sits beside the database so a cleared app storage removes both together. */
@@ -111,6 +137,9 @@ internal object ProtonDatabaseKeyMigration {
     }
 
     private const val MARKER_SUFFIX = ".keyed"
+
+    /** Databases known to open with the real passphrase since this process started. */
+    private val verifiedInProcess: MutableSet<String> = ConcurrentHashMap.newKeySet()
 }
 
 /** The real SQLCipher; every call copies the passphrase it is handed, see [ProtonDatabaseKeyMigration]. */
