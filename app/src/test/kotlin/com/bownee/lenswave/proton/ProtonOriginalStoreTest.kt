@@ -117,6 +117,22 @@ class ProtonOriginalStoreTest {
         assertFalse(decryptedCopy().exists())
     }
 
+    @Test
+    fun `clearing a user or retaining another forgets the user's removal epochs`() {
+        store.remove(USER, NODE)
+        store.remove("other", NODE)
+        assertEquals(1L, store.createTarget(USER, NODE).removalEpoch)
+
+        store.clear(USER)
+
+        assertEquals(0L, store.createTarget(USER, NODE).removalEpoch)
+        assertEquals(1L, store.createTarget("other", NODE).removalEpoch)
+
+        store.retainOnly(USER)
+
+        assertEquals(0L, store.createTarget("other", NODE).removalEpoch)
+    }
+
     private fun decryptedCopy(): File =
         File(
             File(File(temporaryFolder.root, ProtonStorageLayout.DECRYPTED_DIRECTORY), AtomicFileStore.safeName(USER)),

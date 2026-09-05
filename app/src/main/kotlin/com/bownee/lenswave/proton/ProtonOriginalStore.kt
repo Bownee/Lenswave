@@ -157,8 +157,7 @@ internal class ProtonOriginalStore(
         // Read before the decrypt: an oversized legacy original is deleted by the decrypt
         // itself, and its length is gone by the time the tracked total is adjusted below.
         val encryptedBytes = file.length()
-        val key = removalKey(userId, nodeUid)
-        val startedIn = removals.current(key)
+        val startedIn = removals.current(userId, nodeUid)
         // The decrypt writes its own temporary and only the gated rename touches the shared
         // path, so a failure or a cancellation has nothing of the shared path to delete; a
         // copy another decrypt committed meanwhile is left alone.
@@ -172,7 +171,7 @@ internal class ProtonOriginalStore(
                 onBytesWritten,
                 shouldContinue,
             ) { commit ->
-                if (!removals.commitIf(key, startedIn, commit)) throw ProtonOriginalRemovedException()
+                if (!removals.commitIf(userId, nodeUid, startedIn, commit)) throw ProtonOriginalRemovedException()
             }
             transientReadFailures.recovered()
             file.setLastModified(clock.nowMillis())
@@ -211,7 +210,7 @@ internal class ProtonOriginalStore(
         materialized.parentFile?.mkdirs()
         target.parentFile?.mkdirs()
         val plaintext = File.createTempFile("${materialized.name}.", ".part", materialized.parentFile)
-        return ProtonOriginalTarget(plaintext, target, removals.current(removalKey(userId, nodeUid)))
+        return ProtonOriginalTarget(plaintext, target, removals.current(userId, nodeUid))
     }
 
     /**
@@ -239,7 +238,6 @@ internal class ProtonOriginalStore(
         ) {
             "Downloaded Proton media must use its own cache target"
         }
-        val key = removalKey(userId, nodeUid)
         var committed = false
         var encryptedStored = false
         var plaintextFailure: Exception? = null
@@ -259,7 +257,7 @@ internal class ProtonOriginalStore(
                 "Could not protect downloaded photo",
             ) { commit ->
                 committed =
-                    removals.commitIf(key, download.removalEpoch) {
+                    removals.commitIf(userId, nodeUid, download.removalEpoch) {
                         commit()
                         encryptedStored = true
                         movePlaintext()
@@ -268,7 +266,7 @@ internal class ProtonOriginalStore(
         } catch (error: Exception) {
             // Nothing landed; the plaintext alone is committed, under the same gate.
             reportFailure(LenswaveOperation.ORIGINAL_CACHE_STORE, error)
-            committed = removals.commitIf(key, download.removalEpoch, ::movePlaintext)
+            committed = removals.commitIf(userId, nodeUid, download.removalEpoch, ::movePlaintext)
         }
         if (!committed) {
             download.plaintext.delete()
@@ -329,7 +327,7 @@ internal class ProtonOriginalStore(
         userId: String,
         nodeUid: String,
     ) {
-        removals.remove(removalKey(userId, nodeUid)) {
+        removals.remove(userId, nodeUid) {
             deleteTracked(userId, file(userId, nodeUid))
             decryptedFile(userId, nodeUid).delete()
         }
@@ -355,9 +353,14 @@ internal class ProtonOriginalStore(
         trackedBytes.remove(userId)
     }
 
-    /** Removes every original of one user; false when something could not be deleted. */
+    /**
+     * Removes every original of one user; false when something could not be deleted. The user's
+     * removal epochs go with the files: they ordered commits against removals of files that no
+     * longer exist, and the transfers were stopped before this (see the gateway's disconnect).
+     */
     fun clear(userId: String): Boolean {
         trackedBytes.remove(userId)
+        removals.forget(userId)
         val originalsDeleted = directory(userId).deleteRecursively()
         val decryptedDeleted = decryptedDirectory(userId).deleteRecursively()
         return originalsDeleted && decryptedDeleted
@@ -370,6 +373,7 @@ internal class ProtonOriginalStore(
      */
     fun retainOnly(userId: String?) {
         trackedBytes.keys.removeAll { key -> key != userId }
+        removals.retainOnly(userId)
         val retainedName = userId?.let(AtomicFileStore::safeName)
         var deleted = true
         listOf(originals, decrypted).forEach { root ->
@@ -469,11 +473,6 @@ internal class ProtonOriginalStore(
     private fun decryptedDirectory(userId: String): File = File(decrypted, AtomicFileStore.safeName(userId))
 
     private fun scope(userId: String): String = ProtonStorageLayout.mediaScope(userId)
-
-    private fun removalKey(
-        userId: String,
-        nodeUid: String,
-    ): String = "$userId:$nodeUid"
 
     private fun isStalePartial(file: File): Boolean =
         file.extension == "part" && isExpired(file, ProtonStorageLayout.STALE_PART_TTL_MILLIS)
