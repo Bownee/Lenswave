@@ -32,11 +32,11 @@ internal class ProtonThumbnailStore
     ) {
         private val root = File(context.filesDir, ProtonStorageLayout.METADATA_DIRECTORY).apply { mkdirs() }
         private val bitmaps =
-            object : LruCache<ThumbnailKey, Bitmap>(bitmapCacheSize()) {
+            object : LruCache<ThumbnailKey, CachedBitmap>(bitmapCacheSize()) {
                 override fun sizeOf(
                     key: ThumbnailKey,
-                    value: Bitmap,
-                ): Int = value.byteCount / 1_024
+                    value: CachedBitmap,
+                ): Int = value.bitmap.byteCount / 1_024
             }
         private val locks = Array(LOCK_COUNT) { Any() }
         private val transientReadFailures = ProtonRenditionReadFailures()
@@ -65,7 +65,7 @@ internal class ProtonThumbnailStore
         fun peek(
             userId: String,
             nodeUid: String,
-        ): Bitmap? = bitmaps.get(ThumbnailKey(userId, nodeUid))?.takeUnless(Bitmap::isRecycled)
+        ): Bitmap? = bitmaps.get(ThumbnailKey(userId, nodeUid))?.bitmap?.takeUnless(Bitmap::isRecycled)
 
         /**
          * The decoded thumbnail, from memory or disk. [isActive] is consulted before the decrypt
@@ -77,6 +77,11 @@ internal class ProtonThumbnailStore
          * it serialized every load that hashed into the same shard behind a decode. Two loads
          * of the same key racing each other decode twice, which is rare (the grid asks once per
          * bind) and cheaper than an in-flight map; the second one adopts the first's bitmap.
+         *
+         * Every cached bitmap is stamped with the file it was decoded from. A load that read the
+         * bytes before a replacing write and reaches the cache after it would otherwise pin the
+         * old picture until the next write; instead its bitmap is handed to this one bind and
+         * never cached, and the next bind decodes the new file.
          */
         fun load(
             userId: String,
@@ -116,14 +121,23 @@ internal class ProtonThumbnailStore
                 return null
             }
             return synchronized(lock(key)) {
-                val cached = bitmaps.get(key)?.takeUnless(Bitmap::isRecycled)
-                if (cached != null) {
-                    // A concurrent load or write got there first; theirs is at least as fresh.
-                    bitmap.recycle()
-                    cached
-                } else {
-                    bitmaps.put(key, bitmap)
-                    bitmap
+                val cached = bitmaps.get(key)?.takeUnless { entry -> entry.bitmap.isRecycled }
+                when {
+                    cached != null -> {
+                        // A concurrent load got there first; theirs is at least as fresh.
+                        bitmap.recycle()
+                        cached.bitmap
+                    }
+
+                    StoredFile.of(file) != observed -> {
+                        // Decoded from a file a write has since replaced: shown once, never cached.
+                        bitmap
+                    }
+
+                    else -> {
+                        bitmaps.put(key, CachedBitmap(bitmap, observed))
+                        bitmap
+                    }
                 }
             }
         }
@@ -178,7 +192,7 @@ internal class ProtonThumbnailStore
                     secureFiles.write(scope(userId), target, stored, "Could not commit thumbnail cache file")
                     if (!existed) adjustCount(userId, 1)
                     if (publishToMemory) {
-                        bitmaps.put(key, bitmap)
+                        bitmaps.put(key, CachedBitmap(bitmap, StoredFile.of(target)))
                     } else {
                         // A stale bitmap of the file this write replaced must not outlive it.
                         bitmaps.remove(key)
@@ -340,6 +354,12 @@ internal class ProtonThumbnailStore
         private data class ThumbnailKey(
             val userId: String,
             val nodeUid: String,
+        )
+
+        /** A decoded thumbnail and the stored file it came from; see [load]. */
+        private class CachedBitmap(
+            val bitmap: Bitmap,
+            val version: StoredFile,
         )
 
         /** The identity of a stored file as far as a stat can tell; a replacing write changes it. */
