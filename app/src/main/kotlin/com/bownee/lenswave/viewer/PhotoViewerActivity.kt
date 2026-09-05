@@ -315,15 +315,21 @@ class PhotoViewerActivity :
      * one that finished while recreating. Outcomes of photos outside its window are left in the
      * coordinator for the gallery (see [ViewerOutcomePolicy]); an outcome taken here is recorded
      * in the result before anything else, so the gallery's refresh cannot be lost to a finish.
+     *
+     * A finishing viewer takes nothing: it stays STARTED until it is gone, but a result set after
+     * finish() never reaches the gallery, so an outcome consumed then would be lost. Left in the
+     * queue, the gallery's own collector takes it once the viewer has closed.
      */
     private fun observeMutationOutcomes() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 mutationCoordinator.outcomes.collect { outcomes ->
-                    outcomes
-                        .filter { outcome ->
-                            ViewerOutcomePolicy.consumes(outcome.stableId, request.stableId, navigationRequests)
-                        }.forEach(::applyMutationOutcome)
+                    for (outcome in outcomes) {
+                        if (isFinishing) break
+                        if (ViewerOutcomePolicy.consumes(outcome.stableId, request.stableId, navigationRequests)) {
+                            applyMutationOutcome(outcome)
+                        }
+                    }
                 }
             }
         }
