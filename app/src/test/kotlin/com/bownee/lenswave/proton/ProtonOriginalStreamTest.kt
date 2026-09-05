@@ -125,6 +125,47 @@ class ProtonOriginalStreamTest {
     }
 
     @Test
+    fun `a reader paused in a bounded wait is visible as waiting for bytes`() {
+        val stream = ProtonOriginalStream(temporaryFolder.newFile())
+        val executor = Executors.newSingleThreadExecutor()
+        try {
+            val waited = executor.submit { stream.awaitChange(5_000L) }
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2L)
+            while (!stream.waitingForBytes.value && System.nanoTime() < deadline) Thread.yield()
+            assertTrue(stream.waitingForBytes.value)
+
+            stream.bytesWritten(1)
+
+            waited.get(1L, TimeUnit.SECONDS)
+            assertFalse(stream.waitingForBytes.value)
+        } finally {
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun `waiting for completion gives up after its timeout and reports the wait meanwhile`() {
+        val stream = ProtonOriginalStream(temporaryFolder.newFile())
+        val executor = Executors.newSingleThreadExecutor()
+        try {
+            val completion = executor.submit<File> { stream.awaitCompletion(timeoutMillis = 200L) }
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2L)
+            while (!stream.waitingForBytes.value && System.nanoTime() < deadline) Thread.yield()
+            assertTrue(stream.waitingForBytes.value)
+
+            val failure = assertThrows(ExecutionException::class.java) { completion.get(5L, TimeUnit.SECONDS) }
+
+            assertTrue(failure.cause is IOException)
+            assertFalse(stream.waitingForBytes.value)
+            // A stream that completes in time hands over its file at once.
+            stream.complete()
+            assertEquals(stream.file, stream.awaitCompletion(timeoutMillis = 10L))
+        } finally {
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
     fun `failure unblocks a waiting reader`() {
         val stream = ProtonOriginalStream(temporaryFolder.newFile())
         val executor = Executors.newSingleThreadExecutor()

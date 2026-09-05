@@ -160,25 +160,56 @@ class ProtonOriginalStream(
 
     /**
      * Waits until the stream changes or [timeoutMillis] pass, for a reader whose file lags what
-     * the stream reports: a bounded pause instead of a spin.
+     * the stream reports: a bounded pause instead of a spin. The reader is out of bytes for the
+     * duration, so [waitingForBytes] is set like it is for [awaitReadable].
      */
     @Throws(IOException::class)
     fun awaitChange(timeoutMillis: Long) =
         lock.withLock {
             if (downloadComplete || failure != null) return@withLock
+            blockedReaders++
+            mutableWaitingForBytes.value = true
             try {
                 changed.await(timeoutMillis, TimeUnit.MILLISECONDS)
             } catch (error: InterruptedException) {
                 Thread.currentThread().interrupt()
                 throw IOException("Interrupted while waiting for Proton media", error)
+            } finally {
+                if (--blockedReaders == 0) mutableWaitingForBytes.value = false
             }
         }
 
-    /** Waits until every byte is on disk, then returns the final [file]. */
+    /**
+     * Waits until every byte is on disk, then returns the final [file]. The caller lost its file
+     * to the rename that ends a decrypt, so completion is moments away; a stream that has not
+     * completed after [timeoutMillis] fails the read with an [IOException] rather than holding
+     * the player's loader forever.
+     */
     @Throws(IOException::class)
-    fun awaitCompletion(): File {
-        awaitReadable(Long.MAX_VALUE)
-        return file
+    fun awaitCompletion(timeoutMillis: Long = COMPLETION_TIMEOUT_MILLIS): File {
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
+        lock.withLock {
+            blockedReaders++
+            mutableWaitingForBytes.value = true
+            try {
+                while (!downloadComplete && failure == null) {
+                    val remaining = deadline - System.nanoTime()
+                    if (remaining <= 0L) throw IOException("Timed out waiting for Proton media to complete")
+                    changed.await(remaining, TimeUnit.NANOSECONDS)
+                }
+            } catch (error: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw IOException("Interrupted while waiting for Proton media", error)
+            } finally {
+                if (--blockedReaders == 0) mutableWaitingForBytes.value = false
+            }
+            failure?.let { error -> throw IOException("Proton media download failed", error) }
+            return file
+        }
+    }
+
+    private companion object {
+        const val COMPLETION_TIMEOUT_MILLIS = 30_000L
     }
 
     /** Best effort: the age of a copy nobody can stamp simply keeps counting from the decrypt. */
