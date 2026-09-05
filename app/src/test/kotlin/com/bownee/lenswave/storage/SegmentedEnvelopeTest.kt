@@ -77,7 +77,7 @@ class SegmentedEnvelopeTest {
         val output = ByteArrayOutputStream()
 
         val error =
-            assertThrows(IllegalArgumentException::class.java) {
+            assertThrows(CorruptEnvelopeException::class.java) {
                 SegmentedEnvelope.decrypt(
                     key,
                     ByteArrayInputStream(encrypted.copyOf(HEADER + 2 * (SEGMENT + TAG))),
@@ -94,7 +94,7 @@ class SegmentedEnvelopeTest {
     fun rejectsATruncatedHeader() {
         val encrypted = encrypt(pattern(10))
 
-        assertThrows(IllegalArgumentException::class.java) { decrypt(encrypted.copyOf(HEADER - 1)) }
+        assertThrows(CorruptEnvelopeException::class.java) { decrypt(encrypted.copyOf(HEADER - 1)) }
     }
 
     @Test
@@ -164,8 +164,8 @@ class SegmentedEnvelopeTest {
         val zero = encrypted.copyOf().also { it.fill(0, 0, Int.SIZE_BYTES) }
         val huge = encrypted.copyOf().also { it[0] = 0x7f }
 
-        assertThrows(IllegalArgumentException::class.java) { decrypt(zero) }
-        assertThrows(IllegalArgumentException::class.java) { decrypt(huge) }
+        assertThrows(CorruptEnvelopeException::class.java) { decrypt(zero) }
+        assertThrows(CorruptEnvelopeException::class.java) { decrypt(huge) }
     }
 
     @Test

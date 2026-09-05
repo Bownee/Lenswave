@@ -3,6 +3,7 @@ package com.bownee.lenswave.storage
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -26,6 +27,62 @@ class AtomicFileStoreTest {
                 .orEmpty()
                 .any { it.name.endsWith(".part") },
         )
+    }
+
+    @Test
+    fun `a synced write lands the contents and leaves no temporary file`() {
+        val target = File(temporaryFolder.root, "queue.json")
+        AtomicFileStore.write(target, "first", "write failed", fsync = true)
+
+        AtomicFileStore.write(target, "second".toByteArray(), "write failed", fsync = true)
+
+        assertEquals("second", target.readText())
+        assertFalse(
+            temporaryFolder.root
+                .listFiles()
+                .orEmpty()
+                .any { it.name.endsWith(".part") },
+        )
+    }
+
+    @Test
+    fun `a synced write still honours the commit gate`() {
+        val target = File(temporaryFolder.root, "queue.json")
+        AtomicFileStore.write(target, "first", "write failed", fsync = true)
+        var gated = false
+
+        AtomicFileStore.write(target, "second".toByteArray(), "write failed", fsync = true) { commit ->
+            gated = true
+            commit()
+        }
+
+        assertTrue(gated)
+        assertEquals("second", target.readText())
+    }
+
+    @Test
+    fun `non-empty file names list only the regular non-empty files with the extension`() {
+        val directory = File(temporaryFolder.root, "thumbnails")
+        directory.mkdirs()
+        File(directory, "stored.thumb").writeText("bytes")
+        File(directory, "empty.thumb").writeText("")
+        File(directory, "partial.thumb.part").writeText("bytes")
+        File(directory, "other.preview").writeText("bytes")
+        File(directory, "nested.thumb").mkdirs()
+
+        assertEquals(setOf("stored"), AtomicFileStore.nonEmptyFileNames(directory, "thumb"))
+        assertEquals(setOf("other"), AtomicFileStore.nonEmptyFileNames(directory, "preview"))
+    }
+
+    @Test
+    fun `non-empty file names of a missing directory or a plain file are empty`() {
+        val file = File(temporaryFolder.root, "not-a-directory").apply { writeText("x") }
+
+        assertEquals(
+            emptySet<String>(),
+            AtomicFileStore.nonEmptyFileNames(File(temporaryFolder.root, "absent"), "thumb"),
+        )
+        assertEquals(emptySet<String>(), AtomicFileStore.nonEmptyFileNames(file, "thumb"))
     }
 
     @Test

@@ -10,6 +10,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.asFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
@@ -17,18 +18,28 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import me.proton.core.domain.entity.UserId
 import me.proton.drive.sdk.ProgressUpdate
+import me.proton.drive.sdk.ProtonDriveSdkException
 import me.proton.drive.sdk.ProtonPhotosClient
+import me.proton.drive.sdk.entity.FileNode
+import me.proton.drive.sdk.entity.Node
+import me.proton.drive.sdk.entity.NodeResultPair
+import me.proton.drive.sdk.entity.NodeUid
+import me.proton.drive.sdk.entity.PhotoTag
+import me.proton.drive.sdk.entity.PhotoTagsUpdate
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
+import java.lang.reflect.Proxy
 import java.nio.ByteBuffer
 import java.nio.channels.WritableByteChannel
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.io.path.createTempDirectory
 
@@ -549,6 +560,232 @@ class ProtonPhotoGatewayTest {
             assertNull(gateway.peekThumbnail(USER_A, "x"))
         }
 
+    @Test
+    fun `trashing removes the photos from the albums before the timeline and counts the failures`() =
+        testScope.runTest {
+            val gateway = gateway()
+            gateway.activate(USER_A)
+            runCurrent()
+            gateway.loadCachedAlbum(USER_A, ProtonAlbumReference("al1", "Album"))
+            clients.trashNodes =
+                { nodeUids -> nodeUids.map { nodeUid -> if (nodeUid == "a2") failure(nodeUid) else success(nodeUid) } }
+            events.clear()
+
+            val result = gateway.trashPhotos(USER_A, listOf("x", "a2", "x"))
+
+            assertEquals(ProtonTrashResult(trashedCount = 1, failedCount = 1), result)
+            // Asked once per distinct uid; the album indexes drop the photo before the timeline
+            // removal deletes its files, and only the photos Proton trashed leave the listings.
+            assertEquals(
+                listOf("trashNodes:x,a2", "removeAlbumPhotos:x", "removePhotos:x"),
+                events.filter { it.startsWith("trashNodes:") || it.startsWith("remove") },
+            )
+            assertEquals(
+                listOf("a1", "a2", "a3"),
+                timeline.state.value.photos
+                    .map(ProtonGalleryPhoto::nodeUid),
+            )
+            assertEquals(
+                listOf("y"),
+                albums.albumPhotosState.value.photos
+                    .map(ProtonGalleryPhoto::nodeUid),
+            )
+        }
+
+    @Test
+    fun `trashing nothing never reaches the SDK`() =
+        testScope.runTest {
+            val gateway = gateway()
+            gateway.activate(USER_A)
+            runCurrent()
+            events.clear()
+
+            assertEquals(ProtonTrashResult(), gateway.trashPhotos(USER_A, emptyList()))
+
+            assertTrue(events.isEmpty())
+        }
+
+    @Test
+    fun `favouriting updates the tag listing with the photos Proton accepted`() =
+        testScope.runTest {
+            val gateway = gateway()
+            gateway.activate(USER_A)
+            runCurrent()
+            tagListings.listings[ProtonMediaTag.FAVORITES] = emptyList()
+            val updates = mutableListOf<PhotoTagsUpdate>()
+            clients.updatePhotos = { requested ->
+                updates += requested
+                requested.map { update ->
+                    if (update.nodeUid.value ==
+                        "a2"
+                    ) {
+                        failure("a2")
+                    } else {
+                        success(update.nodeUid.value)
+                    }
+                }
+            }
+
+            val added = gateway.setFavorite(USER_A, listOf("a1", "a2"), favorite = true)
+
+            assertEquals(ProtonFavoriteResult(updatedCount = 1, failedCount = 1), added)
+            assertEquals(
+                listOf(listOf(PhotoTag.Favorite), listOf(PhotoTag.Favorite)),
+                updates.map(PhotoTagsUpdate::tagsToAdd),
+            )
+            assertTrue(updates.all { update -> update.tagsToRemove.isEmpty() })
+            assertEquals(listOf("a1"), favoritePhotos())
+
+            updates.clear()
+            val removed = gateway.setFavorite(USER_A, listOf("a1"), favorite = false)
+
+            assertEquals(ProtonFavoriteResult(updatedCount = 1), removed)
+            assertEquals(listOf(listOf(PhotoTag.Favorite)), updates.map(PhotoTagsUpdate::tagsToRemove))
+            assertTrue(updates.single().tagsToAdd.isEmpty())
+            assertEquals(emptyList<String>(), favoritePhotos())
+        }
+
+    @Test
+    fun `two callers of the same original share one download`() =
+        testScope.runTest {
+            val gateway = gateway()
+            gateway.activate(USER_A)
+            runCurrent()
+            val directory = createTempDirectory("lenswave-originals").toFile()
+            val committed = File(directory, "video.image")
+            val readOriginals = AtomicInteger()
+            val targetsCreated = AtomicInteger()
+            val transfers = AtomicInteger()
+            val secondCallerChecked = CountDownLatch(3)
+            val release = CountDownLatch(1)
+            cache.readOriginal = { _ ->
+                readOriginals.incrementAndGet()
+                secondCallerChecked.countDown()
+                null
+            }
+            cache.createOriginalTarget = {
+                targetsCreated.incrementAndGet()
+                ProtonOriginalTarget(
+                    File(directory, "video.image.part"),
+                    File(directory, "video.enc"),
+                    removalEpoch = 0L,
+                )
+            }
+            clients.downloadTo = { output ->
+                transfers.incrementAndGet()
+                assertTrue(release.await(5L, TimeUnit.SECONDS))
+                output.write(ByteBuffer.wrap(ByteArray(64)))
+            }
+            cache.commitOriginal = { download ->
+                assertTrue(download.plaintext.renameTo(committed))
+                ProtonOriginalCommit(committed, encryptedStored = false)
+            }
+            try {
+                val first = async(Dispatchers.Default) { gateway.downloadOriginal(USER_A, "a3") }
+                val second = async(Dispatchers.Default) { gateway.downloadOriginal(USER_A, "a3") }
+                // Each caller checks the cache once and the transfer once more; after the third
+                // check both callers are past the cache and the second joins the transfer in flight.
+                assertTrue(secondCallerChecked.await(5L, TimeUnit.SECONDS))
+                Thread.sleep(100L)
+                release.countDown()
+
+                assertEquals(committed, first.await())
+                assertEquals(committed, second.await())
+                assertEquals(1, targetsCreated.get())
+                assertEquals(1, transfers.get())
+                assertEquals(3, readOriginals.get())
+            } finally {
+                directory.deleteRecursively()
+            }
+        }
+
+    @Test
+    fun `the original file name is asked of Proton once and trimmed`() =
+        testScope.runTest {
+            val gateway = gateway()
+            gateway.activate(USER_A)
+            runCurrent()
+            clients.getNode = { nodeUid ->
+                events += "getNode:$nodeUid"
+                when (nodeUid) {
+                    "a1" -> node(" IMG_0001.jpg ")
+                    "a2" -> node("   ")
+                    else -> null
+                }
+            }
+            events.clear()
+
+            assertEquals("IMG_0001.jpg", gateway.getOriginalFileName(USER_A, "a1"))
+            assertEquals("IMG_0001.jpg", gateway.getOriginalFileName(USER_A, "a1"))
+            assertNull(gateway.getOriginalFileName(USER_A, "a2"))
+            assertNull(gateway.getOriginalFileName(USER_A, "a3"))
+
+            assertEquals(listOf("getNode:a1", "getNode:a2", "getNode:a3"), events.toList())
+        }
+
+    @Test
+    fun `a stored preview that decodes is handed back without touching the listings`() =
+        testScope.runTest {
+            val gateway = gateway()
+            gateway.activate(USER_A)
+            runCurrent()
+            val bitmap = stubBitmap()
+            cache.loadPreview = { bitmap }
+            events.clear()
+
+            assertSame(bitmap, gateway.loadPreview(USER_A, "a1", targetLongEdge = 1_000))
+
+            assertTrue("a hit must not invalidate: $events", events.isEmpty())
+            assertTrue(
+                timeline.state.value.photos
+                    .single { it.nodeUid == "a1" }
+                    .hasPreview,
+            )
+            assertNull(previewQueue.pendingByNode()["a1"])
+        }
+
+    private fun favoritePhotos(): List<String> =
+        timeline.state.value.tags
+            .getValue(ProtonMediaTag.FAVORITES)
+            .photos
+            .map(ProtonGalleryPhoto::nodeUid)
+
+    private fun success(nodeUid: String): NodeResultPair = NodeResultPair.Success(NodeUid(nodeUid))
+
+    private fun failure(nodeUid: String): NodeResultPair =
+        NodeResultPair.Failure(NodeUid(nodeUid), ProtonDriveSdkException("Node failure: not allowed", null, null))
+
+    /**
+     * A file node that carries only its name; the gateway reads nothing else of it. Node is a
+     * sealed interface, so it cannot be proxied, and a FileNode has a dozen mandatory parts the
+     * lookup never looks at; the instance is allocated without its constructor and the name set.
+     * The name is a Result<String>, an inline class, so its field holds the unboxed value.
+     */
+    private fun node(name: String): Node =
+        allocateWithoutConstructor(FileNode::class.java).also { node ->
+            FileNode::class.java
+                .getDeclaredField("name")
+                .apply { isAccessible = true }
+                .set(node, name)
+        }
+
+    /**
+     * A bitmap the gateway can hand through: the platform class in the unit-test classpath is a
+     * stub whose constructors throw, and the gateway never calls a method on the bitmap it returns.
+     */
+    private fun stubBitmap(): Bitmap = allocateWithoutConstructor(Bitmap::class.java)
+
+    @Suppress("UNCHECKED_CAST")
+    private fun <T> allocateWithoutConstructor(type: Class<T>): T {
+        val unsafe =
+            Class
+                .forName("sun.misc.Unsafe")
+                .getDeclaredField("theUnsafe")
+                .apply { isAccessible = true }
+                .get(null)
+        return unsafe.javaClass.getMethod("allocateInstance", Class::class.java).invoke(unsafe, type) as T
+    }
+
     private fun gateway(housekeepingScope: CoroutineScope = testScope.backgroundScope) =
         ProtonPhotoGateway(
             timeline = timeline,
@@ -644,10 +881,52 @@ class ProtonPhotoGatewayTest {
         }
     }
 
+    /** The SDK client as scripted lambdas over a proxy; every call a test did not script is refused. */
     private class FakeClientProvider(
         private val events: MutableList<String>,
     ) : ProtonPhotosClientProvider {
-        override suspend fun get(userId: UserId): ProtonPhotosClient = error("The SDK must not be reached")
+        var trashNodes: (List<String>) -> List<NodeResultPair> = { error("The SDK must not be reached") }
+        var updatePhotos: (List<PhotoTagsUpdate>) -> List<NodeResultPair> = { error("The SDK must not be reached") }
+        var getNode: (String) -> Node? = { error("The SDK must not be reached") }
+
+        override suspend fun get(userId: UserId): ProtonPhotosClient =
+            Proxy.newProxyInstance(
+                ProtonPhotosClient::class.java.classLoader,
+                arrayOf(ProtonPhotosClient::class.java),
+            ) { _, method, arguments ->
+                when (method.name) {
+                    "trashNodes" -> {
+                        @Suppress("UNCHECKED_CAST")
+                        val nodeUids = (arguments[0] as List<NodeUid>).map { it.value }
+                        events += "trashNodes:${nodeUids.joinToString(",")}"
+                        trashNodes(nodeUids).asFlow()
+                    }
+
+                    "updatePhotos" -> {
+                        @Suppress("UNCHECKED_CAST")
+                        val updates = arguments[0] as List<PhotoTagsUpdate>
+                        updatePhotos(updates).asFlow()
+                    }
+
+                    // A suspend function: the proxy answers with the value, and the caller
+                    // resumes without suspending.
+                    "getNode" -> {
+                        getNode((arguments[0] as NodeUid).value)
+                    }
+
+                    "toString" -> {
+                        "FakeProtonPhotosClient"
+                    }
+
+                    "hashCode" -> {
+                        0
+                    }
+
+                    else -> {
+                        error("The SDK must not be asked for ${method.name}")
+                    }
+                }
+            } as ProtonPhotosClient
 
         override suspend fun disconnect(userId: UserId) {
             events += "disconnect:${userId.id}"
@@ -753,6 +1032,7 @@ class ProtonPhotoGatewayTest {
             userId: String,
             nodeUids: Collection<String>,
         ) {
+            events += "removePhotos:${nodeUids.sorted().joinToString(",")}"
         }
 
         override fun readAlbumsSnapshot(
@@ -796,6 +1076,7 @@ class ProtonPhotoGatewayTest {
             userId: String,
             nodeUids: Collection<String>,
         ) {
+            events += "removeAlbumPhotos:${nodeUids.sorted().joinToString(",")}"
         }
 
         override fun loadThumbnail(
