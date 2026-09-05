@@ -12,6 +12,7 @@ import dagger.hilt.android.HiltAndroidApp
 import dagger.hilt.components.SingletonComponent
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import me.proton.core.accountmanager.domain.AccountManager
@@ -39,20 +40,27 @@ class LenswaveApplication : Application() {
 
     private val startupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    /** The sweep in flight, if any; read and written on the main thread, where onTrimMemory runs. */
+    private var decryptedCopySweep: Job? = null
+
     /**
      * The UI leaving the screen is the one process-wide "app went to the background" signal
      * available without a lifecycle dependency; the plaintext copies of originals advertise a
-     * 30 minute TTL, and this is where a long-lived idle process honours it.
+     * 30 minute TTL, and this is where a long-lived idle process honours it. Every level from
+     * UI_HIDDEN up means the app is backgrounded (BACKGROUND, MODERATE and COMPLETE too), and
+     * several arrive together, so one directory walk serves them all: a new sweep starts only
+     * when none is active.
      */
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
-        if (level >= TRIM_MEMORY_UI_HIDDEN) {
-            startupScope.launch {
-                EntryPointAccessors
-                    .fromApplication(this@LenswaveApplication, StartupEntryPoint::class.java)
-                    .sessionCache()
-                    .sweepExpiredDecryptedCopies()
-            }
+        if (level >= TRIM_MEMORY_UI_HIDDEN && decryptedCopySweep?.isActive != true) {
+            decryptedCopySweep =
+                startupScope.launch {
+                    EntryPointAccessors
+                        .fromApplication(this@LenswaveApplication, StartupEntryPoint::class.java)
+                        .sessionCache()
+                        .sweepExpiredDecryptedCopies()
+                }
         }
     }
 

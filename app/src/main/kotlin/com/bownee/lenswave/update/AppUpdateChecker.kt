@@ -36,13 +36,15 @@ class AppUpdateChecker
         private val startupScope = CoroutineScope(SupervisorJob() + dispatchers.io)
         private val startupMutex = Mutex()
         private var startupCheck: Deferred<AvailableUpdate?>? = null
-        private var startupUpdateConsumed = false
+
+        @Volatile private var startupUpdateShown = false
 
         /**
-         * The result of the process's one startup check, handed out once: the first caller to
-         * receive the update owns showing it, and every later caller (a recreated activity, once
-         * the dialog has been shown or snoozed) gets null. A caller cancelled while awaiting has
-         * not consumed it, so the next activity still receives it.
+         * The result of the process's one startup check. The caller that receives the update owns
+         * showing it and calls [markStartupUpdateShown] once it has taken it over; from then on
+         * every caller (a recreated activity, once the dialog has been shown or snoozed) gets null.
+         * Nothing is marked here: a caller cancelled between receiving the update and storing it
+         * would otherwise lose the prompt for the whole process.
          */
         internal suspend fun awaitStartupUpdate(currentVersionName: String): AvailableUpdate? {
             val check =
@@ -51,14 +53,12 @@ class AppUpdateChecker
                         ?: startupScope.async { findAvailableUpdate(currentVersionName) }.also { startupCheck = it }
                 }
             val update = check.await() ?: return null
-            return startupMutex.withLock {
-                if (startupUpdateConsumed) {
-                    null
-                } else {
-                    startupUpdateConsumed = true
-                    update
-                }
-            }
+            return if (startupUpdateShown) null else update
+        }
+
+        /** The update from [awaitStartupUpdate] is in the caller's hands; later callers receive null. */
+        internal fun markStartupUpdateShown() {
+            startupUpdateShown = true
         }
 
         internal suspend fun findAvailableUpdate(currentVersionName: String): AvailableUpdate? =

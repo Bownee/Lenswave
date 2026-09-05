@@ -88,11 +88,14 @@ class AppUpdateCheckerTest {
             assertEquals("0.20.0", fixture.checker.findAvailableUpdate("0.19.4")?.versionName)
         }
 
-    @Test fun startupUpdateRunsOneCheckPerProcessAndIsHandedOutOnce() =
+    @Test fun startupUpdateRunsOneCheckPerProcessAndIsHandedOutUntilMarkedShown() =
         runBlocking {
             val fixture = Fixture(LatestReleaseResult.Modified("0.20.0", null))
 
             assertEquals("0.20.0", fixture.checker.awaitStartupUpdate("0.19.4")?.versionName)
+            // The caller was cancelled before it could store the update: the next activity still receives it.
+            assertEquals("0.20.0", fixture.checker.awaitStartupUpdate("0.19.4")?.versionName)
+            fixture.checker.markStartupUpdateShown()
             // A recreated activity asks again: the check is not repeated and the result is not shown twice.
             assertNull(fixture.checker.awaitStartupUpdate("0.19.4"))
             assertEquals(1, fixture.client.calls)

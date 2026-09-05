@@ -484,8 +484,31 @@ class GalleryViewModel internal constructor(
                 protonThumbnailScheduler.enqueue(userId)
             }
         }
-        lastRefreshCompletedMillis = clock.nowMillis()
+        // The repositories swallow a failed sync and publish refreshFailed instead; stamping it as
+        // completed would keep the periodic tick quiet for a full freshness limit while offline.
+        if (!refreshFailed(selectedDestination)) lastRefreshCompletedMillis = clock.nowMillis()
     }
+
+    /** Whether the section a refresh of [selectedDestination] syncs is now published as failed. */
+    private fun refreshFailed(selectedDestination: GalleryDestination): Boolean =
+        when (selectedDestination) {
+            GalleryDestination.Timeline -> {
+                protonRepository.state.value.refreshFailed
+            }
+
+            is GalleryDestination.Tag -> {
+                protonRepository.state.value.tags[selectedDestination.tag]
+                    ?.refreshFailed ?: false
+            }
+
+            GalleryDestination.Library -> {
+                protonRepository.albumsState.value.refreshFailed
+            }
+
+            is GalleryDestination.AlbumPhotos -> {
+                protonRepository.albumPhotosState.value.refreshFailed
+            }
+        }
 
     /**
      * Puts the album's cached photos on screen before its sync runs. [openAlbum] does this on
