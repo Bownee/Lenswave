@@ -2,6 +2,8 @@ package com.bownee.lenswave.viewer
 
 import com.bownee.lenswave.proton.ProtonOriginalDownloadProgress
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ViewerVideoProgressPolicyTest {
@@ -51,5 +53,29 @@ class ViewerVideoProgressPolicyTest {
             ),
             display,
         )
+    }
+
+    @Test
+    fun panelStaysUpUntilTheFirstFrame() {
+        assertTrue(
+            ViewerVideoProgressPolicy.panelVisible(mediaReady = false, buffering = false, streamComplete = false),
+        )
+        assertTrue(ViewerVideoProgressPolicy.panelVisible(mediaReady = false, buffering = true, streamComplete = true))
+    }
+
+    @Test
+    fun panelReturnsOnlyWhileBufferingAgainstAnUnfinishedDownload() {
+        assertTrue(ViewerVideoProgressPolicy.panelVisible(mediaReady = true, buffering = true, streamComplete = false))
+        assertFalse(
+            ViewerVideoProgressPolicy.panelVisible(mediaReady = true, buffering = false, streamComplete = false),
+        )
+        assertFalse(ViewerVideoProgressPolicy.panelVisible(mediaReady = true, buffering = true, streamComplete = true))
+        assertFalse(ViewerVideoProgressPolicy.panelVisible(mediaReady = true, buffering = false, streamComplete = true))
+    }
+
+    @Test
+    fun progressIsObservedUntilTheDownloadCompletes() {
+        assertTrue(ViewerVideoProgressPolicy.keepObserving(streamComplete = false))
+        assertFalse(ViewerVideoProgressPolicy.keepObserving(streamComplete = true))
     }
 }

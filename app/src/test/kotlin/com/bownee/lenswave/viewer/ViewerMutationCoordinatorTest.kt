@@ -4,6 +4,7 @@ import com.bownee.lenswave.gallery.PhotoDeletionExecutor
 import com.bownee.lenswave.gallery.PhotoMutationResult
 import com.bownee.lenswave.gallery.ProtonPhotoMutations
 import com.bownee.lenswave.proton.ProtonFavoriteResult
+import com.bownee.lenswave.proton.ProtonSessionChangedException
 import com.bownee.lenswave.proton.ProtonTrashResult
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -67,6 +68,49 @@ class ViewerMutationCoordinatorTest {
                 coordinator.outcomes.value,
             )
             assertFalse(coordinator.isInFlight("s1"))
+        }
+
+    @Test
+    fun `a session change during the call is a failed outcome, not a lost one`() =
+        runTest(dispatcher) {
+            val coordinator = coordinator()
+
+            assertTrue(coordinator.trash(UserId("u"), request))
+            runCurrent()
+            mutations.trashAnswers.single().completeExceptionally(ProtonSessionChangedException())
+            runCurrent()
+
+            assertEquals(
+                listOf(ViewerMutationCoordinator.Outcome.Trashed("s1", succeeded = false)),
+                coordinator.outcomes.value,
+            )
+            assertFalse("the photo is free for the next call", coordinator.isInFlight("s1"))
+        }
+
+    @Test
+    fun `forgetting everything clears queued outcomes and in-flight marks`() =
+        runTest(dispatcher) {
+            val coordinator = coordinator()
+            coordinator.setFavorite(UserId("u"), request, favorite = true)
+            runCurrent()
+            mutations.favoriteAnswers.single().complete(ProtonFavoriteResult(updatedCount = 1))
+            runCurrent()
+            coordinator.trash(UserId("u"), request)
+            runCurrent()
+            assertTrue(coordinator.outcomes.value.isNotEmpty())
+            assertTrue(coordinator.isInFlight("s1"))
+
+            coordinator.forgetAll()
+
+            assertTrue(coordinator.outcomes.value.isEmpty())
+            assertFalse(coordinator.isInFlight("s1"))
+            // The forgotten call still answers; its late outcome is a new one the viewer can consume.
+            mutations.trashAnswers.single().complete(ProtonTrashResult(trashedCount = 1, failedCount = 0))
+            runCurrent()
+            assertEquals(
+                listOf(ViewerMutationCoordinator.Outcome.Trashed("s1", succeeded = true)),
+                coordinator.outcomes.value,
+            )
         }
 
     private fun TestScope.coordinator() =

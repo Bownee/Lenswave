@@ -2,7 +2,7 @@ package com.bownee.lenswave.viewer
 
 import com.bownee.lenswave.proton.ProtonOriginalDownloadProgress
 
-/** Decides how a video download's progress is presented while the first frame is still pending. */
+/** Decides how, and whether, a video download's progress is presented over the player. */
 internal object ViewerVideoProgressPolicy {
     const val PROGRESS_MAX = 1_000
 
@@ -36,4 +36,20 @@ internal object ViewerVideoProgressPolicy {
             progress = percent * PROGRESS_MAX / 100,
         )
     }
+
+    /**
+     * Whether the progress panel belongs on screen. Before the first frame it always does. Once
+     * the video plays it comes back only while the player is buffering against a download that
+     * is still in flight: a seek past the downloaded bytes parks the player on them, and without
+     * the panel that wait is a silent freeze. A complete download leaves stalls to the player's
+     * own buffering indicator.
+     */
+    fun panelVisible(
+        mediaReady: Boolean,
+        buffering: Boolean,
+        streamComplete: Boolean,
+    ): Boolean = !mediaReady || (buffering && !streamComplete)
+
+    /** Whether the progress collector still has anything to report: nothing changes once every byte is on disk. */
+    fun keepObserving(streamComplete: Boolean): Boolean = !streamComplete
 }

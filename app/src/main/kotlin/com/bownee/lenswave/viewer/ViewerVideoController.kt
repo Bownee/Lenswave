@@ -19,6 +19,7 @@ import com.bownee.lenswave.proton.ProtonOriginalStream
 import com.bownee.lenswave.proton.ProtonProgressiveDataSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
 /**
@@ -50,6 +51,9 @@ internal class ViewerVideoController(
         /** Shows the loading panel right away instead of after the usual delay. */
         fun showLoadingPanelImmediately()
 
+        /** Hides the loading panel and withdraws any delayed show of it. */
+        fun hideLoadingPanel()
+
         /** The first frame is decoded: marks the media ready and re-enables the actions. */
         fun onVideoReady(requestedStableId: String)
 
@@ -71,6 +75,12 @@ internal class ViewerVideoController(
     private var progressJob: Job? = null
     private var pendingPreviewClear: Runnable? = null
 
+    /** The last progress of the download behind the current media; null for a media fully on disk. */
+    private var latestProgress: ProtonOriginalDownloadProgress? = null
+
+    /** True while the player reports STATE_BUFFERING for the current media. */
+    private var buffering = false
+
     /** Applied by the next [show], so a recreated viewer resumes where the user was. */
     private var pendingPlayback: ViewerPlaybackState? = null
 
@@ -91,14 +101,21 @@ internal class ViewerVideoController(
         object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 val requestedStableId = activeStableId ?: return
-                if (playbackState != Player.STATE_READY || host.currentStableId != requestedStableId) return
+                if (host.currentStableId != requestedStableId) return
                 // An event delivered late for a previous item: the player has since been given a
                 // new one, whose tag differs and which is buffering again.
                 val activePlayer = player ?: return
-                if (!isCurrentShow(activePlayer) || activePlayer.playbackState != Player.STATE_READY) return
-                if (host.mediaReady) return
-                progressJob?.cancel()
-                progressJob = null
+                if (!isCurrentShow(activePlayer) || activePlayer.playbackState != playbackState) return
+                buffering = playbackState == Player.STATE_BUFFERING
+                if (host.mediaReady) {
+                    // A seek past the downloaded bytes parks the player on them; the download's
+                    // progress comes back over the picture so the wait is not a silent freeze.
+                    refreshProgressPanel(requestedStableId)
+                    return
+                }
+                if (playbackState != Player.STATE_READY) return
+                // The collector stays on while the download is in flight; the panel it feeds is
+                // hidden by onVideoReady and returns only for a buffering stall.
                 host.onVideoReady(requestedStableId)
                 playerView.animate().cancel()
                 playerView.alpha = 0f
@@ -147,17 +164,51 @@ internal class ViewerVideoController(
         progressJob =
             scope.launch {
                 stream.progress.collect { downloadProgress ->
-                    if (host.currentStableId == requestedStableId && !host.mediaReady) {
-                        updateDownloadProgress(downloadProgress)
+                    if (host.currentStableId != requestedStableId) return@collect
+                    latestProgress = downloadProgress
+                    refreshProgressPanel(requestedStableId)
+                    if (!ViewerVideoProgressPolicy.keepObserving(downloadProgress.complete)) {
+                        progressJob = null
+                        cancel()
                     }
                 }
             }
     }
 
+    /**
+     * Shows, updates or hides the progress panel for the current download according to
+     * [ViewerVideoProgressPolicy.panelVisible]. Before the first frame the panel is already up
+     * and only its figures change; afterwards it appears for a buffering stall against an
+     * unfinished download and goes when the player moves on or the download completes.
+     */
+    private fun refreshProgressPanel(requestedStableId: String) {
+        val downloadProgress = latestProgress ?: return
+        if (host.currentStableId != requestedStableId) return
+        val mediaReady = host.mediaReady
+        if (ViewerVideoProgressPolicy.panelVisible(mediaReady, buffering, downloadProgress.complete)) {
+            if (mediaReady) host.showLoadingPanelImmediately()
+            updateDownloadProgress(downloadProgress)
+        } else if (mediaReady) {
+            host.hideLoadingPanel()
+        }
+    }
+
+    /** Pauses for the viewer leaving the screen; call from the Activity's onStop. */
     fun pause() {
         val active = player ?: return
-        if (active.playWhenReady) pausedWhilePlaying = true
+        if (ViewerPlaybackPausePolicy.remembersPlaying(active.playWhenReady)) pausedWhilePlaying = true
         active.pause()
+    }
+
+    /**
+     * The viewer is back on screen: a video [pause] stopped goes on playing, and the mark is
+     * spent either way. Left set, it would make a rotation start a video the user had since
+     * paused. Call from the Activity's onStart.
+     */
+    fun resume() {
+        val resumes = ViewerPlaybackPausePolicy.resumesOnReturn(pausedWhilePlaying)
+        pausedWhilePlaying = false
+        if (resumes) player?.play()
     }
 
     /**
@@ -169,7 +220,7 @@ internal class ViewerVideoController(
         if (activeStableId == null) return null
         return ViewerPlaybackState(
             positionMillis = active.currentPosition,
-            playWhenReady = active.playWhenReady || pausedWhilePlaying,
+            playWhenReady = ViewerPlaybackPausePolicy.savedPlayWhenReady(active.playWhenReady, pausedWhilePlaying),
         )
     }
 
@@ -191,6 +242,8 @@ internal class ViewerVideoController(
     fun stop() {
         progressJob?.cancel()
         progressJob = null
+        latestProgress = null
+        buffering = false
         activeStableId = null
         pausedWhilePlaying = false
         player?.let { active ->
