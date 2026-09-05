@@ -72,7 +72,8 @@ class ProtonPhotoCacheInstrumentedTest {
         val context = isolatedContext()
         val clock = FakeClock(System.currentTimeMillis())
         val secureFiles = SecureFileStore(File(context.filesDir, "secure-keys"))
-        val store = ProtonOriginalStore(context, secureFiles, clock)
+        val openCopies = ProtonDecryptedCopyRegistry()
+        val store = ProtonOriginalStore(context, secureFiles, clock, openCopies)
         val staleUser = "stale-${UUID.randomUUID()}"
         val freshUser = "fresh-${UUID.randomUUID()}"
         try {
@@ -83,6 +84,14 @@ class ProtonPhotoCacheInstrumentedTest {
             val (freshPlaintext, freshEncrypted) = store.createTarget(freshUser, "new")
             freshPlaintext.writeText("new plaintext")
             store.commit(freshUser, "new", freshPlaintext, freshEncrypted)
+
+            // A copy a player holds open outlives its TTL until the reader closes it.
+            val playing = ProtonOriginalStream(stalePlaintext, openCopies).apply { complete() }
+            playing.readerOpened()
+            store.sweepExpiredDecryptedCopies()
+            assertTrue(stalePlaintext.exists())
+            assertEquals(stalePlaintext, store.read(staleUser, "old"))
+            playing.readerClosed()
 
             store.sweepExpiredDecryptedCopies()
 
@@ -302,7 +311,7 @@ class ProtonPhotoCacheInstrumentedTest {
             clock,
             ProtonThumbnailStore(context, secureFiles, clock),
             ProtonPreviewStore(context, secureFiles, clock),
-            ProtonOriginalStore(context, secureFiles, clock),
+            ProtonOriginalStore(context, secureFiles, clock, ProtonDecryptedCopyRegistry()),
         )
 
     private class IsolatedCacheContext(

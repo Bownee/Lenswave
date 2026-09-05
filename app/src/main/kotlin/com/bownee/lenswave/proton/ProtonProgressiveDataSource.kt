@@ -22,6 +22,7 @@ internal class ProtonProgressiveDataSource(
 ) : BaseDataSource(false) {
     private var input: RandomAccessFile? = null
     private var opened = false
+    private var holdsReader = false
     private var readPosition = 0L
     private var bytesRemaining = C.LENGTH_UNSET.toLong()
 
@@ -41,7 +42,15 @@ internal class ProtonProgressiveDataSource(
             LenswaveDiagnostics.reportState(LenswaveOperation.VIDEO_PLAYBACK, STATE_OPEN_BEYOND_END, 1, 1)
             throw DataSourceException(PlaybackException.ERROR_CODE_IO_READ_POSITION_OUT_OF_RANGE)
         }
-        input = openInput().apply { seek(dataSpec.position) }
+        stream.readerOpened()
+        holdsReader = true
+        input =
+            try {
+                openInput().apply { seek(dataSpec.position) }
+            } catch (error: Throwable) {
+                releaseReader()
+                throw error
+            }
         readPosition = dataSpec.position
         bytesRemaining = remaining
         opened = true
@@ -94,22 +103,37 @@ internal class ProtonProgressiveDataSource(
      * A decrypt in progress writes into a temporary file that is renamed once it has verified.
      * An open descriptor survives the rename, but an open that lands in between finds the
      * temporary gone; the stream is about to complete then, so the open waits for it and takes
-     * the final file.
+     * the final file. The file of a stream that is already complete does not move any more: a
+     * path that is gone was swept or removed, which is [ProtonOriginalCopyMissingException].
      */
     private fun openInput(): RandomAccessFile =
         try {
             RandomAccessFile(stream.file, "r")
-        } catch (_: FileNotFoundException) {
-            RandomAccessFile(stream.awaitCompletion(), "r")
+        } catch (missing: FileNotFoundException) {
+            if (stream.isComplete) throw ProtonOriginalCopyMissingException(missing)
+            val committed = stream.awaitCompletion()
+            try {
+                RandomAccessFile(committed, "r")
+            } catch (stillMissing: FileNotFoundException) {
+                throw ProtonOriginalCopyMissingException(stillMissing)
+            }
         }
 
     override fun getUri(): Uri = Uri.fromFile(stream.file)
 
     override fun close() {
         closeInput()
+        releaseReader()
         if (opened) {
             opened = false
             transferEnded()
+        }
+    }
+
+    private fun releaseReader() {
+        if (holdsReader) {
+            holdsReader = false
+            stream.readerClosed()
         }
     }
 

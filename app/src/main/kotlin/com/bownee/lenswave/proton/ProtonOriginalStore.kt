@@ -50,7 +50,9 @@ internal abstract class ProtonOriginalStoreModule {
  * Encrypted originals live under `cacheDir` and are kept per user up to
  * [ProtonStorageLayout.ORIGINALS_CACHE_LIMIT_BYTES]; the least recently read ones go first.
  * Plaintext copies expire after [ProtonStorageLayout.DECRYPTED_TTL_MILLIS] and are wiped
- * wholesale once per process.
+ * wholesale once per process. A copy a reader holds open (see [ProtonDecryptedCopyRegistry]) is
+ * never expired: the player keeps its file for as long as the video is up, and the copy's age
+ * restarts when the reader closes it.
  */
 @Singleton
 internal class ProtonOriginalStore
@@ -59,6 +61,7 @@ internal class ProtonOriginalStore
         @ApplicationContext context: Context,
         private val secureFiles: SecureFileStore,
         private val clock: LenswaveClock,
+        private val openCopies: ProtonDecryptedCopyRegistry,
     ) : ProtonOriginalMaterializer {
         private val originals = File(context.cacheDir, ProtonStorageLayout.ORIGINALS_DIRECTORY).apply { mkdirs() }
         private val decrypted = File(context.cacheDir, ProtonStorageLayout.DECRYPTED_DIRECTORY)
@@ -107,7 +110,7 @@ internal class ProtonOriginalStore
                 return null
             }
             val materialized = decryptedFile(userId, nodeUid)
-            if (materialized.isFile && !isExpired(materialized, ProtonStorageLayout.DECRYPTED_TTL_MILLIS)) {
+            if (materialized.isFile && !isExpiredCopy(materialized)) {
                 materialized.setLastModified(clock.nowMillis())
                 file.setLastModified(clock.nowMillis())
                 return materialized
@@ -189,7 +192,7 @@ internal class ProtonOriginalStore
 
         fun maintain(userId: String) {
             wipeStaleDecryptedCopies()
-            expireFiles(decryptedDirectory(userId), ProtonStorageLayout.DECRYPTED_TTL_MILLIS)
+            expireCopies(decryptedDirectory(userId))
             trimToLimit(userId, keepName = null)
         }
 
@@ -198,13 +201,12 @@ internal class ProtonOriginalStore
          * [ProtonStorageLayout.DECRYPTED_TTL_MILLIS]. [maintain] does the same for one user once
          * per activation; this is for the gallery when the app leaves the screen, so plaintext
          * does not sit on disk for the rest of the process just because nothing re-activated the
-         * account. Copies still within their TTL are left, since the viewer may come back to them.
+         * account. Copies still within their TTL are left, since the viewer may come back to them,
+         * and so is a copy a player holds open, however old.
          */
         fun sweepExpiredDecryptedCopies() {
             wipeStaleDecryptedCopies()
-            decrypted.listFiles()?.filter(File::isDirectory)?.forEach { directory ->
-                expireFiles(directory, ProtonStorageLayout.DECRYPTED_TTL_MILLIS)
-            }
+            decrypted.listFiles()?.filter(File::isDirectory)?.forEach(::expireCopies)
         }
 
         fun remove(
@@ -319,15 +321,16 @@ internal class ProtonOriginalStore
             }
         }
 
-        private fun expireFiles(
-            directory: File,
-            ttlMillis: Long,
-        ) {
+        /** Deletes the plaintext copies in [directory] past their TTL, except those a reader holds open. */
+        private fun expireCopies(directory: File) {
             directory
                 .listFiles()
-                ?.filter { file -> file.isFile && isExpired(file, ttlMillis) }
+                ?.filter { file -> file.isFile && isExpiredCopy(file) }
                 ?.forEach(File::delete)
         }
+
+        private fun isExpiredCopy(file: File): Boolean =
+            !openCopies.isInUse(file) && isExpired(file, ProtonStorageLayout.DECRYPTED_TTL_MILLIS)
 
         private fun file(
             userId: String,

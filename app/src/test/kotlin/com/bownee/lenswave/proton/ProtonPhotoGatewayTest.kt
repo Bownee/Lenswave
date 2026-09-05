@@ -58,7 +58,8 @@ class ProtonPhotoGatewayTest {
     private val transfers = ProtonTransferCoordinator()
     private val renditions = ProtonRenditionDownloads(clients, cache, transfers, ProtonPreviewAdmission())
     private val materializer = FakeMaterializer()
-    private val originals = ProtonOriginalDownloads(clients, cache, transfers, materializer)
+    private val originals =
+        ProtonOriginalDownloads(clients, cache, transfers, materializer, ProtonDecryptedCopyRegistry())
     private val sessionGuard = ProtonSessionGuard()
 
     init {

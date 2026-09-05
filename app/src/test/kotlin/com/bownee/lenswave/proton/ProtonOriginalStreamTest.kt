@@ -151,3 +151,50 @@ class ProtonOriginalStreamTest {
         }
     }
 }
+
+class ProtonOriginalStreamReadersTest {
+    @get:Rule
+    val temporaryFolder = TemporaryFolder()
+
+    private val registry = ProtonDecryptedCopyRegistry()
+
+    @Test
+    fun `readers hold the copy in use across a rename and restart its age`() {
+        val growing = temporaryFolder.newFile("video.image.part")
+        val committed = File(temporaryFolder.root, "video.image")
+        val stream = ProtonOriginalStream(growing, registry)
+        growing.setLastModified(1_000L)
+
+        assertEquals(growing, stream.readerOpened())
+        stream.readerOpened()
+        assertTrue(registry.isInUse(growing))
+        assertTrue(growing.lastModified() > 1_000L)
+
+        assertTrue(growing.renameTo(committed))
+        stream.complete(committed)
+        assertFalse(registry.isInUse(growing))
+        assertTrue(registry.isInUse(committed))
+
+        stream.readerClosed()
+        assertTrue(registry.isInUse(committed))
+        committed.setLastModified(1_000L)
+        stream.readerClosed()
+        assertFalse(registry.isInUse(committed))
+        assertTrue(committed.lastModified() > 1_000L)
+        // A close nobody opened for changes nothing.
+        stream.readerClosed()
+        assertFalse(registry.isInUse(committed))
+    }
+
+    @Test
+    fun `a stream reports completion and a missing copy is a file-not-found`() {
+        val stream = ProtonOriginalStream(temporaryFolder.newFile())
+        assertFalse(stream.isComplete)
+        stream.complete()
+        assertTrue(stream.isComplete)
+
+        val missing: IOException = ProtonOriginalCopyMissingException(java.io.FileNotFoundException("gone"))
+        assertTrue(missing is java.io.FileNotFoundException)
+        assertEquals("gone", missing.cause?.message)
+    }
+}
