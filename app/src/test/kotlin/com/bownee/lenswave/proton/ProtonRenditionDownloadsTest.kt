@@ -2,7 +2,10 @@ package com.bownee.lenswave.proton
 
 import android.graphics.Bitmap
 import com.bownee.lenswave.LenswaveOperation
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runTest
 import me.proton.core.domain.entity.UserId
 import me.proton.drive.sdk.ProgressUpdate
@@ -12,6 +15,7 @@ import me.proton.drive.sdk.entity.FileThumbnail
 import me.proton.drive.sdk.entity.NodeUid
 import me.proton.drive.sdk.entity.ThumbnailType
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -24,6 +28,7 @@ import java.nio.channels.WritableByteChannel
  * Drives the real downloader over a scripted SDK client: only the client, the rendition
  * stores and the diagnostics are faked.
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 class ProtonRenditionDownloadsTest {
     private val cache = FakeMediaCache()
     private val client = FakeClientProvider()
@@ -143,6 +148,80 @@ class ProtonRenditionDownloadsTest {
             assertEquals(listOf(ThumbnailType.THUMBNAIL), client.enumerations.map { it.first })
         }
 
+    @Test
+    fun `a batch the SDK never answers is settled as a network failure without re-asks or the fallback`() =
+        runTest {
+            admission.bind { true }
+            client.thumbnails = { awaitCancellation() }
+            val reports = mutableListOf<ThumbnailBatchResult>()
+
+            val result = downloads.downloadThumbnails(USER, listOf("a", "b")) { reports += it }
+
+            assertTrue(result.stalled)
+            assertEquals(
+                mapOf("a" to ThumbnailFailureKind.TRANSIENT_NETWORK, "b" to ThumbnailFailureKind.TRANSIENT_NETWORK),
+                result.failures,
+            )
+            assertTrue(result.successfulNodeUids.isEmpty())
+            // One pass and one deadline: neither node was re-asked on its own, and the preview
+            // rendition was not tried although previews were allowed.
+            assertEquals(listOf(ThumbnailType.THUMBNAIL to listOf("a", "b")), client.enumerations)
+            assertEquals(listOf("unanswered-2-of-2-deadline", "stalled-2-of-2"), states)
+            assertTrue(reports.toString(), reports.isEmpty())
+            assertEquals(ProtonThumbnailDownloadPolicy.SDK_PASS_TIMEOUT_MILLIS, currentTime)
+        }
+
+    @Test
+    fun `a chunk left silent beside one that answered is slow nodes, re-asked on their own`() =
+        runTest {
+            val nodeUids = ('a'..'i').map(Char::toString)
+            check(nodeUids.size == ProtonThumbnailDownloadPolicy.SDK_BATCH_SIZE + 1)
+            var silentPasses = 0
+            client.thumbnails = { requested ->
+                // The one-node chunk of the batch pass stays silent; its re-ask answers.
+                if (requested.size == 1 && silentPasses++ == 0) awaitCancellation()
+                requested.map { nodeUid -> bytes(nodeUid) }
+            }
+
+            val result = downloads.downloadThumbnails(USER, nodeUids) {}
+
+            assertFalse(result.stalled)
+            assertEquals(nodeUids.toSet(), result.successfulNodeUids)
+            assertTrue(result.failures.isEmpty())
+            assertEquals(listOf(8, 1, 1), client.enumerations.map { (_, requested) -> requested.size })
+        }
+
+    @Test
+    fun `a preview batch the SDK never answers is settled as a network failure without re-asks`() =
+        runTest {
+            admission.bind { true }
+            client.previews = { awaitCancellation() }
+
+            val result = downloads.downloadPreviews(USER, listOf("a", "b")) {}
+
+            assertTrue(result.stalled)
+            assertEquals(
+                mapOf("a" to ThumbnailFailureKind.TRANSIENT_NETWORK, "b" to ThumbnailFailureKind.TRANSIENT_NETWORK),
+                result.failures,
+            )
+            assertEquals(listOf(ThumbnailType.PREVIEW to listOf("a", "b")), client.enumerations)
+            assertEquals(ProtonThumbnailDownloadPolicy.PREVIEW_FIRST_ANSWER_TIMEOUT_MILLIS, currentTime)
+        }
+
+    @Test
+    fun `a batch is stalled only when every one of its passes was`() {
+        val silent = ThumbnailBatchResult(emptySet(), mapOf("a" to ThumbnailFailureKind.UNANSWERED), stalled = true)
+        val answered = ThumbnailBatchResult(setOf("b"), emptyMap())
+
+        assertTrue(ThumbnailBatchStallPolicy.isStalled(listOf(silent, silent)))
+        assertFalse(ThumbnailBatchStallPolicy.isStalled(listOf(silent, answered)))
+        assertFalse(ThumbnailBatchStallPolicy.isStalled(emptyList()))
+        assertEquals(
+            mapOf("a" to ThumbnailFailureKind.TRANSIENT_NETWORK),
+            ThumbnailBatchStallPolicy.settleStalled(listOf("a", "b"), successful = setOf("b")),
+        )
+    }
+
     private fun noThumbnail(nodeUid: NodeUid): FileThumbnail =
         FileThumbnail(
             nodeUid,
@@ -155,8 +234,8 @@ class ProtonRenditionDownloadsTest {
 
     /** Answers [ProtonPhotosClient.enumerateThumbnails] from [thumbnails] and [previews]; refuses everything else. */
     private class FakeClientProvider : ProtonPhotosClientProvider {
-        var thumbnails: (List<NodeUid>) -> List<FileThumbnail> = { error("no thumbnail pass expected") }
-        var previews: (List<NodeUid>) -> List<FileThumbnail> = { error("no preview pass expected") }
+        var thumbnails: suspend (List<NodeUid>) -> List<FileThumbnail> = { error("no thumbnail pass expected") }
+        var previews: suspend (List<NodeUid>) -> List<FileThumbnail> = { error("no preview pass expected") }
         val enumerations = mutableListOf<Pair<ThumbnailType, List<String>>>()
 
         override suspend fun get(userId: UserId): ProtonPhotosClient =

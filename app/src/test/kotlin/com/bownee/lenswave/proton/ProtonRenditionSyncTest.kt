@@ -7,6 +7,7 @@ import kotlinx.coroutines.yield
 import me.proton.core.domain.entity.UserId
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.net.UnknownHostException
@@ -239,6 +240,61 @@ class ProtonRenditionSyncTest {
             assertTrue(thumbnails.claimReady(USER.id, limit = 2).isEmpty())
             clock.value += ProtonThumbnailQueue.NETWORK_RETRY_MILLIS
             assertEquals(2, thumbnails.claimReady(USER.id, limit = 2).size)
+        }
+
+    @Test
+    fun `a batch the SDK never answered ends the run instead of claiming the next one`() =
+        test { sync ->
+            thumbnails.replaceSource(USER.id, ProtonSyncKeys.QueueSource.TIMELINE, candidates("a", "b"))
+            previews.replaceSource(USER.id, ProtonSyncKeys.QueueSource.TIMELINE_PREVIEWS, candidates("p"))
+            source.thumbnailProgress = emptyList()
+            source.thumbnailResult =
+                ThumbnailBatchResult(
+                    emptySet(),
+                    mapOf("a" to ThumbnailFailureKind.TRANSIENT_NETWORK, "b" to ThumbnailFailureKind.TRANSIENT_NETWORK),
+                    stalled = true,
+                )
+            val writesBefore = store.writeCount
+
+            val step = sync.downloadNextBatch(USER, allowPreviews = true) {}
+
+            // The preview is ready now, but the step reports the stalled nodes' retry instead:
+            // too long to sleep for, so the worker ends the run waiting for it, and the
+            // queues are written as at any run end.
+            assertEquals(
+                ProtonThumbnailQueueStep.Idle(
+                    hasPending = true,
+                    retryAfterMillis = ProtonThumbnailQueue.NETWORK_RETRY_MILLIS,
+                ),
+                step,
+            )
+            assertNull(ProtonBackgroundBatchPolicy.idleWaitMillis(step as ProtonThumbnailQueueStep.Idle))
+            assertEquals(0, source.previewCalls)
+            assertEquals(writesBefore + 2, store.writeCount)
+            // No node took a backoff step, and both are claimable again shortly.
+            assertTrue(store.readQueue(USER.id, ProtonQueueName.THUMBNAILS).all { entry -> entry.retryCount == 0 })
+            assertTrue(thumbnails.claimReady(USER.id, limit = 2).isEmpty())
+            clock.value += ProtonThumbnailQueue.NETWORK_RETRY_MILLIS
+            assertEquals(2, thumbnails.claimReady(USER.id, limit = 2).size)
+        }
+
+    @Test
+    fun `a preview batch the SDK never answered ends the run the same way`() =
+        test { sync ->
+            previews.replaceSource(USER.id, ProtonSyncKeys.QueueSource.TIMELINE_PREVIEWS, candidates("a"))
+            source.previewResult =
+                ThumbnailBatchResult(emptySet(), mapOf("a" to ThumbnailFailureKind.TRANSIENT_NETWORK), stalled = true)
+
+            val step = sync.downloadNextBatch(USER, allowPreviews = true) {}
+
+            assertEquals(
+                ProtonThumbnailQueueStep.Idle(
+                    hasPending = true,
+                    retryAfterMillis = ProtonThumbnailQueue.NETWORK_RETRY_MILLIS,
+                ),
+                step,
+            )
+            assertEquals(1, previews.pendingCount(USER.id))
         }
 
     @Test

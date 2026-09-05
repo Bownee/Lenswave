@@ -119,6 +119,31 @@ class ProtonBackgroundBatchPolicyTest {
     ) = ProtonThumbnailQueueStep.Idle(hasPending = hasPending, retryAfterMillis = retryAfterMillis)
 
     @Test
+    fun `a stalled batch reports a retry too far off to sleep for, whatever else is ready`() {
+        val networkRetry = ProtonThumbnailQueue.NETWORK_RETRY_MILLIS
+        val readyNow = idle(hasPending = true, retryAfterMillis = 0L)
+        val stalled = ProtonBackgroundBatchPolicy.afterStalledBatch(readyNow)
+
+        assertEquals(idle(hasPending = true, retryAfterMillis = networkRetry), stalled)
+        assertNull(
+            "the run ends rather than asking a stalled SDK again",
+            ProtonBackgroundBatchPolicy.idleWaitMillis(stalled),
+        )
+        assertFalse(ProtonBackgroundBatchPolicy.hasStaleClaims(stalled))
+        // A longer backoff of the queues' own is kept; nothing pending stays nothing pending.
+        assertEquals(
+            idle(hasPending = true, retryAfterMillis = 60_000L),
+            ProtonBackgroundBatchPolicy.afterStalledBatch(idle(hasPending = true, retryAfterMillis = 60_000L)),
+        )
+        assertEquals(
+            idle(hasPending = true, retryAfterMillis = networkRetry),
+            ProtonBackgroundBatchPolicy.afterStalledBatch(idle(hasPending = true, retryAfterMillis = null)),
+        )
+        val nothingPending = ProtonThumbnailQueueStep.Idle(hasPending = false, previewsDeferred = true)
+        assertEquals(nothingPending, ProtonBackgroundBatchPolicy.afterStalledBatch(nothingPending))
+    }
+
+    @Test
     fun `idle runs wait for soon-due retries and end otherwise`() {
         val idle =
             ProtonBackgroundBatchPolicy.idle(

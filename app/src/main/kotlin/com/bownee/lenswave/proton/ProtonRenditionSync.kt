@@ -126,11 +126,11 @@ internal class ProtonRenditionSync(
         try {
             return when (batch?.queue) {
                 ProtonQueueName.THUMBNAILS -> {
-                    processThumbnailBatch(userId, batch.entries, onProgress).also { flushAfterBatch(userId) }
+                    afterBatch(userId, allowPreviews, processThumbnailBatch(userId, batch.entries, onProgress))
                 }
 
                 ProtonQueueName.PREVIEWS -> {
-                    processPreviewBatch(userId, batch.entries, onProgress).also { flushAfterBatch(userId) }
+                    afterBatch(userId, allowPreviews, processPreviewBatch(userId, batch.entries, onProgress))
                 }
 
                 null -> {
@@ -177,20 +177,53 @@ internal class ProtonRenditionSync(
         }
     }
 
+    /**
+     * What one batch came to. A batch the SDK answered is [ProtonThumbnailQueueStep.Processed]
+     * and the next one is claimed at once; a batch the SDK never answered ([BatchEnd.STALLED])
+     * ends the run instead, since the next batch would only meet the same silence: the step is
+     * an idle one whose retry is too far off to sleep for, so the worker ends waiting for it.
+     */
+    private suspend fun afterBatch(
+        userId: UserId,
+        allowPreviews: Boolean,
+        end: BatchEnd,
+    ): ProtonThumbnailQueueStep =
+        when (end) {
+            BatchEnd.PROCESSED -> {
+                flushAfterBatch(userId)
+                ProtonThumbnailQueueStep.Processed
+            }
+
+            BatchEnd.STALLED -> {
+                val idle = ProtonBackgroundBatchPolicy.afterStalledBatch(queueIdle(userId, allowPreviews))
+                flushQueues(userId)
+                finishPublishing(userId)
+                idle
+            }
+        }
+
+    private enum class BatchEnd { PROCESSED, STALLED }
+
+    /** Where both queues stand for a run that may or may not fetch previews. */
+    private suspend fun queueIdle(
+        userId: UserId,
+        allowPreviews: Boolean,
+    ): ProtonThumbnailQueueStep.Idle =
+        ProtonBackgroundBatchPolicy.idle(
+            thumbnailsPending = thumbnailQueue.hasPending(userId.id, previewsAllowed = allowPreviews),
+            previewsPending = previewQueue.hasPending(userId.id),
+            thumbnailRetryDelayMillis = thumbnailQueue.retryDelayMillis(userId.id, previewsAllowed = allowPreviews),
+            previewRetryDelayMillis = previewQueue.retryDelayMillis(userId.id),
+            allowPreviews = allowPreviews,
+            thumbnailsAwaitingPreviews = thumbnailQueue.hasEntriesAwaitingPreviews(userId.id),
+        )
+
     /** Nothing is claimable; the run may end here, so whatever is unflushed is written. */
     private suspend fun idle(
         userId: UserId,
         allowPreviews: Boolean,
     ): ProtonThumbnailQueueStep.Idle {
-        val idle =
-            ProtonBackgroundBatchPolicy.idle(
-                thumbnailsPending = thumbnailQueue.hasPending(userId.id, previewsAllowed = allowPreviews),
-                previewsPending = previewQueue.hasPending(userId.id),
-                thumbnailRetryDelayMillis = thumbnailQueue.retryDelayMillis(userId.id, previewsAllowed = allowPreviews),
-                previewRetryDelayMillis = previewQueue.retryDelayMillis(userId.id),
-                allowPreviews = allowPreviews,
-                thumbnailsAwaitingPreviews = thumbnailQueue.hasEntriesAwaitingPreviews(userId.id),
-            )
+        val idle = queueIdle(userId, allowPreviews)
         if (ProtonBackgroundBatchPolicy.hasStaleClaims(idle)) {
             // This is the only claimer, so a ready entry nobody could claim is a claim some
             // earlier batch never gave back. Clearing them lets the next step process it
@@ -215,7 +248,7 @@ internal class ProtonRenditionSync(
         userId: UserId,
         entries: List<ProtonThumbnailQueueEntry>,
         onProgress: suspend (ProtonThumbnailWorkProgress) -> Unit,
-    ): ProtonThumbnailQueueStep {
+    ): BatchEnd {
         val nodeUids = entries.map(ProtonThumbnailQueueEntry::nodeUid)
         val progressMutex = Mutex()
         val marks = publisher(userId)
@@ -232,6 +265,7 @@ internal class ProtonRenditionSync(
             // nodes deferred to a preview-fetching run are reported, and a claimed entry left
             // behind would keep the run claiming and releasing it until the deadline.
             progressMutex.withLock { settleThumbnails(userId, result, marks, settled) }
+            return if (result.stalled) BatchEnd.STALLED else BatchEnd.PROCESSED
         } catch (error: CancellationException) {
             // The release takes the queue mutex; from a cancelled coroutine that suspension
             // would throw instead and leave the claims behind for the rest of the process.
@@ -242,14 +276,14 @@ internal class ProtonRenditionSync(
             thumbnailQueue.settle(userId.id, emptySet(), nodeUids.associateWith { classifyBatchFailure(error) })
             onProgress(progress(userId))
         }
-        return ProtonThumbnailQueueStep.Processed
+        return BatchEnd.PROCESSED
     }
 
     private suspend fun processPreviewBatch(
         userId: UserId,
         entries: List<ProtonThumbnailQueueEntry>,
         onProgress: suspend (ProtonThumbnailWorkProgress) -> Unit,
-    ): ProtonThumbnailQueueStep {
+    ): BatchEnd {
         val nodeUids = entries.map(ProtonThumbnailQueueEntry::nodeUid)
         val progressMutex = Mutex()
         val marks = publisher(userId)
@@ -267,6 +301,7 @@ internal class ProtonRenditionSync(
             // failure already settled from a progress report is not settled again: every
             // settle is a backoff step, and a pass is one failure.
             progressMutex.withLock { settlePreviews(userId, result, marks, settledFailures) }
+            return if (result.stalled) BatchEnd.STALLED else BatchEnd.PROCESSED
         } catch (error: CancellationException) {
             withContext(NonCancellable) { previewQueue.release(userId.id, nodeUids) }
             throw error
@@ -274,7 +309,7 @@ internal class ProtonRenditionSync(
             previewQueue.settle(userId.id, emptySet(), nodeUids.associateWith { classifyBatchFailure(error) })
             onProgress(progress(userId))
         }
-        return ProtonThumbnailQueueStep.Processed
+        return BatchEnd.PROCESSED
     }
 
     /**
