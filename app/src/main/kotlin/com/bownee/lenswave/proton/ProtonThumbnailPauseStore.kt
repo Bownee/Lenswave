@@ -8,6 +8,10 @@ import dagger.Module
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import me.proton.core.domain.entity.UserId
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -26,34 +30,55 @@ internal interface ProtonThumbnailPauseStore {
         userId: UserId,
         paused: Boolean,
     )
+
+    /** Loads whatever backs the store off the main thread; stores that need no loading ignore it. */
+    fun warm() {}
 }
 
+/**
+ * The first read of a SharedPreferences file is a disk read, and [isPaused] is asked on the main
+ * thread by every enqueue the gallery makes. The file is opened on the IO dispatcher as soon as
+ * the store exists (and by [warm], for a start-up that wants to be sure), so the main thread
+ * finds it loaded.
+ */
 @Singleton
-internal class SharedPreferencesProtonThumbnailPauseStore
+internal class SharedPreferencesProtonThumbnailPauseStore(
+    context: Context,
+    warmScope: CoroutineScope,
+) : ProtonThumbnailPauseStore {
     @Inject
     constructor(
         @ApplicationContext context: Context,
-    ) : ProtonThumbnailPauseStore {
-        private val preferences by lazy { context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE) }
+    ) : this(context, CoroutineScope(SupervisorJob() + Dispatchers.IO))
 
-        override fun isPaused(userId: UserId): Boolean = preferences.getBoolean(key(userId), false)
+    private val preferences by lazy { context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE) }
 
-        override fun setPaused(
-            userId: UserId,
-            paused: Boolean,
-        ) {
-            preferences.edit {
-                if (paused) putBoolean(key(userId), true) else remove(key(userId))
-            }
-        }
+    init {
+        warmScope.launch { preferences }
+    }
 
-        private fun key(userId: UserId): String = "$KEY_PAUSED_PREFIX${AtomicFileStore.safeName(userId.id)}"
+    override fun warm() {
+        preferences
+    }
 
-        private companion object {
-            const val PREFERENCES_NAME = "thumbnail-downloads"
-            const val KEY_PAUSED_PREFIX = "paused-"
+    override fun isPaused(userId: UserId): Boolean = preferences.getBoolean(key(userId), false)
+
+    override fun setPaused(
+        userId: UserId,
+        paused: Boolean,
+    ) {
+        preferences.edit {
+            if (paused) putBoolean(key(userId), true) else remove(key(userId))
         }
     }
+
+    private fun key(userId: UserId): String = "$KEY_PAUSED_PREFIX${AtomicFileStore.safeName(userId.id)}"
+
+    private companion object {
+        const val PREFERENCES_NAME = "thumbnail-downloads"
+        const val KEY_PAUSED_PREFIX = "paused-"
+    }
+}
 
 @Module
 @InstallIn(SingletonComponent::class)
