@@ -193,6 +193,20 @@ internal class ProtonOriginalStore
             trimToLimit(userId, keepName = null)
         }
 
+        /**
+         * Deletes every plaintext copy, of any user, that is past
+         * [ProtonStorageLayout.DECRYPTED_TTL_MILLIS]. [maintain] does the same for one user once
+         * per activation; this is for the gallery when the app leaves the screen, so plaintext
+         * does not sit on disk for the rest of the process just because nothing re-activated the
+         * account. Copies still within their TTL are left, since the viewer may come back to them.
+         */
+        fun sweepExpiredDecryptedCopies() {
+            wipeStaleDecryptedCopies()
+            decrypted.listFiles()?.filter(File::isDirectory)?.forEach { directory ->
+                expireFiles(directory, ProtonStorageLayout.DECRYPTED_TTL_MILLIS)
+            }
+        }
+
         fun remove(
             userId: String,
             nodeUid: String,
