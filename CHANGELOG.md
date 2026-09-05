@@ -4,6 +4,11 @@ All notable changes to Lenswave. The format follows [Keep a Changelog](https://k
 
 ## [Unreleased]
 
+### Removed
+- The "Block screenshots and screen recording" setting. It only marked the app's own windows
+  secure, which also blanked the app in the recents screen; the stored setting is deleted on
+  the next launch.
+
 ### Added
 - Previews (~1920 px) of every photo are downloaded in the background after thumbnails, so
   photos open sharp immediately.
@@ -24,6 +29,18 @@ All notable changes to Lenswave. The format follows [Keep a Changelog](https://k
   connection SQLCipher opened, at 256,000 PBKDF2 rounds each; it now uses one connection and
   1,000 rounds (the passphrase is already 32 random bytes). Existing databases are re-encrypted
   once on first launch.
+- Launch: the cached photo listings are stored in a compact binary form instead of JSON, the
+  grid is published before the tag listings, and a baseline profile compiles the launch path
+  ahead of time in release builds (existing listings are converted at their next sync).
+- Gallery: the header and the filter chips slide away as you scroll down and return as soon as
+  you scroll up; the navigation sits closer to the top with slightly smaller text and a smaller
+  settings button; the floating date lines up with the date rows.
+- Launch: the gallery draws its first frame without waiting for the session database (the
+  native library, passphrase and key migration now run at the database's first open, and the
+  view model starts after the frame), the previous launch's account is activated from its
+  cache while Proton Core is still reading the session, the cached listing is scanned and
+  parsed in parallel, and views a launch onto a cached library never shows (the empty panel,
+  the selection bar) are built on first use.
 - The first playback of a video that was not cached yet failed with "Could not play this video";
   only the retry, served from the cache, worked. A length check mistook "length not known yet"
   for a negative length.

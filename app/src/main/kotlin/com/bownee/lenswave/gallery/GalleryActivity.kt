@@ -6,7 +6,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.Bundle
-import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
@@ -14,6 +13,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.graphics.Insets
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.doOnPreDraw
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModelProvider
@@ -21,7 +21,6 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.bownee.lenswave.LenswaveApplication
 import com.bownee.lenswave.R
-import com.bownee.lenswave.applyBottomOverlayInsets
 import com.bownee.lenswave.configureEdgeToEdgeWindow
 import com.bownee.lenswave.dp
 import com.bownee.lenswave.gallery.GalleryAlbumTile
@@ -52,7 +51,7 @@ import com.bownee.lenswave.update.AppUpdateChecker
 import com.bownee.lenswave.update.UpdateAvailableDialogFragment
 import com.bownee.lenswave.viewer.PhotoViewerActivity
 import com.bownee.lenswave.viewer.ViewerMutationCoordinator
-import com.bownee.lenswave.viewer.ViewerPrivacySettings
+import dagger.Lazy
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -74,19 +73,19 @@ class GalleryActivity :
     TrashConfirmationDialogFragment.Listener,
     PrivacySettingsDialogFragment.Listener,
     DisconnectProtonDialogFragment.Listener {
-    @Inject lateinit var accountManager: AccountManager
+    // Lazy: these stand on the session database and the Proton gateway, which the first frame
+    // does not wait for; they are resolved in startGallery, after that frame.
+    @Inject lateinit var accountManager: Lazy<AccountManager>
 
     @Inject lateinit var authOrchestrator: AuthOrchestrator
 
-    @Inject lateinit var thumbnailSource: ProtonThumbnailImageSource
+    @Inject lateinit var thumbnailSource: Lazy<ProtonThumbnailImageSource>
 
-    @Inject lateinit var observeUserSettings: ObserveUserSettings
+    @Inject lateinit var observeUserSettings: Lazy<ObserveUserSettings>
 
     @Inject lateinit var appUpdateChecker: AppUpdateChecker
 
-    @Inject lateinit var viewerPrivacySettings: ViewerPrivacySettings
-
-    @Inject lateinit var mutationCoordinator: ViewerMutationCoordinator
+    @Inject lateinit var mutationCoordinator: Lazy<ViewerMutationCoordinator>
 
     private val viewModel: GalleryViewModel by lazy {
         ViewModelProvider(this)[GalleryViewModel::class.java]
@@ -96,7 +95,6 @@ class GalleryActivity :
     private val root get() = screen.root
     private val list get() = screen.list
     private val adapter get() = screen.adapter
-    private val selectionBar get() = screen.selectionBar
     private lateinit var deletionCoordinator: GalleryDeletionCoordinator
     private lateinit var authCoordinator: GalleryAuthCoordinator
     private lateinit var settingsPresenter: GallerySettingsPresenter
@@ -132,6 +130,7 @@ class GalleryActivity :
     private var pendingScrollRestore: GalleryDestination? = null
     private var pendingSelectionRestore = false
     private var viewerLaunched = false
+    private var galleryStarted = false
     private var safeBottom = 0
     private var thumbnailCacheIdentity: GalleryThumbnailCacheIdentity? = null
 
@@ -153,8 +152,6 @@ class GalleryActivity :
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Set before any content: the thumbnails are the same photos the viewer keeps out of screenshots.
-        applyScreenshotPolicy()
         updatePresenter =
             GalleryUpdatePresenter(
                 host = GalleryUpdatePresenter.ActivityHost(this),
@@ -166,18 +163,16 @@ class GalleryActivity :
         authCoordinator =
             GalleryAuthCoordinator(
                 activity = this,
-                accountManager = accountManager,
+                accountManager = accountManager::get,
                 authOrchestrator = authOrchestrator,
             )
         settingsPresenter =
             GallerySettingsPresenter(
                 activity = this,
-                observeUserSettings = observeUserSettings,
+                observeUserSettings = observeUserSettings::get,
                 currentUserId = { currentUiState.currentUserId },
-                privacySettings = viewerPrivacySettings,
                 onConnectProton = ::connectProton,
-                onDisconnectProton = viewModel::disconnectProton,
-                onScreenshotPolicyChanged = ::applyScreenshotPolicy,
+                onDisconnectProton = { viewModel.disconnectProton() },
             )
         deletionCoordinator =
             GalleryDeletionCoordinator(
@@ -193,19 +188,17 @@ class GalleryActivity :
         )
         authCoordinator.register()
         registerTimeChangeReceiver()
-        observeGalleryState()
+        // The view model and the account observers stand on the session database and the Proton
+        // gateway; building them here would put that on the first frame. They start right after it.
+        root.doOnPreDraw { root.post(::startGallery) }
         // Every instance asks; the checker runs the check once per process and hands its result out once.
         if (LenswaveApplication.isAppUpdateStartupEnabled()) updatePresenter.checkForUpdate()
     }
 
     override fun onResume() {
         super.onResume()
-        // The menu toggle applies the flag itself; this catches a change made while paused (the viewer shares the setting).
-        applyScreenshotPolicy()
         viewerLaunched = false
-        // The collector below saw these while the viewer was still launched; now they are the gallery's.
-        consumeViewerOutcomes(mutationCoordinator.outcomes.value)
-        viewModel.resumeThumbnailDownloads()
+        if (galleryStarted) onGalleryResumed()
         updatePresenter.showPendingUpdate()
         settingsPresenter.showPendingDialog()
     }
@@ -216,12 +209,6 @@ class GalleryActivity :
         if (timeChangeReceiverRegistered) unregisterReceiver(timeChangeReceiver)
         if (this::authCoordinator.isInitialized) authCoordinator.unregister()
         super.onDestroy()
-    }
-
-    /** Mirrors [ViewerPrivacySettings.blockScreenshots] into the window's secure flag. */
-    private fun applyScreenshotPolicy() {
-        val secure = WindowManager.LayoutParams.FLAG_SECURE
-        if (viewerPrivacySettings.blockScreenshots) window.addFlags(secure) else window.clearFlags(secure)
     }
 
     /**
@@ -271,8 +258,8 @@ class GalleryActivity :
             GalleryScreen(
                 activity = this,
                 scope = lifecycleScope,
-                repository = thumbnailSource,
-                currentUserId = { currentUiState.currentUserId },
+                repository = thumbnailSource::get,
+                currentUserId = { currentUiState.thumbnailUserId },
                 actions =
                     GalleryScreen.Actions(
                         onPhotoClicked = ::openPhoto,
@@ -317,12 +304,32 @@ class GalleryActivity :
         }
     }
 
+    /**
+     * Everything that needs the view model, once the first frame is up. A resume that came
+     * before this point is replayed, so the downloads and viewer outcomes are not missed.
+     */
+    private fun startGallery() {
+        if (galleryStarted || lifecycle.currentState == Lifecycle.State.DESTROYED) return
+        galleryStarted = true
+        authCoordinator.observeAccount()
+        observeGalleryState()
+        if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) onGalleryResumed()
+    }
+
+    private fun onGalleryResumed() {
+        // The collector below saw these while the viewer was still launched; now they are the gallery's.
+        consumeViewerOutcomes(mutationCoordinator.get().outcomes.value)
+        viewModel.resumeThumbnailDownloads()
+    }
+
     private fun observeGalleryState() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 combine(viewModel.uiState, groupingGeneration, photoColumns) { state, generation, columns ->
                     Triple(state, generation, columns)
-                }.collectLatest { (state, generation, columns) -> render(state, generation, columns) }
+                }.collectLatest { (state, generation, columns) ->
+                    if (!state.isPlaceholder) render(state, generation, columns)
+                }
             }
         }
         lifecycleScope.launch {
@@ -348,7 +355,7 @@ class GalleryActivity :
         }
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                mutationCoordinator.outcomes.collect(::consumeViewerOutcomes)
+                mutationCoordinator.get().outcomes.collect(::consumeViewerOutcomes)
             }
         }
     }
@@ -362,7 +369,7 @@ class GalleryActivity :
         if (!GalleryViewerOutcomePolicy.consumesNow(viewerLaunched, outcomes)) return
         val summary = GalleryViewerOutcomePolicy.summarize(outcomes)
         // One update for the whole drain, so the collector is not re-entered with a partial list.
-        mutationCoordinator.consumeAll(outcomes)
+        mutationCoordinator.get().consumeAll(outcomes)
         if (summary.refresh) viewModel.refreshAfterMutation()
         if (summary.failedFavorite) Toast.makeText(this, R.string.could_not_update_favorite, Toast.LENGTH_LONG).show()
         if (summary.failedTrash) Toast.makeText(this, R.string.could_not_move_to_proton_trash, Toast.LENGTH_LONG).show()
@@ -389,12 +396,13 @@ class GalleryActivity :
                 spanChanged
         screen.setRefreshing(state.isRefreshing)
         notificationPermissionPrompter.requestIfNeeded(protonConnected = state.isProtonConnected)
-        updateThumbnailCacheIdentity(state.currentUserId)
+        updateThumbnailCacheIdentity(state.thumbnailUserId)
         if (contentChanged || destinationChanged) {
             val rows = buildRows(state.content, grouping, columns)
             if (destinationChanged) {
                 // The list still shows the previous page here, so its position can be captured.
                 saveScrollPosition()
+                screen.showHeader()
                 pendingScrollRestore = state.destination
                 pendingSelectionRestore = true
             } else if (spanChanged) {
@@ -670,7 +678,6 @@ class GalleryActivity :
             screen.applySafeArea(safeArea)
             updateFastScrollTrack()
             updateGalleryFooterHeight(adapter.hasSelection())
-            selectionBar.applyBottomOverlayInsets(safeArea)
             insets
         }
         ViewCompat.requestApplyInsets(root)

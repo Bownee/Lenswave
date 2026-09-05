@@ -987,12 +987,19 @@ class ProtonPhotoGatewayTest {
         override fun storedRenditions(userId: String): ProtonStoredRenditions =
             ProtonStoredRenditions(thumbnails.toSet(), previews.toSet()) { nodeUid -> nodeUid }
 
+        override suspend fun scanStoredRenditions(userId: String): ProtonStoredRenditions = storedRenditions(userId)
+
         override fun readTimelineSnapshot(
             userId: String,
             availability: ProtonStoredRenditions,
         ): List<ProtonGalleryPhoto>? {
             events += "readTimeline:$userId"
             return timelines[userId]?.hydrated(availability)
+        }
+
+        override fun readTimelineEntries(userId: String): List<ProtonGalleryPhoto>? {
+            events += "readTimeline:$userId"
+            return timelines[userId]
         }
 
         override fun writeIndex(

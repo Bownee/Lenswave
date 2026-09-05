@@ -10,7 +10,6 @@ import androidx.lifecycle.lifecycleScope
 import com.bownee.lenswave.BuildConfig
 import com.bownee.lenswave.R
 import com.bownee.lenswave.gallery.GallerySettingsMenuPolicy.Item
-import com.bownee.lenswave.viewer.ViewerPrivacySettings
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import me.proton.core.domain.entity.UserId
@@ -26,13 +25,11 @@ import me.proton.core.usersettings.domain.usecase.ObserveUserSettings
  */
 internal class GallerySettingsPresenter(
     private val activity: FragmentActivity,
-    private val observeUserSettings: ObserveUserSettings,
+    /** Resolved when a dialog needs it: it stands on the session database, which the first frame does not wait for. */
+    private val observeUserSettings: () -> ObserveUserSettings,
     private val currentUserId: () -> UserId?,
-    private val privacySettings: ViewerPrivacySettings,
     private val onConnectProton: () -> Unit,
     private val onDisconnectProton: () -> Unit,
-    /** The screenshot setting changed; the window flag must follow at once (see [showMenu]). */
-    private val onScreenshotPolicyChanged: () -> Unit,
 ) {
     private var popup: PopupMenu? = null
 
@@ -43,11 +40,7 @@ internal class GallerySettingsPresenter(
         popup?.dismiss()
         popup =
             PopupMenu(activity, anchor).apply {
-                val entries =
-                    GallerySettingsMenuPolicy.entries(
-                        connected = currentUserId() != null,
-                        blockScreenshots = privacySettings.blockScreenshots,
-                    )
+                val entries = GallerySettingsMenuPolicy.entries(connected = currentUserId() != null)
                 entries.forEachIndexed { order, entry ->
                     val title =
                         if (entry.item == Item.VERSION) {
@@ -56,13 +49,7 @@ internal class GallerySettingsPresenter(
                             activity.getString(entry.item.titleRes)
                         }
                     // Ids start at 1: the first ordinal would be Menu.NONE, which the menu does not treat as an item id.
-                    menu.add(Menu.NONE, entry.item.ordinal + 1, order, title).apply {
-                        isEnabled = entry.enabled
-                        entry.checked?.let { checked ->
-                            isCheckable = true
-                            isChecked = checked
-                        }
-                    }
+                    menu.add(Menu.NONE, entry.item.ordinal + 1, order, title).isEnabled = entry.enabled
                 }
                 setOnMenuItemClickListener { item ->
                     when (Item.entries.getOrNull(item.itemId - 1)) {
@@ -79,14 +66,6 @@ internal class GallerySettingsPresenter(
 
                         Item.PRIVACY -> {
                             showPrivacySettings()
-                        }
-
-                        Item.BLOCK_SCREENSHOTS -> {
-                            // Applied now, not on the next resume: a popup toggle never pauses the
-                            // activity, and pressing Home right after enabling it would otherwise
-                            // store an unsecured recents snapshot.
-                            privacySettings.blockScreenshots = !item.isChecked
-                            onScreenshotPolicyChanged()
                         }
 
                         Item.VERSION, null -> {}
@@ -131,7 +110,7 @@ internal class GallerySettingsPresenter(
         }
         activity.lifecycleScope.launch {
             val enabled =
-                runCatching { observeUserSettings(userId, false).first()?.telemetry == true }
+                runCatching { observeUserSettings()(userId, false).first()?.telemetry == true }
                     .getOrDefault(false)
             // The read suspended; the state may have been saved meanwhile (see GalleryDialogPromptPolicy).
             show(

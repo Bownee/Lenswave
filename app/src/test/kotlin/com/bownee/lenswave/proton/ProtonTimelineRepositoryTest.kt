@@ -497,10 +497,14 @@ class ProtonTimelineRepositoryTest {
         override fun storedRenditions(userId: String): ProtonStoredRenditions =
             ProtonStoredRenditions(thumbnails.toSet(), emptySet()) { nodeUid -> nodeUid }
 
+        override suspend fun scanStoredRenditions(userId: String): ProtonStoredRenditions = storedRenditions(userId)
+
         override fun readTimelineSnapshot(
             userId: String,
             availability: ProtonStoredRenditions,
         ): List<ProtonGalleryPhoto>? = timelines[userId]?.hydrated(availability)
+
+        override fun readTimelineEntries(userId: String): List<ProtonGalleryPhoto>? = timelines[userId]
 
         override fun writeIndex(
             userId: String,

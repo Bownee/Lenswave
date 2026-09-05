@@ -15,6 +15,9 @@ internal class GalleryListView
     ) : ListView(context, attributes, defaultStyleAttribute) {
         private val fastScroller = GalleryFastScroller(this, context)
 
+        /** Called for every scroll step, after the fast scroller; the screen slides its header from it. */
+        var onScrolled: (() -> Unit)? = null
+
         init {
             // The platform fast scroller is replaced by the drag handle; the plain scrollbar stays
             // available for pages where the handle is disabled.
@@ -72,6 +75,7 @@ internal class GalleryListView
             super.onScrollChanged(left, top, oldLeft, oldTop)
             // The list redraws itself as it scrolls; only the handle's own strip needs marking.
             fastScroller.onListScrolled()
+            onScrolled?.invoke()
         }
 
         override fun onLayout(

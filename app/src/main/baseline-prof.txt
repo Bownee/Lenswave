@@ -1,0 +1,20 @@
+# Baseline profile, applied by AGP to non-debuggable variants (release, minified) and installed
+# at runtime by androidx.profileinstaller. Without one, ART runs a cold launch in the interpreter
+# until the JIT catches up: decrypting and decoding the cached photo listing, the Hilt graph and
+# the SQLCipher open were all measured interpreted. Written by hand rather than generated: the
+# whole app is small enough to compile ahead of time, and the library packages below are the
+# ones on the launch path.
+HSPLcom/bownee/lenswave/**->**(**)**
+Lcom/bownee/lenswave/**
+HSPLnet/zetetic/database/**->**(**)**
+Lnet/zetetic/database/**
+HSPLandroidx/room/**->**(**)**
+HSPLandroidx/sqlite/**->**(**)**
+HSPLdagger/**->**(**)**
+HSPLkotlinx/coroutines/**->**(**)**
+HSPLme/proton/core/account/**->**(**)**
+HSPLme/proton/core/accountmanager/**->**(**)**
+HSPLme/proton/core/crypto/**->**(**)**
+HSPLme/proton/core/key/**->**(**)**
+HSPLme/proton/core/user/**->**(**)**
+HSPLme/proton/core/util/**->**(**)**

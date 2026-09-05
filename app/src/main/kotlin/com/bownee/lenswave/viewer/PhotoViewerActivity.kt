@@ -9,7 +9,6 @@ import android.os.Bundle
 import android.text.format.DateFormat
 import android.view.KeyEvent
 import android.view.View
-import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -83,8 +82,6 @@ class PhotoViewerActivity :
     @Inject lateinit var mutationCoordinator: ViewerMutationCoordinator
 
     @Inject lateinit var navigationSourceProvider: PhotoNavigationSourceProvider
-
-    @Inject lateinit var privacySettings: ViewerPrivacySettings
 
     private lateinit var screen: PhotoViewerScreen
     private val root get() = screen.root
@@ -179,8 +176,6 @@ class PhotoViewerActivity :
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Set before any content: a secure window keeps the photos out of screenshots and recordings.
-        applySecureWindowFlag()
         restoreNavigation(savedInstanceState)
         restoreNavigationSource()
         // A restored window may already have its edge near; the same check a swipe makes.
@@ -411,20 +406,6 @@ class PhotoViewerActivity :
     override fun onStart() {
         super.onStart()
         video.resume()
-    }
-
-    override fun onResume() {
-        super.onResume()
-        // A toggle in the settings takes effect on the way back, without recreating the viewer.
-        applySecureWindowFlag()
-    }
-
-    private fun applySecureWindowFlag() {
-        if (privacySettings.blockScreenshots) {
-            window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-        } else {
-            window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
-        }
     }
 
     override fun onStop() {

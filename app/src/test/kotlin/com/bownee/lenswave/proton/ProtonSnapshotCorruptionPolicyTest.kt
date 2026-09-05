@@ -17,6 +17,9 @@ class ProtonSnapshotCorruptionPolicyTest {
         assertTrue(ProtonSnapshotCorruptionPolicy.isCorrupt(JSONException("unterminated array")))
         assertTrue(ProtonSnapshotCorruptionPolicy.isCorrupt(AEADBadTagException("tag mismatch")))
         assertTrue(ProtonSnapshotCorruptionPolicy.isCorrupt(CorruptEnvelopeException("Encrypted file is truncated")))
+        assertTrue(
+            ProtonSnapshotCorruptionPolicy.isCorrupt(CorruptPhotoIndexException("Photo index ends inside its count")),
+        )
     }
 
     @Test

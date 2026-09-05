@@ -15,6 +15,9 @@ internal class GalleryStickyDateController(
     private val list: GalleryListView,
     private val adapter: GalleryListAdapter,
     private val stickyDate: TextView,
+    /** Pixels of the pinned header scrolled out of view; the badge follows the rows under what is left of it. */
+    private val headerHidden: () -> Int = { 0 },
+    private val onScrollStateChanged: (Int) -> Unit = {},
 ) {
     private var updatePosted = false
     private val update =
@@ -30,7 +33,7 @@ internal class GalleryStickyDateController(
                 override fun onScrollStateChanged(
                     view: AbsListView?,
                     scrollState: Int,
-                ) = Unit
+                ) = onScrollStateChanged(scrollState)
 
                 override fun onScroll(
                     view: AbsListView?,
@@ -60,7 +63,7 @@ internal class GalleryStickyDateController(
             firstRowBelow(
                 firstVisiblePosition = list.firstVisiblePosition,
                 childCount = list.childCount,
-                headerBottom = list.paddingTop,
+                headerBottom = list.paddingTop - headerHidden(),
             ) { index -> list.getChildAt(index).bottom }
         val label = position?.let { labelFor(it, list.headerViewsCount, adapter::dateLabelForPosition) }
         if (label == null) {

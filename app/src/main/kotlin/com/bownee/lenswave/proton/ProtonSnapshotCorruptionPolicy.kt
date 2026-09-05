@@ -23,7 +23,10 @@ internal object ProtonSnapshotCorruptionPolicy {
         val causes = generateSequence(error, Throwable::cause).take(MAX_CAUSE_DEPTH).toList()
         if (causes.any { cause -> cause is SecureFileStore.DataKeyUnavailableException }) return false
         return causes.any { cause ->
-            cause is JSONException || cause is AEADBadTagException || cause is CorruptEnvelopeException
+            cause is JSONException ||
+                cause is CorruptPhotoIndexException ||
+                cause is AEADBadTagException ||
+                cause is CorruptEnvelopeException
         }
     }
 

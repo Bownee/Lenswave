@@ -67,6 +67,13 @@ data class GalleryUiState(
      * while cached content is shown. The gallery offers a banner with a manual refresh.
      */
     val listingRefused: Boolean = false,
+    /**
+     * The account whose thumbnails the grid reads: the signed-in one, or before the session has
+     * settled, the one whose cached listing is on screen (see [GalleryUiInputs.awaitingCache]).
+     */
+    val thumbnailUserId: UserId? = null,
+    /** The O(1) stand-in published before the first real state; the activity does not render it. */
+    val isPlaceholder: Boolean = false,
 ) {
     val visibleAssets: List<GalleryAsset>
         get() = (content as? GalleryContent.Photos)?.assets.orEmpty()

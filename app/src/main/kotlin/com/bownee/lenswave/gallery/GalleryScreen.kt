@@ -23,6 +23,7 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.isNotEmpty
 import com.bownee.lenswave.R
 import com.bownee.lenswave.UiStyle
+import com.bownee.lenswave.applyBottomOverlayInsets
 import com.bownee.lenswave.dp
 import com.bownee.lenswave.proton.ProtonAlbum
 import com.bownee.lenswave.proton.ProtonMediaTag
@@ -37,7 +38,7 @@ import me.proton.core.domain.entity.UserId
 internal class GalleryScreen(
     private val activity: GalleryActivity,
     scope: CoroutineScope,
-    repository: ProtonThumbnailImageSource,
+    repository: () -> ProtonThumbnailImageSource,
     currentUserId: () -> UserId?,
     private val actions: Actions,
 ) {
@@ -47,7 +48,6 @@ internal class GalleryScreen(
         }
     val list: GalleryListView
     val adapter: GalleryListAdapter
-    val selectionBar: LinearLayout
     val settingsButton: ImageButton
 
     /** Height of the pinned header including the status-bar inset; the list starts below it. */
@@ -55,6 +55,10 @@ internal class GalleryScreen(
 
     /** The header height the views below it were last laid out for; -1 forces the next measure to apply it again. */
     private var appliedHeaderHeight = -1
+
+    /** Pixels of the pinned header scrolled out of view, see [GalleryHeaderScrollPolicy]. */
+    private var headerHidden = 0
+    private val scrollTracker = GalleryListScrollTracker()
     var onHeaderHeightChanged: ((Int) -> Unit)? = null
 
     private val stickyHeader: LinearLayout
@@ -68,19 +72,18 @@ internal class GalleryScreen(
     private val filterChips: Map<GalleryDestination, FilterChip>
     private val galleryHeader: LinearLayout
     private val galleryFooter: View
-    private val emptyPanel: LinearLayout
-    private val emptyTitle: TextView
-    private val emptyMessage: TextView
-    private val emptyAction: Button
-    private val listingRefusedBanner: LinearLayout
+
+    // Built on first use: a launch onto a cached library shows neither, and the selection bar only on a long press.
+    private var emptyPanel: EmptyPanel? = null
+    private var listingRefusedBanner: LinearLayout? = null
+    private var selectionBar: SelectionBar? = null
 
     /** The user closed the banner; it stays closed until the flag clears and is raised again. */
     private var listingRefusedDismissed = false
     private val refreshLayout: GalleryRefreshLayout
+    private val statusBarScrim: View
     private val stickyDate: TextView
     private val stickyDateController: GalleryStickyDateController
-    private val selectionCount: TextView
-    private val selectionDeleteButton: Button
     private var safeArea = Insets.NONE
     private var revealedDestination: GalleryDestination? = null
 
@@ -118,15 +121,7 @@ internal class GalleryScreen(
         filterRow = header.filterRow
         filterChips = header.filterChips
 
-        val listHeader = buildListHeader()
-        galleryHeader = listHeader.container
-        // The filter chips scroll away with the content; only the title row stays pinned.
-        galleryHeader.addView(filterRow, 0, UiStyle.matchWrap().apply { bottomMargin = activity.dp(6) })
-        emptyPanel = listHeader.empty.container
-        emptyTitle = listHeader.empty.title
-        emptyMessage = listHeader.empty.message
-        emptyAction = listHeader.empty.action
-        listingRefusedBanner = listHeader.listingRefusedBanner
+        galleryHeader = buildListHeader()
 
         galleryFooter =
             View(activity).apply {
@@ -153,11 +148,14 @@ internal class GalleryScreen(
                 addView(list, UiStyle.matchParentFrame())
             }
         root.addView(refreshLayout, UiStyle.matchParentFrame())
+        // Under the status bar whatever the header does: the photos scroll beneath the clock, not into it.
+        statusBarScrim = View(activity).apply { setBackgroundColor(UiStyle.withAlpha(UiStyle.background, 244)) }
+        root.addView(statusBarScrim, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, Gravity.TOP))
 
         stickyDate =
             UiStyle.label(activity, sizeSp = 12.5f, medium = true).apply {
                 gravity = Gravity.CENTER
-                setPadding(activity.dp(12), 0, activity.dp(12), 0)
+                setPadding(activity.dp(STICKY_DATE_PADDING_DP), 0, activity.dp(STICKY_DATE_PADDING_DP), 0)
                 background =
                     UiStyle.rounded(
                         activity,
@@ -176,7 +174,15 @@ internal class GalleryScreen(
                 Gravity.TOP or Gravity.START,
             ),
         )
-        stickyDateController = GalleryStickyDateController(list, adapter, stickyDate)
+        stickyDateController =
+            GalleryStickyDateController(
+                list,
+                adapter,
+                stickyDate,
+                headerHidden = { headerHidden },
+                onScrollStateChanged = ::onListScrollStateChanged,
+            )
+        list.onScrolled = ::onListScrolled
 
         root.addView(
             stickyHeader,
@@ -186,11 +192,6 @@ internal class GalleryScreen(
                 Gravity.TOP,
             ),
         )
-        val selection = buildSelectionBar()
-        selectionBar = selection.container.apply { visibility = View.GONE }
-        selectionCount = selection.count
-        selectionDeleteButton = selection.delete
-        root.addView(selectionBar, UiStyle.bottomOverlayParams(activity))
 
         list.setOnFastScrollInteractionListener { active ->
             adapter.setFastScrolling(active)
@@ -285,6 +286,55 @@ internal class GalleryScreen(
         }
     }
 
+    private fun onListScrolled() {
+        val firstVisible = list.firstVisiblePosition
+        val scrolledDown = scrollTracker.scrolled(firstVisible, list.childCount) { index -> list.getChildAt(index).top }
+        val atTop = firstVisible == 0 && list.isNotEmpty() && list.getChildAt(0).top >= list.paddingTop
+        val hidden = GalleryHeaderScrollPolicy.hiddenAfter(headerHidden, scrolledDown, stickyHeader.height, atTop)
+        setHeaderHidden(hidden, animate = false)
+    }
+
+    private fun onListScrollStateChanged(state: Int) {
+        if (state != AbsListView.OnScrollListener.SCROLL_STATE_IDLE) return
+        setHeaderHidden(GalleryHeaderScrollPolicy.settled(headerHidden, stickyHeader.height), animate = true)
+    }
+
+    /** Brings the header fully back at once; a new page starts with it shown. */
+    fun showHeader() {
+        scrollTracker.reset()
+        setHeaderHidden(0, animate = false)
+    }
+
+    private fun setHeaderHidden(
+        hidden: Int,
+        animate: Boolean,
+    ) {
+        if (hidden == headerHidden && !animate) return
+        headerHidden = hidden
+        // The badge stops under the status bar, whose scrim stays; the clock must not land on it.
+        val badgeHidden = hidden.coerceAtMost((stickyHeader.height - safeArea.top).coerceAtLeast(0))
+        slide(stickyHeader, -hidden.toFloat(), animate)
+        slide(stickyDate, -badgeHidden.toFloat(), animate)
+        stickyDateController.schedule()
+    }
+
+    private fun slide(
+        view: View,
+        offset: Float,
+        animate: Boolean,
+    ) {
+        view.animate().cancel()
+        if (animate) {
+            view
+                .animate()
+                .translationY(offset)
+                .setDuration(HEADER_SETTLE_MILLIS)
+                .start()
+        } else {
+            view.translationY = offset
+        }
+    }
+
     /** Scrolls back to the top, jumping most of the way first so long lists do not crawl. */
     fun scrollToTop() {
         if (list.firstVisiblePosition > SCROLL_TO_TOP_JUMP_ROWS) list.setSelection(SCROLL_TO_TOP_JUMP_ROWS)
@@ -294,28 +344,29 @@ internal class GalleryScreen(
     /** Applies the window's safe area to the pinned header and everything laid out under it. */
     fun applySafeArea(insets: Insets) {
         safeArea = insets
-        stickyHeader.setPadding(
-            activity.dp(16) + insets.left,
-            activity.dp(6) + insets.top,
-            activity.dp(16) + insets.right,
-            activity.dp(8),
-        )
+        statusBarScrim.layoutParams =
+            (statusBarScrim.layoutParams as FrameLayout.LayoutParams).apply { height = insets.top }
+        // The rows carry the horizontal inset, not the header: the chips scroll edge to edge under it.
+        stickyHeader.setPadding(0, activity.dp(2) + insets.top, 0, activity.dp(6))
+        titleRow.setPadding(activity.dp(16) + insets.left, 0, activity.dp(16) + insets.right, 0)
         galleryHeader.setPadding(insets.left, activity.dp(2), insets.right, activity.dp(6))
-        filterRow.setPadding(activity.dp(16), 0, activity.dp(16), 0)
+        filterRow.setPadding(activity.dp(16) + insets.left, 0, activity.dp(16) + insets.right, 0)
         // The date badge's start margin follows the safe area too; the next measure re-applies everything.
         appliedHeaderHeight = -1
         root.requestLayout()
+        selectionBar?.container?.applyBottomOverlayInsets(insets)
     }
 
     fun showContent() {
-        emptyPanel.visibility = View.GONE
+        emptyPanel?.container?.visibility = View.GONE
     }
 
     /** Mirrors [GalleryUiState.listingRefused]; a dismissed banner stays down until the flag clears and returns. */
     fun renderListingRefused(refused: Boolean) {
         if (!refused) listingRefusedDismissed = false
         val show = refused && !listingRefusedDismissed
-        listingRefusedBanner.visibility = if (show) View.VISIBLE else View.GONE
+        if (!show && listingRefusedBanner == null) return
+        listingRefusedBanner().visibility = if (show) View.VISIBLE else View.GONE
     }
 
     fun showEmptyState(
@@ -324,23 +375,26 @@ internal class GalleryScreen(
         action: String?,
         onAction: (() -> Unit)?,
     ) {
-        emptyPanel.visibility = View.VISIBLE
-        emptyTitle.text = title
-        emptyMessage.text = message
-        emptyAction.visibility = if (action == null) View.GONE else View.VISIBLE
-        emptyAction.text = action
-        emptyAction.setOnClickListener(if (onAction == null) null else View.OnClickListener { onAction() })
+        val panel = emptyPanel()
+        panel.container.visibility = View.VISIBLE
+        panel.title.text = title
+        panel.message.text = message
+        panel.action.visibility = if (action == null) View.GONE else View.VISIBLE
+        panel.action.text = action
+        panel.action.setOnClickListener(if (onAction == null) null else View.OnClickListener { onAction() })
     }
 
     fun renderSelection(selectedCount: Int) {
         val selecting = selectedCount > 0
-        selectionCount.text =
+        if (!selecting && selectionBar == null) return
+        val bar = selectionBar()
+        bar.count.text =
             activity.resources.getQuantityString(
                 R.plurals.selected_photo_count,
                 selectedCount,
                 selectedCount,
             )
-        selectionBar.visibility = if (selecting) View.VISIBLE else View.GONE
+        bar.container.visibility = if (selecting) View.VISIBLE else View.GONE
     }
 
     /** Mirrors the view model's manual refresh state; a finished refresh hides the spinner. */
@@ -352,14 +406,14 @@ internal class GalleryScreen(
     private fun startsPull(touchY: Float): Boolean {
         val filterRowBounds =
             if (filterRow.isShown) {
-                val top = galleryHeader.top + filterRow.top
+                val top = filterRow.top - headerHidden
                 top until top + filterRow.height
             } else {
                 null
             }
         return GalleryPullToRefreshPolicy.startsPull(
             touchY,
-            stickyHeader.height,
+            stickyHeader.height - headerHidden,
             filterRowBounds,
             gapBelowFilterRow = pullGapBelowChips,
         )
@@ -377,7 +431,8 @@ internal class GalleryScreen(
         refreshLayout.setProgressViewOffset(false, headerHeight, headerHeight + activity.dp(REFRESH_SPINNER_END_DP))
         (stickyDate.layoutParams as FrameLayout.LayoutParams).apply {
             topMargin = headerHeight + activity.dp(8)
-            marginStart = activity.dp(8) +
+            // The text lines up with the date rows: their edge padding less the badge's own.
+            marginStart = activity.dp(GalleryListAdapter.EDGE_DP - STICKY_DATE_PADDING_DP) +
                 if (root.layoutDirection == View.LAYOUT_DIRECTION_RTL) {
                     safeArea.right
                 } else {
@@ -421,7 +476,7 @@ internal class GalleryScreen(
             },
         )
         val pageTitle =
-            UiStyle.label(activity, sizeSp = 20f, medium = true).apply {
+            UiStyle.label(activity, sizeSp = NAVIGATION_TEXT_SP, medium = true).apply {
                 maxLines = 1
                 ellipsize = TextUtils.TruncateAt.END
                 visibility = View.GONE
@@ -467,12 +522,13 @@ internal class GalleryScreen(
                     activity,
                     R.drawable.ic_settings,
                     activity.getString(R.string.settings),
-                    sizeDp = TITLE_ROW_HEIGHT_DP,
-                    iconDp = 20,
+                    sizeDp = SETTINGS_BUTTON_DP,
+                    iconDp = 18,
                 ).apply { setOnClickListener { actions.onSettings() } }
+        // Smaller than the row; the row's vertical gravity keeps it centred on the navigation.
         titleRow.addView(
             settings,
-            LinearLayout.LayoutParams(activity.dp(TITLE_ROW_HEIGHT_DP), activity.dp(TITLE_ROW_HEIGHT_DP)),
+            LinearLayout.LayoutParams(activity.dp(SETTINGS_BUTTON_DP), activity.dp(SETTINGS_BUTTON_DP)),
         )
 
         val chips = linkedMapOf<GalleryDestination, FilterChip>()
@@ -526,47 +582,62 @@ internal class GalleryScreen(
                 setBackgroundColor(UiStyle.withAlpha(UiStyle.background, 244))
                 isClickable = true
                 addView(titleRow, UiStyle.matchWrap())
+                // The chips are pinned with the navigation and slide out with it, see [onListScrolled].
+                addView(filterRow, UiStyle.matchWrap().apply { topMargin = activity.dp(2) })
             }
         return StickyHeader(container, titleRow, back, pageTitle, tabSwitch, photos, albums, settings, filterRow, chips)
     }
 
-    private fun buildListHeader(): ListHeader {
-        val container =
-            LinearLayout(activity).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(0, activity.dp(2), 0, activity.dp(6))
+    private fun buildListHeader(): LinearLayout =
+        LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, activity.dp(2), 0, activity.dp(6))
+        }
+
+    /** Sits below the filter row (always the header's first child) and above the empty panel, if that exists yet. */
+    private fun listingRefusedBanner(): LinearLayout =
+        listingRefusedBanner ?: UiStyle
+            .banner(
+                activity,
+                message = activity.getString(R.string.listing_refused_message),
+                actionLabel = activity.getString(R.string.refresh),
+                dismissDescription = activity.getString(R.string.dismiss),
+                onAction = actions.onRefresh,
+                onDismiss = { listingRefusedDismissed = true },
+            ).also { banner ->
+                listingRefusedBanner = banner
+                galleryHeader.addView(
+                    banner,
+                    1,
+                    UiStyle.matchWrap().apply {
+                        marginStart = activity.dp(16)
+                        marginEnd = activity.dp(16)
+                        topMargin = activity.dp(4)
+                        bottomMargin = activity.dp(4)
+                    },
+                )
             }
-        val banner =
-            UiStyle
-                .banner(
-                    activity,
-                    message = activity.getString(R.string.listing_refused_message),
-                    actionLabel = activity.getString(R.string.refresh),
-                    dismissDescription = activity.getString(R.string.dismiss),
-                    onAction = actions.onRefresh,
-                    onDismiss = { listingRefusedDismissed = true },
-                ).apply { visibility = View.GONE }
-        container.addView(
-            banner,
-            UiStyle.matchWrap().apply {
-                marginStart = activity.dp(16)
-                marginEnd = activity.dp(16)
-                topMargin = activity.dp(4)
-                bottomMargin = activity.dp(4)
-            },
-        )
-        val empty = buildEmptyPanel()
-        container.addView(
-            empty.container,
-            UiStyle.matchWrap().apply {
-                marginStart = activity.dp(16)
-                marginEnd = activity.dp(16)
-                topMargin = activity.dp(14)
-                bottomMargin = activity.dp(12)
-            },
-        )
-        return ListHeader(container, empty, banner)
-    }
+
+    private fun emptyPanel(): EmptyPanel =
+        emptyPanel ?: buildEmptyPanel().also { panel ->
+            emptyPanel = panel
+            galleryHeader.addView(
+                panel.container,
+                UiStyle.matchWrap().apply {
+                    marginStart = activity.dp(16)
+                    marginEnd = activity.dp(16)
+                    topMargin = activity.dp(14)
+                    bottomMargin = activity.dp(12)
+                },
+            )
+        }
+
+    private fun selectionBar(): SelectionBar =
+        selectionBar ?: buildSelectionBar().also { bar ->
+            selectionBar = bar
+            root.addView(bar.container, UiStyle.bottomOverlayParams(activity))
+            bar.container.applyBottomOverlayInsets(safeArea)
+        }
 
     private fun buildEmptyPanel(): EmptyPanel {
         val icon =
@@ -676,7 +747,7 @@ internal class GalleryScreen(
         label: String,
     ) : FrameLayout(context) {
         private val labelView =
-            UiStyle.label(context, label, 20f, medium = true).apply {
+            UiStyle.label(context, label, NAVIGATION_TEXT_SP, medium = true).apply {
                 gravity = Gravity.CENTER
             }
 
@@ -802,12 +873,6 @@ internal class GalleryScreen(
         val filterChips: Map<GalleryDestination, FilterChip>,
     )
 
-    private data class ListHeader(
-        val container: LinearLayout,
-        val empty: EmptyPanel,
-        val listingRefusedBanner: LinearLayout,
-    )
-
     private data class SelectionBar(
         val container: LinearLayout,
         val count: TextView,
@@ -818,6 +883,10 @@ internal class GalleryScreen(
         /** Height of the floating selection bar including padding, used to keep the list clear of it. */
         const val SELECTION_BAR_HEIGHT_DP = 60
         private const val TITLE_ROW_HEIGHT_DP = 40
+        private const val SETTINGS_BUTTON_DP = 34
+        private const val NAVIGATION_TEXT_SP = 18f
+        private const val STICKY_DATE_PADDING_DP = 12
+        private const val HEADER_SETTLE_MILLIS = 150L
         private const val CHIP_HEIGHT_DP = 38
         private const val REFRESH_SPINNER_END_DP = 56
 

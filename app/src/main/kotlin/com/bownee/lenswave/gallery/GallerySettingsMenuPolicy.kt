@@ -11,7 +11,6 @@ internal object GallerySettingsMenuPolicy {
         CONNECT_PROTON(R.string.connect_proton),
         DISCONNECT_PROTON(R.string.disconnect_proton),
         PRIVACY(R.string.privacy_and_data),
-        BLOCK_SCREENSHOTS(R.string.block_screenshots),
 
         /** The app version, listed for reference only. */
         VERSION(R.string.app_version),
@@ -19,23 +18,17 @@ internal object GallerySettingsMenuPolicy {
 
     data class Entry(
         val item: Item,
-        /** Null for a plain action; the checkbox state for a toggle. */
-        val checked: Boolean? = null,
         val enabled: Boolean = true,
     )
 
     /**
-     * Connect or disconnect according to whether an account is signed in, then privacy, the
-     * screenshot toggle with its current state, and the version as a disabled footer.
+     * Connect or disconnect according to whether an account is signed in, then privacy, and the
+     * version as a disabled footer.
      */
-    fun entries(
-        connected: Boolean,
-        blockScreenshots: Boolean,
-    ): List<Entry> =
+    fun entries(connected: Boolean): List<Entry> =
         listOf(
             Entry(if (connected) Item.DISCONNECT_PROTON else Item.CONNECT_PROTON),
             Entry(Item.PRIVACY),
-            Entry(Item.BLOCK_SCREENSHOTS, checked = blockScreenshots),
             Entry(Item.VERSION, enabled = false),
         )
 

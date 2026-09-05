@@ -5,6 +5,8 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
+import androidx.sqlite.db.SupportSQLiteDatabase
+import androidx.sqlite.db.SupportSQLiteOpenHelper
 import com.bownee.lenswave.storage.DatabasePassphraseStore
 import me.proton.core.account.data.db.AccountConverters
 import me.proton.core.account.data.db.AccountDatabase
@@ -151,37 +153,76 @@ abstract class ProtonCoreDatabase :
             context: Context,
             passphraseStore: DatabasePassphraseStore,
             name: String = NAME,
-        ): ProtonCoreDatabase {
-            System.loadLibrary("sqlcipher")
-            // The factory keeps this array by reference and SQLCipher reads it on the first real
-            // open, so it must stay intact for the lifetime of the database. Never zero it here,
-            // and never hand this same array to anything else: the migration gets its own copy so
-            // a library that wipes the key it was given cannot zero the one Room still holds.
-            // A passphrase that replaced an unreadable one cannot open the existing database;
-            // the migration is told so it probes again and discards that database.
-            val passphrase = passphraseStore.getOrCreate()
-            val kdfIterations =
-                ProtonDatabaseKeyMigration.prepare(
-                    context.getDatabasePath(name),
-                    passphrase.bytes.copyOf(),
-                    passphraseReplaced = passphrase.replacedUnreadable,
-                )
-            return Room
+        ): ProtonCoreDatabase =
+            Room
                 .databaseBuilder(context, ProtonCoreDatabase::class.java, name)
-                .openHelperFactory(
-                    SupportOpenHelperFactory(
-                        passphrase.bytes,
-                        ProtonDatabaseKeyMigration.kdfHook(kdfIterations),
-                        false,
-                    ),
-                )
+                .openHelperFactory(KeyedOnFirstOpenFactory(context, passphraseStore, name))
                 // One connection: SQLCipher derives the key again for every connection the pool
                 // opens, and with write-ahead logging the account flows contending at launch made
                 // it open three, each a full derivation in series before the account was known.
                 .setJournalMode(RoomDatabase.JournalMode.TRUNCATE)
                 .build()
-        }
 
         private const val NAME = "proton-session.db"
+    }
+
+    /**
+     * Loads SQLCipher, reads the passphrase and runs the key migration when the database is
+     * first opened, on the caller's I/O thread, rather than when the Room instance is built.
+     * Building it sits on the gallery activity's injection path (Core's auth orchestrator needs
+     * the feature-flag manager, which needs this database), and the first frame must not wait
+     * for the native library and the Keystore.
+     */
+    private class KeyedOnFirstOpenFactory(
+        private val context: Context,
+        private val passphraseStore: DatabasePassphraseStore,
+        private val name: String,
+    ) : SupportSQLiteOpenHelper.Factory {
+        override fun create(configuration: SupportSQLiteOpenHelper.Configuration): SupportSQLiteOpenHelper =
+            KeyedOnFirstOpenHelper(configuration)
+
+        private inner class KeyedOnFirstOpenHelper(
+            private val configuration: SupportSQLiteOpenHelper.Configuration,
+        ) : SupportSQLiteOpenHelper {
+            private var writeAheadLoggingEnabled = false
+
+            private val delegate: SupportSQLiteOpenHelper by lazy { open() }
+
+            private fun open(): SupportSQLiteOpenHelper {
+                System.loadLibrary("sqlcipher")
+                // The factory keeps this array by reference and SQLCipher reads it on the first real
+                // open, so it must stay intact for the lifetime of the database. Never zero it here,
+                // and never hand this same array to anything else: the migration gets its own copy so
+                // a library that wipes the key it was given cannot zero the one Room still holds.
+                // A passphrase that replaced an unreadable one cannot open the existing database;
+                // the migration is told so it probes again and discards that database.
+                val passphrase = passphraseStore.getOrCreate()
+                val kdfIterations =
+                    ProtonDatabaseKeyMigration.prepare(
+                        context.getDatabasePath(name),
+                        passphrase.bytes.copyOf(),
+                        passphraseReplaced = passphrase.replacedUnreadable,
+                    )
+                return SupportOpenHelperFactory(
+                    passphrase.bytes,
+                    ProtonDatabaseKeyMigration.kdfHook(kdfIterations),
+                    false,
+                ).create(configuration).also { it.setWriteAheadLoggingEnabled(writeAheadLoggingEnabled) }
+            }
+
+            override val databaseName: String? get() = configuration.name
+
+            override val writableDatabase: SupportSQLiteDatabase get() = delegate.writableDatabase
+
+            override val readableDatabase: SupportSQLiteDatabase get() = delegate.readableDatabase
+
+            override fun setWriteAheadLoggingEnabled(enabled: Boolean) {
+                writeAheadLoggingEnabled = enabled
+            }
+
+            override fun close() {
+                delegate.close()
+            }
+        }
     }
 }

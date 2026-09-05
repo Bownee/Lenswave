@@ -31,14 +31,26 @@ object ProtonPresentationInitializer {
         }
     }
 
+    /** Registers the orchestrator's activity results; must run before the activity is started. */
     fun registerAuthentication(
+        activity: FragmentActivity,
+        authOrchestrator: AuthOrchestrator,
+    ) {
+        authOrchestrator.register(activity)
+    }
+
+    /**
+     * Routes the account manager's events into the orchestrator's workflows. Separate from
+     * [registerAuthentication]: the account manager stands on the session database, which the
+     * gallery does not wait for before its first frame.
+     */
+    fun observeAuthentication(
         activity: FragmentActivity,
         accountManager: AccountManager,
         authOrchestrator: AuthOrchestrator,
         onAuthenticationError: () -> Unit,
     ) {
         with(authOrchestrator) {
-            register(activity)
             accountManager
                 .observe(activity.lifecycle, minActiveState = Lifecycle.State.CREATED)
                 .onSessionSecondFactorNeeded { startSecondFactorWorkflow(it) }

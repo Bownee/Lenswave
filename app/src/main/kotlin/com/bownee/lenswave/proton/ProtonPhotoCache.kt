@@ -7,6 +7,8 @@ import com.bownee.lenswave.LenswaveOperation
 import com.bownee.lenswave.storage.AtomicFileStore
 import com.bownee.lenswave.storage.SecureFileStore
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -123,6 +125,13 @@ internal class ProtonPhotoCache
                 ProtonStoredRenditions(thumbnails.storedNames(userId), previews.storedNames(userId))
             }
 
+        override suspend fun scanStoredRenditions(userId: String): ProtonStoredRenditions =
+            renditions[userId] ?: coroutineScope {
+                val thumbnailNames = async { thumbnails.storedNames(userId) }
+                val previewNames = async { previews.storedNames(userId) }
+                ProtonStoredRenditions(thumbnailNames.await(), previewNames.await())
+            }.let { scanned -> renditions.computeIfAbsent(userId) { scanned } }
+
         private fun forgetRenditions(userId: String) {
             renditions.remove(userId)
         }
@@ -131,6 +140,9 @@ internal class ProtonPhotoCache
             userId: String,
             availability: ProtonStoredRenditions,
         ): List<ProtonGalleryPhoto>? = readPhotoSnapshot(userId, indexFile(userId), availability)
+
+        override fun readTimelineEntries(userId: String): List<ProtonGalleryPhoto>? =
+            readPhotoEntries(userId, indexFile(userId))
 
         override fun writeIndex(
             userId: String,
@@ -631,9 +643,7 @@ internal class ProtonPhotoCache
             index: File,
             availability: ProtonStoredRenditions,
         ): List<ProtonGalleryPhoto>? =
-            parsePhotoIndex(userId, index) { value ->
-                availability.photo(value.getString("nodeUid"), value.getLong("captureTime"))
-            }
+            parsePhotoIndex(userId, index) { nodeUid, captureTime -> availability.photo(nodeUid, captureTime) }
 
         /**
          * The persisted fields only, for listings that are rewritten rather than shown: hydrating
@@ -643,29 +653,49 @@ internal class ProtonPhotoCache
             userId: String,
             index: File,
         ): List<ProtonGalleryPhoto>? =
-            parsePhotoIndex(userId, index) { value ->
-                ProtonGalleryPhoto(
-                    nodeUid = value.getString("nodeUid"),
-                    captureTimeEpochSeconds = value.getLong("captureTime"),
-                    hasThumbnail = false,
-                )
+            parsePhotoIndex(userId, index) { nodeUid, captureTime ->
+                ProtonGalleryPhoto(nodeUid = nodeUid, captureTimeEpochSeconds = captureTime, hasThumbnail = false)
             }
 
         /** Node uids only, for callers that never look at rendition availability; null when the listing is absent or unreadable. */
         private fun readNodeUidsOrNull(
             userId: String,
             index: File,
-        ): List<String>? = parsePhotoIndex(userId, index) { value -> value.getString("nodeUid") }
+        ): List<String>? = parsePhotoIndex(userId, index) { nodeUid, _ -> nodeUid }
 
+        /** Either on-disk form, see [ProtonPhotoIndexCodec]. */
         private inline fun <T> parsePhotoIndex(
             userId: String,
             index: File,
-            entry: (JSONObject) -> T,
+            entry: (nodeUid: String, captureTimeEpochSeconds: Long) -> T,
         ): List<T>? =
-            readSnapshot(userId, index) { text ->
-                val array = JSONArray(text)
-                List(array.length()) { position -> entry(array.getJSONObject(position)) }
+            readSnapshotBytes(userId, index, { bytes -> decodePhotoIndex(userId, index, bytes, entry) }) { error ->
+                LenswaveDiagnostics.reportFailure(LenswaveOperation.CACHE_SNAPSHOT_READ, error)
+                null
             }
+
+        /**
+         * A listing still in the JSON form is written back in the binary one, so the next launch
+         * reads it in one pass; a rewrite that fails is reported and the listing stays as it was.
+         */
+        private inline fun <T> decodePhotoIndex(
+            userId: String,
+            index: File,
+            bytes: ByteArray,
+            entry: (nodeUid: String, captureTimeEpochSeconds: Long) -> T,
+        ): List<T> {
+            if (!ProtonPhotoIndexCodec.isLegacyJson(bytes)) return ProtonPhotoIndexCodec.decode(bytes, entry)
+            val entries =
+                ProtonPhotoIndexCodec.decode(bytes) { nodeUid, captureTime ->
+                    ProtonGalleryPhoto(nodeUid = nodeUid, captureTimeEpochSeconds = captureTime, hasThumbnail = false)
+                }
+            try {
+                writePhotoIndex(userId, index, entries)
+            } catch (error: Exception) {
+                LenswaveDiagnostics.reportFailure(LenswaveOperation.CACHE_INDEX_CONVERT, error)
+            }
+            return entries.map { photo -> entry(photo.nodeUid, photo.captureTimeEpochSeconds) }
+        }
 
         /**
          * [file] read, decrypted and parsed, or null when it is absent or unreadable. A corrupt
@@ -689,10 +719,17 @@ internal class ProtonPhotoCache
             file: File,
             parse: (String) -> T,
             onTransientFailure: (Exception) -> T?,
+        ): T? = readSnapshotBytes(userId, file, { bytes -> parse(bytes.toString(Charsets.UTF_8)) }, onTransientFailure)
+
+        private inline fun <T> readSnapshotBytes(
+            userId: String,
+            file: File,
+            parse: (ByteArray) -> T,
+            onTransientFailure: (Exception) -> T?,
         ): T? {
             if (!file.isFile) return null
             return try {
-                parse(readText(userId, file))
+                parse(secureFiles.read(scope(userId), file))
             } catch (error: Exception) {
                 if (ProtonSnapshotCorruptionPolicy.isCorrupt(error)) {
                     file.delete()
@@ -708,15 +745,14 @@ internal class ProtonPhotoCache
             target: File,
             photos: List<ProtonGalleryPhoto>,
         ) {
-            val array = JSONArray()
-            photos.forEach { photo ->
-                array.put(
-                    JSONObject()
-                        .put("nodeUid", photo.nodeUid)
-                        .put("captureTime", photo.captureTimeEpochSeconds),
-                )
-            }
-            writeAtomically(userId, target, array.toString(), "Could not commit Proton Photos index")
+            recordKeyAlias(userId)
+            secureFiles.write(
+                scope(userId),
+                target,
+                ProtonPhotoIndexCodec.encode(photos),
+                "Could not commit Proton Photos index",
+                fsync = true,
+            )
         }
 
         /**

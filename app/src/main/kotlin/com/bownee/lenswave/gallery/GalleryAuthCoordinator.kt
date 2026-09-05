@@ -10,18 +10,24 @@ import me.proton.core.auth.presentation.AuthOrchestrator
 /** Wires Proton's auth orchestrator to the gallery activity and starts the login workflow. */
 internal class GalleryAuthCoordinator(
     private val activity: FragmentActivity,
-    private val accountManager: AccountManager,
+    /** Resolved on [observeAccount], not before: it stands on the session database. */
+    private val accountManager: () -> AccountManager,
     private val authOrchestrator: AuthOrchestrator,
 ) {
     /** Registers the orchestrator with the activity; call from onCreate. */
     fun register() {
-        ProtonPresentationInitializer.registerAuthentication(
+        ProtonPresentationInitializer.registerAuthentication(activity, authOrchestrator)
+        authOrchestrator.setOnLoginResult { }
+    }
+
+    /** Starts routing account events into the login workflows; call once the first frame is up. */
+    fun observeAccount() {
+        ProtonPresentationInitializer.observeAuthentication(
             activity = activity,
-            accountManager = accountManager,
+            accountManager = accountManager(),
             authOrchestrator = authOrchestrator,
             onAuthenticationError = ::showAuthenticationError,
         )
-        authOrchestrator.setOnLoginResult { }
     }
 
     /** Releases the orchestrator; call from onDestroy. */

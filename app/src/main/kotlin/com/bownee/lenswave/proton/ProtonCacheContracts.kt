@@ -19,10 +19,16 @@ internal interface ProtonTimelineCache {
     /** Memoized per user; a fresh listing only after a rendition was written, removed or swept. */
     fun storedRenditions(userId: String): ProtonStoredRenditions
 
+    /** [storedRenditions] with the two directories listed side by side; for the launch, where the listing is on the critical path. */
+    suspend fun scanStoredRenditions(userId: String): ProtonStoredRenditions
+
     fun readTimelineSnapshot(
         userId: String,
         availability: ProtonStoredRenditions = storedRenditions(userId),
     ): List<ProtonGalleryPhoto>?
+
+    /** The timeline as stored, before the rendition availability is applied (see [ProtonStoredRenditions.photo]). */
+    fun readTimelineEntries(userId: String): List<ProtonGalleryPhoto>?
 
     fun writeIndex(
         userId: String,

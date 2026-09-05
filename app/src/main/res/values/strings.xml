@@ -120,7 +120,6 @@
     <string name="privacy_disconnected_message">Lenswave disables Proton Core observability. Lenswave periodically contacts GitHub at startup to check for updates.</string>
     <string name="privacy_connected_message">Lenswave disables Proton Core observability. Proton account telemetry is controlled by the setting below and applies to your Proton account. Lenswave periodically contacts GitHub at startup to check for updates.</string>
     <string name="allow_proton_telemetry">Allow Proton account telemetry</string>
-    <string name="block_screenshots">Block screenshots and screen recording</string>
     <string name="save">Save</string>
     <string name="privacy_setting_saved">Privacy setting saved</string>
     <string name="privacy_setting_failed">Could not update the Proton privacy setting</string>

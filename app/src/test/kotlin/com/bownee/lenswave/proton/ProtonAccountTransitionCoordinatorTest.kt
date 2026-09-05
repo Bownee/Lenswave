@@ -141,17 +141,114 @@ class ProtonAccountTransitionCoordinatorTest {
             assertEquals(listOf("retain:null", "retain:null"), events)
         }
 
+    @Test
+    fun `the stored account is preloaded and its first observation only sweeps, records and enqueues`() =
+        runBlocking {
+            val events = mutableListOf<String>()
+            val store = FakeLastAccountStore(stored = UserId("a"))
+            val coordinator = coordinator(events, lastAccountStore = store)
+
+            coordinator.preloadLastAccount()
+            coordinator.transition(null, UserId("a"), accountAbsent = false)
+
+            assertEquals(listOf("activate:a", "retain:a", "enqueue:a"), events)
+            assertEquals(listOf(UserId("a")), store.writes)
+        }
+
+    @Test
+    fun `a preloaded account Core does not confirm is torn down before the reported one is activated`() =
+        runBlocking {
+            val events = mutableListOf<String>()
+            val store = FakeLastAccountStore(stored = UserId("a"))
+            val coordinator = coordinator(events, lastAccountStore = store)
+
+            coordinator.preloadLastAccount()
+            coordinator.transition(null, UserId("b"), accountAbsent = false)
+
+            assertEquals(
+                listOf("activate:a", "cancel:a", "disconnect:a", "activate:b", "retain:b", "enqueue:b"),
+                events,
+            )
+            assertEquals(listOf(UserId("b")), store.writes)
+        }
+
+    @Test
+    fun `a preloaded account is torn down when no account is signed in after all`() =
+        runBlocking {
+            val events = mutableListOf<String>()
+            val store = FakeLastAccountStore(stored = UserId("a"))
+            val coordinator = coordinator(events, lastAccountStore = store)
+
+            coordinator.preloadLastAccount()
+            coordinator.transition(null, null, accountAbsent = true)
+
+            assertEquals(listOf("activate:a", "cancel:a", "disconnect:a", "retain:null"), events)
+            assertEquals(listOf(null), store.writes)
+        }
+
+    @Test
+    fun `a preloaded account survives an observation of an account that is not ready yet`() =
+        runBlocking {
+            val events = mutableListOf<String>()
+            val store = FakeLastAccountStore(stored = UserId("a"))
+            val coordinator = coordinator(events, lastAccountStore = store)
+
+            coordinator.preloadLastAccount()
+            coordinator.transition(null, null, accountAbsent = false)
+            coordinator.transition(null, UserId("a"), accountAbsent = false)
+
+            assertEquals(listOf("activate:a", "retain:a", "enqueue:a"), events)
+        }
+
+    @Test
+    fun `without a stored account the preload does nothing`() =
+        runBlocking {
+            val events = mutableListOf<String>()
+
+            coordinator(events).preloadLastAccount()
+
+            assertEquals(emptyList<String>(), events)
+        }
+
+    @Test
+    fun `every transition records the signed-in account for the next launch`() =
+        runBlocking {
+            val store = FakeLastAccountStore()
+            val coordinator = coordinator(mutableListOf(), lastAccountStore = store)
+
+            coordinator.transition(null, UserId("a"), accountAbsent = false)
+            coordinator.transition(UserId("a"), null, accountAbsent = true)
+            coordinator.transition(null, null, accountAbsent = true)
+
+            assertEquals(listOf(UserId("a"), null, null), store.writes)
+        }
+
     private fun coordinator(
         events: MutableList<String>,
         sessionLifecycle: ProtonSessionLifecycle = FakeSessionLifecycle(events),
         mutationForgetter: ProtonAccountMutationForgetter = ProtonAccountMutationForgetter {},
         cacheCleaner: ProtonAccountCacheCleaner = ProtonAccountCacheCleaner { userId -> events += "retain:$userId" },
+        lastAccountStore: ProtonLastAccountStore = FakeLastAccountStore(),
     ) = ProtonAccountTransitionCoordinator(
         sessionLifecycle = sessionLifecycle,
         cacheCleaner = cacheCleaner,
         thumbnailScheduler = FakeThumbnailScheduler(events),
         mutationForgetter = mutationForgetter,
+        lastAccountStore = lastAccountStore,
     )
+
+    private class FakeLastAccountStore(
+        private var stored: UserId? = null,
+    ) : ProtonLastAccountStore {
+        val writes = mutableListOf<UserId?>()
+
+        override fun read(): UserId? = stored
+
+        override fun write(userId: UserId?) {
+            stored = userId
+            writes += userId
+        }
+    }
 
     private class FakeThumbnailScheduler(
         private val events: MutableList<String>,
