@@ -83,6 +83,13 @@ identifiers are deliberately not recorded here; the CI emulator job is the refer
   checks, onDestroy guards, sheet restore, opaque tiles with a byte budget. Still open (low):
   fsync before rename, typed corruption exception, two stats per file on hydration, the
   downsampled flag, constant grid span, notification tap CLEAR_TOP, remaining test gaps.
+- Audit III, round five (2026-09-05, `audit/fixes-5`): the remaining low items closed: fsync for the
+  small metadata files, a typed corruption exception, one stat per file on hydration, the
+  downsampled flag, a width-derived grid span, the notification tap fronting the task without
+  finishing the viewer, and the test gaps (worker run loop extracted into ProtonThumbnailRun,
+  network monitor policy and source, gateway SDK paths through a scriptable client, gallery
+  thumbnail loader, presenters behind hosts, view-model branches). Nothing from the three
+  audits of 1dc01e3 is left open.
 
 A new audit should list these as already fixed so reviewers look for what is still there or
 newly introduced.
