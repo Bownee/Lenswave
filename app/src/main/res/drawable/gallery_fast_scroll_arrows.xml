@@ -7,7 +7,7 @@
     <path
         android:pathData="M5,8 L10,3 L15,8 M5,12 L10,17 L15,12"
         android:fillColor="@android:color/transparent"
-        android:strokeColor="#FFFFFFFF"
+        android:strokeColor="@color/lenswave_text"
         android:strokeWidth="1.8"
         android:strokeLineCap="round"
         android:strokeLineJoin="round" />
