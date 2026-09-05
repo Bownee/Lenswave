@@ -76,6 +76,22 @@ class SecureFileStoreTest {
     }
 
     @Test
+    fun `an empty wrapped key file is discarded and minted afresh instead of failing forever`() {
+        val store = store()
+        val target = File(temporaryFolder.root, "payload.bin")
+        store.write(scope, target, "before".toByteArray(), "write failed")
+        // A wrapped key whose bytes never landed: the file exists but is empty.
+        File(File(temporaryFolder.root, "keys"), "${store.keyAlias(scope)}.key").writeBytes(ByteArray(0))
+        val restarted = store()
+
+        assertThrows(AEADBadTagException::class.java) { restarted.read(scope, target) }
+
+        assertTrue(reported.single() is IllegalArgumentException)
+        restarted.write(scope, target, "after".toByteArray(), "write failed")
+        assertArrayEquals("after".toByteArray(), restarted.read(scope, target))
+    }
+
+    @Test
     fun `a keystore that refuses to answer surfaces as an unavailable key, not as corruption`() {
         val store = store()
         val target = File(temporaryFolder.root, "payload.bin")
