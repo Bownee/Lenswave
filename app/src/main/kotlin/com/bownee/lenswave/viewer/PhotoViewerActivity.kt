@@ -800,15 +800,17 @@ class PhotoViewerActivity :
                     // the read (a viewer relaunched from recents after a sign-out, say). Left to
                     // the branch below it would end the job with the spinner still up and no retry.
                     thumbnailLoad?.cancel()
-                    cancelPreviewLoad()
+                    // The preview job belongs to whichever photo is current: a stale load's
+                    // failure must not cancel the preview the new photo is reading.
                     if (request.stableId != requestedPhoto.stableId) return@launch
+                    cancelPreviewLoad()
                     handlePhotoLoadFailure(error, getString(R.string.could_not_open_proton_photo_signed_out))
                 } catch (error: CancellationException) {
                     throw error
                 } catch (error: Throwable) {
                     thumbnailLoad?.cancel()
-                    cancelPreviewLoad()
                     if (request.stableId != requestedPhoto.stableId) return@launch
+                    cancelPreviewLoad()
                     if (!retryButton.isVisible) {
                         handlePhotoLoadFailure(error, getString(R.string.could_not_download_proton_photo))
                     }
