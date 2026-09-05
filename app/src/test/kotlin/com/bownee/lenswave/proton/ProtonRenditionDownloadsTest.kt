@@ -209,6 +209,26 @@ class ProtonRenditionDownloadsTest {
         }
 
     @Test
+    fun `a stalled preview batch settles only the chunks it asked and defers the ones it did not`() =
+        runTest {
+            val nodeUids = ('a'..'i').map(Char::toString)
+            check(nodeUids.size == ProtonThumbnailDownloadPolicy.SDK_BATCH_SIZE + 1)
+            // The charger goes between the two chunks getting their permits: the first chunk
+            // is asked and never answered, the second is never asked.
+            var asks = 0
+            admission.bind { asks++ == 0 }
+            client.previews = { awaitCancellation() }
+
+            val result = downloads.downloadPreviews(USER, nodeUids) {}
+
+            assertTrue(result.stalled)
+            assertEquals(nodeUids.take(8).associateWith { ThumbnailFailureKind.TRANSIENT_NETWORK }, result.failures)
+            assertEquals(setOf("i"), result.deferredNodeUids)
+            assertEquals(listOf(ThumbnailType.PREVIEW to nodeUids.take(8)), client.enumerations)
+            assertEquals(listOf("unanswered-8-of-8-deadline", "stalled-8-of-8"), states)
+        }
+
+    @Test
     fun `a batch is stalled only when every one of its passes was`() {
         val silent = ThumbnailBatchResult(emptySet(), mapOf("a" to ThumbnailFailureKind.UNANSWERED), stalled = true)
         val answered = ThumbnailBatchResult(setOf("b"), emptyMap())

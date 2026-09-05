@@ -298,6 +298,28 @@ class ProtonRenditionSyncTest {
         }
 
     @Test
+    fun `previews a stalled batch never asked for are given back without a step`() =
+        test { sync ->
+            previews.replaceSource(USER.id, ProtonSyncKeys.QueueSource.TIMELINE_PREVIEWS, candidates("a", "b"))
+            source.previewResult =
+                ThumbnailBatchResult(
+                    emptySet(),
+                    mapOf("a" to ThumbnailFailureKind.TRANSIENT_NETWORK),
+                    deferredNodeUids = setOf("b"),
+                    stalled = true,
+                )
+
+            sync.downloadNextBatch(USER, allowPreviews = true) {}
+
+            // "a" waits out the network retry; "b" was never asked, so it is claimable at once
+            // and its entry is untouched.
+            val entries = store.readQueue(USER.id, ProtonQueueName.PREVIEWS).associateBy { entry -> entry.nodeUid }
+            assertEquals(0, entries.getValue("b").networkRetryCount)
+            assertEquals(0L, entries.getValue("b").retryAtMillis)
+            assertEquals(listOf("b"), previews.claimReady(USER.id, limit = 2).map { entry -> entry.nodeUid })
+        }
+
+    @Test
     fun `progress counts stored and pending renditions of both queues`() =
         test { sync ->
             thumbnails.replaceSource(USER.id, ProtonSyncKeys.QueueSource.TIMELINE, candidates("a"))

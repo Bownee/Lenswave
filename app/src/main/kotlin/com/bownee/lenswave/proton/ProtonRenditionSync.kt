@@ -329,6 +329,10 @@ internal class ProtonRenditionSync(
     ) {
         val failures = result.failures.filterKeys { nodeUid -> settledFailures.add(nodeUid) }
         previewQueue.settle(userId.id, result.successfulNodeUids, failures)
+        // A chunk the admission refused was never asked: its nodes take no step and are given
+        // back to the queue, which claims them again exactly when previews are allowed.
+        val deferred = result.deferredNodeUids.filterNot { nodeUid -> nodeUid in result.successfulNodeUids }
+        if (deferred.isNotEmpty()) previewQueue.release(userId.id, deferred)
         if (result.successfulNodeUids.isNotEmpty()) marks.add { previews += result.successfulNodeUids }
     }
 
