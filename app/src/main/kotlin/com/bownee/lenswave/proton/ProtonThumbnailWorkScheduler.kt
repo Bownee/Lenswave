@@ -14,6 +14,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -21,7 +22,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import me.proton.core.domain.entity.UserId
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -187,7 +187,7 @@ internal class ProtonThumbnailWorkScheduler(
         { error -> LenswaveDiagnostics.reportFailure(LenswaveOperation.THUMBNAIL_WORKER, error) },
     )
 
-    private val legacyWorkCancelled = AtomicBoolean(false)
+    private val legacyWorkCancelled: MutableSet<String> = ConcurrentHashMap.newKeySet()
     private val observed = ConcurrentHashMap<String, Observation>()
 
     override fun enqueue(userId: UserId) {
@@ -267,9 +267,16 @@ internal class ProtonThumbnailWorkScheduler(
         )
     }
 
+    /**
+     * Cancels whatever is queued or going for the account, and stops watching its name: the
+     * account is being removed, and an observation kept for it would hold its collector for the
+     * rest of the process. An ask for the same account later reads WorkManager afresh.
+     */
     override suspend fun cancelAndAwait(userId: UserId) {
         workRequests.cancelUniqueWorkAndAwait(ProtonWorkNames.legacyThumbnailsWhileCharging(userId))
-        workRequests.cancelUniqueWorkAndAwait(ProtonWorkNames.thumbnails(userId))
+        val workName = ProtonWorkNames.thumbnails(userId)
+        workRequests.cancelUniqueWorkAndAwait(workName)
+        observed.remove(workName)?.collector?.cancel()
     }
 
     override fun clearPaused(userId: UserId) {
@@ -278,13 +285,13 @@ internal class ProtonThumbnailWorkScheduler(
 
     /**
      * Earlier versions queued the charging run under its own name. Whatever an upgrade left
-     * there would run beside the single name, so it is cancelled once per process; the
-     * cancel is a no-op when nothing is queued.
+     * there would run beside the single name, so each account's legacy name is cancelled once
+     * per process (a single flag skipped every account but the first); the cancel is a no-op
+     * when nothing is queued.
      */
     private fun cancelLegacyWork(userId: UserId) {
-        if (legacyWorkCancelled.compareAndSet(false, true)) {
-            workRequests.cancelUniqueWork(ProtonWorkNames.legacyThumbnailsWhileCharging(userId))
-        }
+        val legacyName = ProtonWorkNames.legacyThumbnailsWhileCharging(userId)
+        if (legacyWorkCancelled.add(legacyName)) workRequests.cancelUniqueWork(legacyName)
     }
 
     /**
@@ -296,26 +303,27 @@ internal class ProtonThumbnailWorkScheduler(
     private fun observe(workName: String): Observation =
         observed.computeIfAbsent(workName) {
             Observation().also { observation ->
-                observationScope.launch {
-                    // A query that fails still resolves: an ask must not wait forever, and an
-                    // ask decided on an empty state is the ask the app made anyway.
-                    try {
-                        observation.update(workRequests.uniqueWork(workName))
-                    } catch (error: CancellationException) {
-                        throw error
-                    } catch (error: Throwable) {
-                        reportFailure(error)
-                    } finally {
-                        observation.resolved.complete(Unit)
+                observation.collector =
+                    observationScope.launch {
+                        // A query that fails still resolves: an ask must not wait forever, and an
+                        // ask decided on an empty state is the ask the app made anyway.
+                        try {
+                            observation.update(workRequests.uniqueWork(workName))
+                        } catch (error: CancellationException) {
+                            throw error
+                        } catch (error: Throwable) {
+                            reportFailure(error)
+                        } finally {
+                            observation.resolved.complete(Unit)
+                        }
+                        try {
+                            workRequests.uniqueWorkFlow(workName).collect(observation::update)
+                        } catch (error: CancellationException) {
+                            throw error
+                        } catch (error: Throwable) {
+                            reportFailure(error)
+                        }
                     }
-                    try {
-                        workRequests.uniqueWorkFlow(workName).collect(observation::update)
-                    } catch (error: CancellationException) {
-                        throw error
-                    } catch (error: Throwable) {
-                        reportFailure(error)
-                    }
-                }
             }
         }
 
@@ -330,6 +338,9 @@ internal class ProtonThumbnailWorkScheduler(
 
         /** Completed once WorkManager has answered what it holds under the name. */
         val resolved = CompletableDeferred<Unit>()
+
+        /** The coroutine reading the name; cancelled when the account is removed ([cancelAndAwait]). */
+        var collector: Job? = null
 
         fun update(requests: List<ProtonThumbnailQueuedRequest>) {
             val nowActive = ProtonThumbnailEnqueuePolicy.isActive(requests.map { it.state })

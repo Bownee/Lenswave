@@ -7,6 +7,7 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -572,18 +573,58 @@ class ProtonThumbnailQueueTest {
         }
 
     @Test
-    fun connectionFailuresNeverDropAnEntry() =
+    fun aFewConnectionFailuresInARowAreFreeAndTheNextOneStepsTheLadder() =
         runTest {
+            val store = FakeStore()
             val clock = FakeClock()
-            val queue = queue(FakeStore(), clock)
+            val queue = queue(store, clock)
             queue.replaceSource(USER_ID, "timeline", candidates("offline"))
-            repeat(ProtonThumbnailQueue.MAX_RETRY_COUNT * 2) {
+
+            repeat(ProtonThumbnailQueue.MAX_CONSECUTIVE_NETWORK_RETRIES - 1) {
                 assertEquals("offline", queue.claimReady(USER_ID, limit = 1).single().nodeUid)
                 queue.settle(USER_ID, emptySet(), mapOf("offline" to ThumbnailFailureKind.TRANSIENT_NETWORK))
                 clock.value += ProtonThumbnailQueue.NETWORK_RETRY_MILLIS
             }
+            queue.flush(USER_ID)
+            assertEquals(0, entry(store, "offline").retryCount)
+            assertEquals(0L, queue.retryDelayMillis(USER_ID))
 
-            assertEquals(1, queue.pendingCount(USER_ID))
+            // The one after that is an ordinary failure with an ordinary backoff.
+            queue.claimReady(USER_ID, limit = 1)
+            queue.settle(USER_ID, emptySet(), mapOf("offline" to ThumbnailFailureKind.TRANSIENT_NETWORK))
+            queue.flush(USER_ID)
+            assertEquals(1, entry(store, "offline").retryCount)
+            assertEquals(30_000L, queue.retryDelayMillis(USER_ID))
+
+            // And the count starts over: the next few are free again.
+            clock.value += 30_000L
+            queue.claimReady(USER_ID, limit = 1)
+            queue.settle(USER_ID, emptySet(), mapOf("offline" to ThumbnailFailureKind.TRANSIENT_NETWORK))
+            queue.flush(USER_ID)
+            assertEquals(1, entry(store, "offline").retryCount)
+            assertEquals(ProtonThumbnailQueue.NETWORK_RETRY_MILLIS, queue.retryDelayMillis(USER_ID))
+        }
+
+    @Test
+    fun aNodeThatAlwaysFailsAsAConnectionFailureIsEventuallyDropped() =
+        runTest {
+            val clock = FakeClock()
+            val queue = queue(FakeStore(), clock)
+            queue.replaceSource(USER_ID, "timeline", candidates("offline"))
+            var attempts = 0
+
+            while (queue.pendingCount(USER_ID) > 0 && attempts < 1_000) {
+                clock.value += 60L * 60L * 1_000L
+                assertEquals("offline", queue.claimReady(USER_ID, limit = 1).single().nodeUid)
+                queue.settle(USER_ID, emptySet(), mapOf("offline" to ThumbnailFailureKind.TRANSIENT_NETWORK))
+                attempts++
+            }
+
+            assertEquals(0, queue.pendingCount(USER_ID))
+            assertEquals(
+                ProtonThumbnailQueue.MAX_RETRY_COUNT * ProtonThumbnailQueue.MAX_CONSECUTIVE_NETWORK_RETRIES,
+                attempts,
+            )
         }
 
     @Test
@@ -651,6 +692,114 @@ class ProtonThumbnailQueueTest {
             queue.release(USER_ID, listOf("stubborn"))
             queue.replaceSource(USER_ID, "timeline", candidates("stubborn"))
             assertEquals(1, queue.pendingCount(USER_ID))
+        }
+
+    @Test
+    fun aNodeParkedForPreviewsIsClaimableExactlyWhenPreviewsAre() =
+        runTest {
+            val store = FakeStore()
+            val clock = FakeClock()
+            val queue = queue(store, clock)
+            queue.replaceSource(USER_ID, "timeline", candidates("parked", "plain"))
+            queue.claimReady(USER_ID, limit = 2, previewsAllowed = false)
+
+            queue.settle(
+                USER_ID,
+                emptySet(),
+                mapOf("parked" to ThumbnailFailureKind.PREVIEW_DEFERRED, "plain" to ThumbnailFailureKind.OTHER),
+            )
+            queue.flush(USER_ID)
+
+            // No backoff step, but a horizon on disk for a process that forgets the parking.
+            assertEquals(0, entry(store, "parked").retryCount)
+            assertEquals(
+                clock.value + ProtonThumbnailQueue.PREVIEW_DEFERRAL_MILLIS,
+                entry(store, "parked").retryAtMillis,
+            )
+            assertTrue(queue.hasEntriesAwaitingPreviews(USER_ID))
+            // While previews are not allowed the parked node is neither pending nor due.
+            assertTrue(queue.hasPending(USER_ID, previewsAllowed = false))
+            assertEquals(30_000L, queue.retryDelayMillis(USER_ID, previewsAllowed = false))
+            clock.value += ProtonThumbnailQueue.PREVIEW_DEFERRAL_MILLIS
+            assertEquals(
+                listOf("plain"),
+                queue.claimReady(USER_ID, limit = 2, previewsAllowed = false).map { it.nodeUid },
+            )
+            queue.settle(USER_ID, setOf("plain"), emptySet())
+            assertFalse(queue.hasPending(USER_ID, previewsAllowed = false))
+            assertEquals(null, queue.retryDelayMillis(USER_ID, previewsAllowed = false))
+            assertEquals(1, queue.pendingCount(USER_ID))
+
+            // Once they are, it is due at once, however far off its horizon is.
+            clock.value -= ProtonThumbnailQueue.PREVIEW_DEFERRAL_MILLIS
+            assertTrue(queue.hasPending(USER_ID, previewsAllowed = true))
+            assertEquals(0L, queue.retryDelayMillis(USER_ID, previewsAllowed = true))
+            assertEquals(
+                listOf("parked"),
+                queue.claimReady(USER_ID, limit = 2, previewsAllowed = true).map { it.nodeUid },
+            )
+            assertFalse(queue.hasEntriesAwaitingPreviews(USER_ID))
+        }
+
+    @Test
+    fun anExplicitAskAndAListingChangeLiftTheParking() =
+        runTest {
+            val queue = queue(FakeStore(), FakeClock())
+            queue.replaceSource(USER_ID, "timeline", candidates("asked", "gone"))
+            queue.claimReady(USER_ID, limit = 2)
+            queue.settle(
+                USER_ID,
+                emptySet(),
+                mapOf(
+                    "asked" to ThumbnailFailureKind.PREVIEW_DEFERRED,
+                    "gone" to ThumbnailFailureKind.PREVIEW_DEFERRED,
+                ),
+            )
+
+            queue.retryNow(USER_ID, candidate("asked", 5), setOf("timeline"))
+            assertEquals(
+                listOf("asked"),
+                queue.claimReady(USER_ID, limit = 2, previewsAllowed = false).map { it.nodeUid },
+            )
+
+            queue.replaceSource(USER_ID, "timeline", candidates("asked"))
+            assertFalse(queue.hasEntriesAwaitingPreviews(USER_ID))
+        }
+
+    @Test
+    fun suppressionsAreCappedAtTheNewestDrops() =
+        runTest {
+            val clock = FakeClock()
+            val queue = queue(FakeStore(), clock)
+            val newer = (1..ProtonThumbnailQueue.MAX_SUPPRESSED_NODES).map { index -> "newer-$index" }
+            queue.replaceSource(USER_ID, "timeline", candidates("oldest", *newer.toTypedArray()))
+            queue.claimReady(USER_ID, limit = newer.size + 1)
+            queue.settle(USER_ID, emptySet(), mapOf("oldest" to ThumbnailFailureKind.NOT_FOUND))
+            clock.value += 1_000L
+
+            queue.settle(USER_ID, emptySet(), newer.associateWith { ThumbnailFailureKind.NOT_FOUND })
+            assertEquals(0, queue.pendingCount(USER_ID))
+
+            // The cap made room by forgetting the drop that expires soonest; the rest hold.
+            queue.replaceSource(USER_ID, "timeline", candidates("oldest", *newer.toTypedArray()))
+            assertEquals(listOf("oldest"), queue.claimReady(USER_ID, limit = 5).map { it.nodeUid })
+        }
+
+    @Test
+    fun anExpiredSuppressionIsForgottenBySettleToo() =
+        runTest {
+            val clock = FakeClock()
+            val queue = queue(FakeStore(), clock)
+            queue.replaceSource(USER_ID, "timeline", candidates("expired", "fresh", "fine"))
+            queue.claimReady(USER_ID, limit = 3)
+            queue.settle(USER_ID, emptySet(), mapOf("expired" to ThumbnailFailureKind.NOT_FOUND))
+            clock.value += ProtonThumbnailQueue.SUPPRESSION_MILLIS
+
+            // No reconciliation in between: the drop below is what prunes the expired one.
+            queue.settle(USER_ID, setOf("fine"), mapOf("fresh" to ThumbnailFailureKind.NOT_FOUND))
+            queue.replaceSource(USER_ID, "timeline", candidates("expired", "fresh"))
+
+            assertEquals(listOf("expired"), queue.claimReady(USER_ID, limit = 3).map { it.nodeUid })
         }
 
     @Test

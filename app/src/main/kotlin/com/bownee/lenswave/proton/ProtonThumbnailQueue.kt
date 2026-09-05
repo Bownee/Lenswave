@@ -63,6 +63,12 @@ internal data class ProtonThumbnailQueueEntry(
     val sourceCaptureTimes: Map<String, Long>,
     val retryCount: Int = 0,
     val retryAtMillis: Long = 0L,
+    /**
+     * Consecutive connection failures since the last ordinary retry step; see
+     * [ProtonThumbnailQueue.MAX_CONSECUTIVE_NETWORK_RETRIES]. Not in the queue file yet: a
+     * process that restarts starts the count over, which only allows a few more short retries.
+     */
+    val networkRetryCount: Int = 0,
 ) {
     val sources: Set<String> get() = sourceCaptureTimes.keys
     val captureTimeEpochSeconds: Long
@@ -118,6 +124,17 @@ internal class ProtonThumbnailQueue(
      * memory for the life of the process; the queue file's format does not carry it yet.
      */
     private val suppressedUntilByUser = mutableMapOf<String, MutableMap<String, Long>>()
+
+    /**
+     * Nodes [settle] parked with [ThumbnailFailureKind.PREVIEW_DEFERRED]: their thumbnail can
+     * only be had as a preview, and previews were not allowed when they were tried. While
+     * previews stay disallowed they are neither claimable nor pending, so a run does not claim,
+     * ask the SDK about and park them again until its deadline; once previews are allowed
+     * they are claimable at once. In memory only: a process that restarts finds them with the
+     * deferral horizon in [ProtonThumbnailQueueEntry.retryAtMillis] and parks them again on
+     * the first try.
+     */
+    private val awaitingPreviewsByUser = mutableMapOf<String, MutableSet<String>>()
 
     /** Bumped by [forget] so a read that was in progress for that user is not installed. */
     private var forgetCount = 0L
@@ -196,6 +213,7 @@ internal class ProtonThumbnailQueue(
                 }
             }
             claimedNodeUids[userId]?.retainAll(entries.keys)
+            awaitingPreviewsByUser[userId]?.retainAll(entries.keys)
             val changed = originals.any { (nodeUid, original) -> entries[nodeUid] != original }
             if (changed) markChanged(userId)
         }
@@ -210,8 +228,10 @@ internal class ProtonThumbnailQueue(
         hydrate(userId)
         mutex.withLock {
             val entries = entries(userId)
-            // An explicit ask (the grid failed to decode what is stored) outranks a drop.
+            // An explicit ask (the grid failed to decode what is stored) outranks a drop, and
+            // a wait for previews: what is stored decoded once, so a thumbnail exists.
             suppressedUntilByUser[userId]?.remove(candidate.nodeUid)
+            awaitingPreviewsByUser[userId]?.remove(candidate.nodeUid)
             val existing = entries[candidate.nodeUid]
             val sourceCaptureTimes = existing?.sourceCaptureTimes.orEmpty().toMutableMap()
             sources.forEach { source ->
@@ -228,27 +248,55 @@ internal class ProtonThumbnailQueue(
         }
     }
 
+    /**
+     * Claims up to [limit] entries that are due, newest capture first. [previewsAllowed] says
+     * whether the run may fetch previews: the entries waiting for that are claimable at once
+     * when it may, and not at all when it may not.
+     */
     suspend fun claimReady(
         userId: String,
         limit: Int,
+        previewsAllowed: Boolean = true,
     ): List<ProtonThumbnailQueueEntry> {
         require(limit > 0) { "Thumbnail claim limit must be positive" }
         hydrate(userId)
         return mutex.withLock {
             val now = clock.nowMillis()
             val claimed = claimedNodeUids.getOrPut(userId, ::mutableSetOf)
+            val awaitingPreviews = awaitingPreviewsByUser[userId]
             val ready =
                 entries(userId)
                     .values
                     .asSequence()
-                    .filter { entry -> entry.retryAtMillis <= now }
-                    .filterNot { entry -> entry.nodeUid in claimed }
+                    .filter { entry ->
+                        readyAtMillis(entry, awaitingPreviews, previewsAllowed)?.let { it <= now } ==
+                            true
+                    }.filterNot { entry -> entry.nodeUid in claimed }
                     .asIterable()
             ProtonQueueSelectionPolicy
                 .takeFirst(ready, limit, NEWEST_FIRST)
-                .onEach { entry -> claimed += entry.nodeUid }
+                .onEach { entry ->
+                    claimed += entry.nodeUid
+                    awaitingPreviews?.remove(entry.nodeUid)
+                }
         }
     }
+
+    /**
+     * When [entry] is due for a run that may or may not fetch previews: now for a parked entry
+     * once previews are allowed, never (null) for one while they are not, its own backoff
+     * otherwise.
+     */
+    private fun readyAtMillis(
+        entry: ProtonThumbnailQueueEntry,
+        awaitingPreviews: Set<String>?,
+        previewsAllowed: Boolean,
+    ): Long? =
+        when {
+            awaitingPreviews == null || entry.nodeUid !in awaitingPreviews -> entry.retryAtMillis
+            previewsAllowed -> 0L
+            else -> null
+        }
 
     /** [settle] with every failure treated as transient. */
     suspend fun settle(
@@ -266,7 +314,13 @@ internal class ProtonThumbnailQueue(
      * dropped node stays out of the queue for [SUPPRESSION_MILLIS] however often the listings
      * are reconciled; [retryNow] lifts that. A node the network failed under
      * ([ThumbnailFailureKind.TRANSIENT_NETWORK]) is not at fault: it waits [NETWORK_RETRY_MILLIS]
-     * and keeps its retry count, so a connection lost mid-batch costs no node a backoff step.
+     * and keeps its retry count, so a connection lost mid-batch costs no node a backoff step;
+     * but only [MAX_CONSECUTIVE_NETWORK_RETRIES] times in a row, after which the failure is
+     * treated as any other, or a node that always fails that way would be asked every few
+     * seconds for good. A node whose thumbnail can only be had as a preview while previews are not allowed
+     * ([ThumbnailFailureKind.PREVIEW_DEFERRED]) is parked: it keeps its retry count, waits
+     * [PREVIEW_DEFERRAL_MILLIS] for a process that forgets the parking, and is otherwise
+     * claimable exactly when previews are ([claimReady]).
      */
     suspend fun settle(
         userId: String,
@@ -286,7 +340,21 @@ internal class ProtonThumbnailQueue(
             failures.forEach { (nodeUid, kind) ->
                 val entry = entries[nodeUid] ?: return@forEach
                 if (kind == ThumbnailFailureKind.TRANSIENT_NETWORK) {
-                    entries[nodeUid] = entry.copy(retryAtMillis = now + NETWORK_RETRY_MILLIS)
+                    // A few short retries are free; a connection that keeps failing for one
+                    // node is not the connection, and from here the failure is an ordinary one.
+                    val networkRetryCount = entry.networkRetryCount + 1
+                    if (networkRetryCount < MAX_CONSECUTIVE_NETWORK_RETRIES) {
+                        entries[nodeUid] =
+                            entry.copy(
+                                networkRetryCount = networkRetryCount,
+                                retryAtMillis = now + NETWORK_RETRY_MILLIS,
+                            )
+                        return@forEach
+                    }
+                }
+                if (kind == ThumbnailFailureKind.PREVIEW_DEFERRED) {
+                    entries[nodeUid] = entry.copy(retryAtMillis = now + PREVIEW_DEFERRAL_MILLIS)
+                    awaitingPreviewsByUser.getOrPut(userId, ::mutableSetOf) += nodeUid
                     return@forEach
                 }
                 val retryCount = entry.retryCount + 1
@@ -299,9 +367,11 @@ internal class ProtonThumbnailQueue(
                 entries[nodeUid] =
                     entry.copy(
                         retryCount = retryCount,
+                        networkRetryCount = 0,
                         retryAtMillis = now + retryDelayMillis(retryCount),
                     )
             }
+            if (dropped > 0) pruneSuppressed(userId, now)
             val settled = successfulNodeUids + failedNodeUids
             claimedNodeUids[userId]?.let { claimed ->
                 claimed.removeAll(settled)
@@ -330,23 +400,53 @@ internal class ProtonThumbnailQueue(
         mutex.withLock { claimedNodeUids.remove(userId) }
     }
 
-    suspend fun hasPending(userId: String): Boolean {
+    /**
+     * Whether a run that may ([previewsAllowed]) or may not fetch previews has entries left to
+     * serve; the entries parked for previews do not count while previews are not allowed.
+     */
+    suspend fun hasPending(
+        userId: String,
+        previewsAllowed: Boolean = true,
+    ): Boolean {
         hydrate(userId)
-        return mutex.withLock { entries(userId).isNotEmpty() }
+        return mutex.withLock {
+            val entries = entries(userId)
+            val awaitingPreviews = awaitingPreviewsByUser[userId]
+            if (previewsAllowed || awaitingPreviews == null) {
+                entries.isNotEmpty()
+            } else {
+                entries.keys.any { nodeUid -> nodeUid !in awaitingPreviews }
+            }
+        }
     }
 
+    /** Whether any entry is parked until a run may fetch previews; see [ThumbnailFailureKind.PREVIEW_DEFERRED]. */
+    suspend fun hasEntriesAwaitingPreviews(userId: String): Boolean {
+        hydrate(userId)
+        return mutex.withLock { awaitingPreviewsByUser[userId]?.isNotEmpty() == true }
+    }
+
+    /** Every entry, parked and claimed ones included: what is still to be downloaded eventually. */
     suspend fun pendingCount(userId: String): Int {
         hydrate(userId)
         return mutex.withLock { entries(userId).size }
     }
 
-    /** How long until the soonest backed-off entry is claimable again (0 if now), or null when empty. */
-    suspend fun retryDelayMillis(userId: String): Long? {
+    /**
+     * How long until the soonest backed-off entry is claimable again (0 if now), or null when
+     * nothing is; entries parked for previews are due now when [previewsAllowed], else left out.
+     */
+    suspend fun retryDelayMillis(
+        userId: String,
+        previewsAllowed: Boolean = true,
+    ): Long? {
         hydrate(userId)
         return mutex.withLock {
+            val awaitingPreviews = awaitingPreviewsByUser[userId]
             entries(userId)
                 .values
-                .minOfOrNull(ProtonThumbnailQueueEntry::retryAtMillis)
+                .mapNotNull { entry -> readyAtMillis(entry, awaitingPreviews, previewsAllowed) }
+                .minOrNull()
                 ?.let { retryAt -> (retryAt - clock.nowMillis()).coerceAtLeast(0L) }
         }
     }
@@ -362,6 +462,7 @@ internal class ProtonThumbnailQueue(
             entriesByUser.remove(userId)
             claimedNodeUids.remove(userId)
             suppressedUntilByUser.remove(userId)
+            awaitingPreviewsByUser.remove(userId)
             persistence.remove(userId)?.scheduledFlush?.cancel()
         }
         writeMutex.withLock {}
@@ -471,11 +572,31 @@ internal class ProtonThumbnailQueue(
 
     /** Only under [mutex]: the nodes still kept out of the queue, with the expired ones forgotten. */
     private fun suppressedNodeUids(userId: String): Set<String> {
-        val suppressed = suppressedUntilByUser[userId] ?: return emptySet()
-        val now = clock.nowMillis()
+        pruneSuppressed(userId, clock.nowMillis())
+        return suppressedUntilByUser[userId]?.keys.orEmpty()
+    }
+
+    /**
+     * Only under [mutex]. Forgets the suppressions that have expired and, past
+     * [MAX_SUPPRESSED_NODES], the ones that expire soonest: the map is per process and used to
+     * grow with every dropped node for as long as the process lived, and a reconciliation is
+     * not the only place that has to keep it in check, since a process that never reconciles
+     * again still drops nodes.
+     */
+    private fun pruneSuppressed(
+        userId: String,
+        now: Long,
+    ) {
+        val suppressed = suppressedUntilByUser[userId] ?: return
         suppressed.values.removeAll { until -> until <= now }
+        val excess = suppressed.size - MAX_SUPPRESSED_NODES
+        if (excess > 0) {
+            suppressed.entries
+                .sortedBy { (_, until) -> until }
+                .take(excess)
+                .forEach { (nodeUid, _) -> suppressed.remove(nodeUid) }
+        }
         if (suppressed.isEmpty()) suppressedUntilByUser.remove(userId)
-        return suppressed.keys
     }
 
     private fun retryDelayMillis(retryCount: Int): Long {
@@ -503,8 +624,28 @@ internal class ProtonThumbnailQueue(
         /** How long a dropped node stays out of the queue whatever the listings say. */
         const val SUPPRESSION_MILLIS = 7L * 24L * 60L * 60L * 1_000L
 
+        /** How many dropped nodes per user are remembered at most; the newest drops win. */
+        const val MAX_SUPPRESSED_NODES = 10_000
+
         /** The pause after a connection failure; long enough for the network to settle, no more. */
         const val NETWORK_RETRY_MILLIS = 10_000L
+
+        /**
+         * How many connection failures in a row are retried shortly and for free. The next one
+         * takes an ordinary backoff step and starts the count over, so a node that fails this
+         * way every time still climbs the ladder and is dropped after
+         * [MAX_RETRY_COUNT] steps, instead of being asked every ten seconds forever.
+         */
+        const val MAX_CONSECUTIVE_NETWORK_RETRIES = 3
+
+        /**
+         * How long a node parked for previews stays out of reach of a process that has lost
+         * the parking (a restart): long enough that such a process does not claim, enumerate
+         * and park it again every few seconds, short enough that a charger found meanwhile is
+         * not missed by much. A process that remembers the parking ignores this and serves the
+         * node as soon as previews are allowed.
+         */
+        const val PREVIEW_DEFERRAL_MILLIS = 15L * 60L * 1_000L
         private const val BASE_RETRY_MILLIS = 30_000L
         private const val MAX_RETRY_MILLIS = 15L * 60L * 1_000L
         private const val MAX_RETRY_SHIFT = 5

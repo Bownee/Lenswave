@@ -3,6 +3,7 @@ package com.bownee.lenswave.proton
 import androidx.work.ExistingWorkPolicy
 import androidx.work.WorkInfo
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.TestScope
@@ -154,13 +155,42 @@ class ProtonThumbnailWorkSchedulerTest {
         }
 
     @Test
-    fun `the legacy charging name is cancelled once per process`() =
+    fun `each account's legacy charging name is cancelled once per process`() =
         test { scheduler ->
             scheduler.enqueue(USER)
             scheduler.enqueueWhileCharging(USER)
+            scheduler.enqueue(OTHER_USER)
+            scheduler.enqueueWhileCharging(OTHER_USER)
             testScheduler.runCurrent()
 
-            assertEquals(listOf(ProtonWorkNames.legacyThumbnailsWhileCharging(USER)), workRequests.cancelled)
+            assertEquals(
+                listOf(
+                    ProtonWorkNames.legacyThumbnailsWhileCharging(USER),
+                    ProtonWorkNames.legacyThumbnailsWhileCharging(OTHER_USER),
+                ),
+                workRequests.cancelled,
+            )
+        }
+
+    @Test
+    fun `cancelling an account drops its observation so a later ask reads WorkManager afresh`() =
+        test { scheduler ->
+            scheduler.enqueue(USER)
+            testScheduler.runCurrent()
+            scheduler.enqueue(USER)
+            testScheduler.runCurrent()
+            assertEquals("one subscription answers every ask", 1, workRequests.queries)
+            val collectorsBefore = backgroundScope.coroutineContext[Job]!!.children.count { it.isActive }
+
+            scheduler.cancelAndAwait(USER)
+            testScheduler.runCurrent()
+
+            assertEquals(collectorsBefore - 1, backgroundScope.coroutineContext[Job]!!.children.count { it.isActive })
+            workRequests.finish(NAME)
+            scheduler.enqueue(USER)
+            testScheduler.runCurrent()
+            assertEquals(2, workRequests.queries)
+            assertEquals(2, workRequests.enqueued.size)
         }
 
     @Test
@@ -197,6 +227,7 @@ class ProtonThumbnailWorkSchedulerTest {
         val enqueued = mutableListOf<Enqueued>()
         val cancelled = mutableListOf<String>()
         var failQueries = false
+        var queries = 0
 
         /** While set, recorded requests are not reported until [publishLagging]. */
         var lagging = false
@@ -214,6 +245,7 @@ class ProtonThumbnailWorkSchedulerTest {
         }
 
         override fun uniqueWork(name: String): List<ProtonThumbnailQueuedRequest> {
+            queries++
             if (failQueries) throw IllegalStateException("WorkManager is not there")
             return states[name].orEmpty()
         }
@@ -291,6 +323,7 @@ class ProtonThumbnailWorkSchedulerTest {
 
     private companion object {
         val USER = UserId("user")
+        val OTHER_USER = UserId("other")
         val NAME = ProtonWorkNames.thumbnails(USER)
     }
 }

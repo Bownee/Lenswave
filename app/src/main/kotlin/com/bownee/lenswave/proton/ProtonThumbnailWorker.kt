@@ -20,8 +20,10 @@ import dagger.hilt.InstallIn
 import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.components.SingletonComponent
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import me.proton.core.domain.entity.UserId
 import java.util.concurrent.TimeUnit
@@ -57,8 +59,8 @@ class ProtonThumbnailWorker(
         // The downloader asks between the chunks of a preview batch whether previews are still
         // allowed, so a batch a glance at the app authorised does not outlive the glance.
         previewAdmission.bind(::previewsAllowed)
+        val requestedUserId = UserId(userId)
         return try {
-            val requestedUserId = UserId(userId)
             val session =
                 withTimeoutOrNull(SESSION_READY_TIMEOUT_MILLIS) {
                     entryPoint.accountSessionManager().state.first { state ->
@@ -181,9 +183,27 @@ class ProtonThumbnailWorker(
         } finally {
             previewAdmission.unbind()
             networkMonitor?.close()
+            // The time under the foreground service is recorded however the run ended: a run
+            // WorkManager stopped never reaches Run.end, and its hours count against the
+            // day's allowance all the same. NonCancellable, because the finally of a cancelled
+            // coroutine cannot suspend otherwise.
+            withContext(NonCancellable) {
+                foregroundRun(entryPoint.clock().nowMillis())?.let { run ->
+                    entryPoint.foregroundBudgetStore().record(requestedUserId, run, run.endedAtMillis)
+                }
+            }
             runGuard.end()
         }
     }
+
+    /** This run's time under the foreground service so far, ending at [nowMillis]; null when never promoted. */
+    private fun foregroundRun(nowMillis: Long): ProtonForegroundRun? =
+        foregroundStartedAtMillis?.let { startedAt ->
+            ProtonForegroundRun(
+                endedAtMillis = nowMillis,
+                durationMillis = (SystemClock.elapsedRealtime() - startedAt).coerceAtLeast(0L),
+            )
+        }
 
     /** What one admitted run needs, and how it ends: with the follow-up its outcome calls for. */
     private inner class Run(
@@ -205,8 +225,9 @@ class ProtonThumbnailWorker(
         /**
          * Enqueues the follow-up before returning, while this run is still the running job under
          * the unique name, so the scheduler chains it rather than dropping or cancelling it.
-         * The time this run spent under the foreground service is recorded first, so the
-         * follow-up is held back when another run would take the day past its allowance.
+         * The time this run spent under the foreground service counts towards the budget the
+         * follow-up is held back by, though it is recorded only in the worker's finally block,
+         * which a cancelled run reaches too.
          */
         fun end(
             outcome: ProtonThumbnailWorkOutcome,
@@ -215,14 +236,7 @@ class ProtonThumbnailWorker(
         ): Result {
             val allowPreviews = previewsAllowed()
             val now = clock.nowMillis()
-            foregroundStartedAtMillis?.let { startedAt ->
-                val duration = (SystemClock.elapsedRealtime() - startedAt).coerceAtLeast(0L)
-                foregroundBudget.record(
-                    userId,
-                    ProtonForegroundRun(endedAtMillis = now, durationMillis = duration),
-                    now,
-                )
-            }
+            val runs = foregroundBudget.runs(userId) + listOfNotNull(foregroundRun(now))
             val followUp =
                 ProtonThumbnailFollowUpPolicy.followUp(
                     outcome,
@@ -232,10 +246,7 @@ class ProtonThumbnailWorker(
                     retryAfterMillis = lastIdle?.retryAfterMillis,
                     networkWaitAttempt = if (processedBatch) 0 else networkWaitAttempt,
                     foregroundBudgetDelayMillis =
-                        ProtonThumbnailForegroundBudgetPolicy.delayUntilAffordableMillis(
-                            foregroundBudget.runs(userId),
-                            now,
-                        ),
+                        ProtonThumbnailForegroundBudgetPolicy.delayUntilAffordableMillis(runs, now),
                 )
             if (followUp != null) followUps.enqueueFollowUp(userId, followUp)
             return finish(outcome)

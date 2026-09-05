@@ -27,6 +27,14 @@ internal enum class ThumbnailFailureKind(
 
     /** Proton has no such rendition for the photo; retrying cannot help. */
     NOT_FOUND(3),
+
+    /**
+     * Not a failure the classifier ever produces: the sync settles a node with it when the
+     * preview that stands in for its missing thumbnail could not be fetched because previews
+     * were not allowed. The queue parks the node without a backoff step until a run that may
+     * fetch previews ([ProtonThumbnailQueue.settle]).
+     */
+    PREVIEW_DEFERRED(4),
 }
 
 /**
@@ -49,7 +57,8 @@ internal object ThumbnailFallbackFailurePolicy {
      * A node whose fallback pass never started (previews were not allowed at the time) is not
      * a failure of any kind: the thumbnail failure that sent it to the fallback must not be
      * settled either, or a "no thumbnail" answer would drop it before it ever got its preview.
-     * Such nodes stay claimed and untouched until a run that may fetch previews reaches them.
+     * Such nodes are reported as deferred ([ThumbnailBatchResult.deferredNodeUids]) and parked
+     * in the queue until a run that may fetch previews.
      */
     fun withoutDeferred(
         failures: Map<String, ThumbnailFailureKind>,

@@ -52,13 +52,19 @@ internal object ProtonThumbnailForegroundBudgetPolicy {
     private const val RUN_SEPARATOR = ';'
     private const val FIELD_SEPARATOR = ':'
 
-    /** The runs still inside the window ending at [nowMillis], newest last, at most [MAX_RECORDED_RUNS]. */
+    /**
+     * The runs still inside the window ending at [nowMillis], newest last, at most
+     * [MAX_RECORDED_RUNS]. A run stamped after [nowMillis] was recorded by a wall clock that
+     * has since gone backwards; it is counted as having just ended rather than dropped, or a
+     * clock set back a day would erase the whole history and let the budget be overspent.
+     */
     fun prune(
         runs: List<ProtonForegroundRun>,
         nowMillis: Long,
     ): List<ProtonForegroundRun> =
         runs
-            .filter { run -> run.endedAtMillis > nowMillis - WINDOW_MILLIS && run.endedAtMillis <= nowMillis }
+            .map { run -> if (run.endedAtMillis > nowMillis) run.copy(endedAtMillis = nowMillis) else run }
+            .filter { run -> run.endedAtMillis > nowMillis - WINDOW_MILLIS }
             .sortedBy(ProtonForegroundRun::endedAtMillis)
             .takeLast(MAX_RECORDED_RUNS)
 
