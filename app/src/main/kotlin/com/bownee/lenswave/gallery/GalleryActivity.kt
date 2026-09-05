@@ -644,9 +644,11 @@ class GalleryActivity :
         if (adapter.count == 0 && state.emptyState == null) return
 
         val savedPosition = viewModel.scrollPositions.positionFor(destination)
-        pendingScrollRestore = null
+        // Cleared only when the posted scroll runs: a span change landing in between must not
+        // capture the list's pre-restore position against the regrouped rows (see saveScrollPosition).
         screen.restoreScrollPosition(
             savedPosition ?: GalleryScrollPosition(firstVisiblePosition = 0, topOffset = 0),
+            onRestored = { if (pendingScrollRestore == destination) pendingScrollRestore = null },
         ) { currentUiState.destination == destination }
     }
 

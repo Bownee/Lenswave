@@ -214,13 +214,19 @@ internal class GalleryScreen(
         )
     }
 
-    /** Scrolls to [position], remapped when the rows are now grouped with another span (see [GallerySpanPolicy]). */
+    /**
+     * Scrolls to [position], remapped when the rows are now grouped with another span (see
+     * [GallerySpanPolicy]). The scroll is posted; [onRestored] runs right before it so the caller
+     * can treat the position as pending until the list actually shows it.
+     */
     fun restoreScrollPosition(
         position: GalleryScrollPosition,
+        onRestored: () -> Unit,
         isCurrentDestination: () -> Boolean,
     ) {
         list.post {
             if (!isCurrentDestination()) return@post
+            onRestored()
             val target =
                 GallerySpanPolicy.restoredPosition(
                     position,
