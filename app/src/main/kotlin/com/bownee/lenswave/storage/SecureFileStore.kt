@@ -167,8 +167,11 @@ class SecureFileStore internal constructor(
         target: File,
         onStarted: (plaintextInProgress: File, expectedBytes: Long?) -> Unit = { _, _ -> },
         onBytesWritten: (totalBytes: Long) -> Unit = {},
-        shouldContinue: () -> Boolean = { true },
         commitGate: (commit: () -> Unit) -> Unit = { commit -> commit() },
+        // Last on purpose: a caller's trailing lambda is the stop check. Appending a parameter
+        // after it once rebound such a lambda to the commit gate, silently, because a Boolean
+        // lambda coerces to Unit; the device test caught it, the JVM chain did not.
+        shouldContinue: () -> Boolean = { true },
     ) {
         target.parentFile?.mkdirs()
         val temporary = File.createTempFile("${target.name}.", ".part", target.parentFile)

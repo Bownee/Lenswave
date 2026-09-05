@@ -10,6 +10,7 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.CancellationException
 import java.util.concurrent.ConcurrentHashMap
 import javax.crypto.AEADBadTagException
 import javax.crypto.KeyGenerator
@@ -184,10 +185,16 @@ class SecureFileStoreTest {
         assertTrue(encrypted.isFile)
 
         var offered = 0
-        store.decryptFile(scope, encrypted, decrypted) { _ -> offered++ }
+        store.decryptFile(scope, encrypted, decrypted, commitGate = { _ -> offered++ })
         assertEquals(1, offered)
         assertFalse(decrypted.exists())
-        store.decryptFile(scope, encrypted, decrypted) { commit -> commit() }
+        store.decryptFile(scope, encrypted, decrypted, commitGate = { commit -> commit() })
+        // A trailing lambda is the stop check, as the instrumented test relies on; a stop before
+        // the first segment cancels a file of any size.
+        assertThrows(CancellationException::class.java) {
+            store.decryptFile(scope, encrypted, File(directory, "stopped")) { false }
+        }
+        assertFalse(File(directory, "stopped").exists())
         assertArrayEquals(plaintext.readBytes(), decrypted.readBytes())
         // Only the three files this test named are left: every temporary was removed.
         assertEquals(setOf("plain.bin", "encrypted.bin", "decrypted.bin"), directory.list()?.toSet())

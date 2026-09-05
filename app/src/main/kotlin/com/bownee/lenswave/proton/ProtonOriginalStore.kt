@@ -169,10 +169,11 @@ internal class ProtonOriginalStore(
                 materialized,
                 onStarted,
                 onBytesWritten,
-                shouldContinue,
-            ) { commit ->
-                if (!removals.commitIf(userId, nodeUid, startedIn, commit)) throw ProtonOriginalRemovedException()
-            }
+                commitGate = { commit ->
+                    if (!removals.commitIf(userId, nodeUid, startedIn, commit)) throw ProtonOriginalRemovedException()
+                },
+                shouldContinue = shouldContinue,
+            )
             transientReadFailures.recovered()
             file.setLastModified(clock.nowMillis())
             materialized.setLastModified(clock.nowMillis())
