@@ -454,11 +454,15 @@ class SecureFileStore internal constructor(
     ): ByteArray =
         ByteArray(DATA_KEY_BYTES).also { bytes ->
             SecureRandom().nextBytes(bytes)
-            AtomicFileStore.write(file, wrap(scope, bytes), "Could not store data key")
-            // Best effort: a key without its family marker is still a working key, see [keyAliases].
+            // The family marker goes first: a marker without a key is harmless (the cleaner
+            // deletes both, and deleting a key that is not there is nothing), whereas a key
+            // without its marker, left by a crash between the two writes, is one [keyAliases]
+            // never lists and no cleaner ever removes. Best effort still: a key whose marker
+            // cannot be written is a working key.
             runCatching {
                 AtomicFileStore.write(familyFile(alias(scope)), scopeFamily(scope), "Could not record the key family")
             }
+            AtomicFileStore.write(file, wrap(scope, bytes), "Could not store data key")
         }
 
     private fun wrap(

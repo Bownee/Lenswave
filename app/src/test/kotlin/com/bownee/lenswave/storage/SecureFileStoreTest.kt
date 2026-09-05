@@ -122,6 +122,32 @@ class SecureFileStoreTest {
     }
 
     @Test
+    fun `a family marker is written before its key and is harmless on its own`() {
+        val store = store()
+        val keys = File(temporaryFolder.root, "keys")
+        val userC = "proton-media:user-c-${UUID.randomUUID()}"
+        // The residue of a crash between the two writes of a new key: the marker alone.
+        keys.mkdirs()
+        File(keys, "${store.keyAlias(userC)}.family").writeText("proton-media")
+
+        assertEquals(listOf(store.keyAlias(userC)), store.keyAliases("proton-media"))
+        store.deleteKeyAlias(store.keyAlias(userC))
+
+        assertEquals(emptyList<String>(), store.keyAliases("proton-media"))
+        assertTrue(keys.listFiles().orEmpty().isEmpty())
+        // A key created afterwards has both files again.
+        store.write(userC, File(temporaryFolder.root, "c.bin"), byteArrayOf(1), "write failed")
+        assertEquals(
+            setOf("${store.keyAlias(userC)}.family", "${store.keyAlias(userC)}.key"),
+            keys
+                .listFiles()
+                .orEmpty()
+                .map(File::getName)
+                .toSet(),
+        )
+    }
+
+    @Test
     fun `whole files round trip through the segmented envelope`() {
         val store = store()
         val plaintext =
