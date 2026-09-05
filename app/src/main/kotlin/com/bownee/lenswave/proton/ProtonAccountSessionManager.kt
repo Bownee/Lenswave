@@ -54,6 +54,9 @@ class ProtonAccountSessionManager internal constructor(
     private val mutableState = MutableStateFlow(ProtonAccountSessionState())
     private var observedUserId: UserId? = null
 
+    /** Whether the last observation that reached the coordinator saw no account at all. */
+    private var observedAccountAbsent = false
+
     val state: StateFlow<ProtonAccountSessionState> = mutableState.asStateFlow()
 
     fun start() {
@@ -82,10 +85,18 @@ class ProtonAccountSessionManager internal constructor(
      * The first observation always reaches the coordinator, even when it names the account
      * already observed (none): that is where the residue of an account signed out in a previous
      * process is swept. Later observations of the same account only refresh the details.
+     *
+     * An account that is present but not ready (still loading, or waiting for a second factor)
+     * reads as no active account, but it is not absent: the coordinator is told the difference
+     * so it does not sweep that account's caches as if it had been signed out.
      */
     private suspend fun transitionTo(account: Account?) {
         val nextUserId = account?.takeIf(Account::isReady)?.userId
-        if (observedUserId == nextUserId && mutableState.value.initialized) {
+        val accountAbsent = account == null
+        // A loading account and no account both read as no active user, but only the latter
+        // sweeps, so an observation that moves between the two still reaches the coordinator.
+        val unchanged = nextUserId != null || accountAbsent == observedAccountAbsent
+        if (observedUserId == nextUserId && unchanged && mutableState.value.initialized) {
             mutableState.value =
                 ProtonAccountSessionState(
                     account = account,
@@ -105,8 +116,9 @@ class ProtonAccountSessionManager internal constructor(
         while (true) {
             currentCoroutineContext().ensureActive()
             try {
-                transitionCoordinator.transition(observedUserId, nextUserId)
+                transitionCoordinator.transition(observedUserId, nextUserId, accountAbsent)
                 observedUserId = nextUserId
+                observedAccountAbsent = accountAbsent
                 mutableState.value =
                     ProtonAccountSessionState(
                         account = account,

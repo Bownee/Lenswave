@@ -36,13 +36,27 @@ class ProtonAccountTransitionCoordinator
          * sees: a sign-out that could not delete everything leaves residue behind, and with no
          * account signed in the next launch never transitions, so that first observation is
          * where the orphaned caches get swept.
+         *
+         * The sweep keeps only [nextUserId]'s caches, so it must know that nobody else's are
+         * wanted. A [nextUserId] of null with [accountAbsent] false is an account that exists but
+         * has not finished loading: its caches are about to be needed, and sweeping them (every
+         * rendition, original and queue of the only account there is) because it was slow to
+         * become ready is the one thing this must never do. That observation is skipped and the
+         * sweep waits for the account to become ready or to be removed. [swept] is only set once
+         * the cleaner has returned, so a sweep that threw is retried by the session manager.
          */
         suspend fun transition(
             previousUserId: UserId?,
             nextUserId: UserId?,
+            accountAbsent: Boolean,
         ) {
+            val retainedUserId = nextUserId?.id
             if (previousUserId == nextUserId) {
-                if (swept.compareAndSet(false, true)) cacheCleaner.retainOnlyUser(nextUserId?.id)
+                if (retainedUserId == null && !accountAbsent) return
+                if (!swept.get()) {
+                    cacheCleaner.retainOnlyUser(retainedUserId)
+                    swept.set(true)
+                }
                 return
             }
 
@@ -52,8 +66,12 @@ class ProtonAccountTransitionCoordinator
             // would otherwise re-queue a failed outcome for a viewer of the next account.
             mutationForgetter.forgetAll()
             nextUserId?.let { sessionLifecycle.activate(it) }
-            cacheCleaner.retainOnlyUser(nextUserId?.id)
-            swept.set(true)
+            // No ready account and none absent: the account is between states, and nothing says
+            // whose caches are wanted, so the sweep waits (see above).
+            if (retainedUserId != null || accountAbsent) {
+                cacheCleaner.retainOnlyUser(retainedUserId)
+                swept.set(true)
+            }
             nextUserId?.let(thumbnailScheduler::enqueue)
         }
     }
