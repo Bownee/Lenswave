@@ -200,6 +200,7 @@ class GalleryActivity :
         consumeViewerOutcomes(mutationCoordinator.outcomes.value)
         viewModel.resumeThumbnailDownloads()
         updatePresenter.showPendingUpdate()
+        settingsPresenter.showPendingDialog()
     }
 
     override fun onDestroy() {

@@ -50,12 +50,13 @@ internal class GalleryDeletionCoordinator(
 
     private fun confirmMoveToTrash(photos: List<PhotoTarget>) {
         val fragmentManager = activity.supportFragmentManager
-        val canShow =
-            GalleryDialogPromptPolicy.canShow(
+        // The confirmation answers a tap that just happened; one that cannot show now is simply not shown.
+        val decision =
+            GalleryDialogPromptPolicy.decide(
                 stateSaved = fragmentManager.isStateSaved,
                 dialogShowing = fragmentManager.findFragmentByTag(TrashConfirmationDialogFragment.TAG) != null,
             )
-        if (!canShow) return
+        if (decision != GalleryDialogPromptPolicy.Decision.SHOW) return
         TrashConfirmationDialogFragment
             .create(photos.map(PhotoTarget::nodeUid), singlePhoto = false)
             .show(fragmentManager, TrashConfirmationDialogFragment.TAG)

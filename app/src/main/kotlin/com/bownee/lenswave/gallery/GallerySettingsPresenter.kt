@@ -36,6 +36,9 @@ internal class GallerySettingsPresenter(
 ) {
     private var popup: PopupMenu? = null
 
+    /** A dialog that arrived after onSaveInstanceState; [showPendingDialog] retries it on resume. */
+    private var pendingDialog: Pair<DialogFragment, String>? = null
+
     fun showMenu(anchor: View) {
         popup?.dismiss()
         popup =
@@ -93,6 +96,14 @@ internal class GallerySettingsPresenter(
     fun dispose() {
         popup?.dismiss()
         popup = null
+        pendingDialog = null
+    }
+
+    /** Call from onResume: shows a dialog that was held back because the state was saved when it was ready. */
+    fun showPendingDialog() {
+        val (fragment, tag) = pendingDialog ?: return
+        pendingDialog = null
+        show(fragment, tag)
     }
 
     /** The answer from [PrivacySettingsDialogFragment]; the account may have gone while the dialog was up. */
@@ -138,12 +149,20 @@ internal class GallerySettingsPresenter(
         tag: String,
     ) {
         val fragmentManager = activity.supportFragmentManager
-        val canShow =
-            GalleryDialogPromptPolicy.canShow(
+        val decision =
+            GalleryDialogPromptPolicy.decide(
                 stateSaved = fragmentManager.isStateSaved,
                 dialogShowing = fragmentManager.findFragmentByTag(tag) != null,
             )
-        if (canShow) fragment.show(fragmentManager, tag)
+        when (decision) {
+            GalleryDialogPromptPolicy.Decision.SHOW -> fragment.show(fragmentManager, tag)
+
+            // The telemetry read suspended past onSaveInstanceState (a Home press while it ran):
+            // the answer is kept and shown on resume rather than dropped without a word.
+            GalleryDialogPromptPolicy.Decision.WAIT -> pendingDialog = fragment to tag
+
+            GalleryDialogPromptPolicy.Decision.DROP -> Unit
+        }
     }
 
     private companion object {
