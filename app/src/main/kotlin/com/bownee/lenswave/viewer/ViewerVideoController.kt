@@ -84,8 +84,14 @@ internal class ViewerVideoController(
     /** Applied by the next [show], so a recreated viewer resumes where the user was. */
     private var pendingPlayback: ViewerPlaybackState? = null
 
-    /** True when [pause] stopped a playing video; the saved state should still say "playing". */
+    /**
+     * True when [pause] stopped a playing video, or a video was shown while the viewer was
+     * stopped; the saved state should still say "playing" and [resume] starts it.
+     */
     private var pausedWhilePlaying = false
+
+    /** True between the Activity's onStart and onStop; a video shown outside that window does not start. */
+    private var started = false
 
     /** The media the player was last asked to show; null once [stop] has cleared it. */
     private var activeStableId: String? = null
@@ -193,19 +199,24 @@ internal class ViewerVideoController(
         }
     }
 
-    /** Pauses for the viewer leaving the screen; call from the Activity's onStop. */
+    /**
+     * Pauses for the viewer leaving the screen; call from the Activity's onStop. A video that
+     * becomes ready after this, from a download still in flight, is shown paused (see [show]).
+     */
     fun pause() {
+        started = false
         val active = player ?: return
         if (ViewerPlaybackPausePolicy.remembersPlaying(active.playWhenReady)) pausedWhilePlaying = true
         active.pause()
     }
 
     /**
-     * The viewer is back on screen: a video [pause] stopped goes on playing, and the mark is
-     * spent either way. Left set, it would make a rotation start a video the user had since
-     * paused. Call from the Activity's onStart.
+     * The viewer is back on screen: a video [pause] stopped, or one shown while stopped, goes on
+     * playing, and the mark is spent either way. Left set, it would make a rotation start a
+     * video the user had since paused. Call from the Activity's onStart.
      */
     fun resume() {
+        started = true
         val resumes = ViewerPlaybackPausePolicy.resumesOnReturn(pausedWhilePlaying)
         pausedWhilePlaying = false
         if (resumes) player?.play()
@@ -299,7 +310,11 @@ internal class ViewerVideoController(
         pendingPlayback = null
         if (restored != null) activePlayer.seekTo(restored.positionMillis)
         activePlayer.prepare()
-        activePlayer.playWhenReady = restored?.playWhenReady ?: true
+        // Off screen there is nothing to pause yet, so the start itself waits for resume():
+        // a progressive download that readies after onStop must not play in the background.
+        val intendedPlaying = restored?.playWhenReady ?: true
+        activePlayer.playWhenReady = ViewerPlaybackPausePolicy.playsOnShow(intendedPlaying, started)
+        pausedWhilePlaying = ViewerPlaybackPausePolicy.defersStart(intendedPlaying, started)
     }
 
     private fun ensurePlayer(): ExoPlayer =
