@@ -270,7 +270,6 @@ class GalleryListAdapter(
                         photo.displayName.ifBlank { photoDescription },
                     )
                 }
-            cell.videoBadge.visibility = if (photo.mediaKind == MediaKind.VIDEO) View.VISIBLE else View.GONE
             applySelection(cell, photo.stableId in selected)
             bindThumbnail(cell, photo)
         }
@@ -518,6 +517,12 @@ class GalleryListAdapter(
         ) {
             val view = cell.image
             if (view.tag != tag) return
+            cell.videoBadge.visibility =
+                if (cell.asset?.mediaKind == MediaKind.VIDEO && (image != null || cell.keepsShownImage)) {
+                    View.VISIBLE
+                } else {
+                    View.GONE
+                }
             if (image == null && cell.keepsShownImage) {
                 cell.loading.visibility = View.GONE
                 return
