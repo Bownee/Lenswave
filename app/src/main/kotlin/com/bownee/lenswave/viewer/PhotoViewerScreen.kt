@@ -80,6 +80,11 @@ internal class PhotoViewerScreen(
             setShowRewindButton(false)
             setShowFastForwardButton(false)
             findViewById<View>(androidx.media3.ui.R.id.exo_settings)?.visibility = View.GONE
+            // No dimming while the controls are up: the controller's backdrop darkens the whole
+            // picture and its bottom bar darkens the strip behind the time bar. Neither has a
+            // switch, so both lose their background; the controls themselves stay as they are.
+            findViewById<View>(androidx.media3.ui.R.id.exo_controls_background)?.background = null
+            findViewById<View>(androidx.media3.ui.R.id.exo_bottom_bar)?.background = null
             setShutterBackgroundColor(Color.TRANSPARENT)
             visibility = View.GONE
             setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
