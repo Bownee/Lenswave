@@ -21,7 +21,7 @@ internal interface ProtonSyncMetadataStore {
     )
 }
 
-/** Owns freshness and commit timestamps shared by every authoritative Proton snapshot. */
+/** Records successful snapshot commits; remote freshness is tracked by [ProtonEventSync]. */
 @Singleton
 internal class ProtonSnapshotCoordinator
     @Inject
@@ -31,15 +31,12 @@ internal class ProtonSnapshotCoordinator
     ) {
         fun shouldEnumerate(
             userId: String,
-            source: ProtonSyncSource,
             syncKey: String,
             forceRemote: Boolean,
             hasCachedSnapshot: Boolean,
         ): Boolean =
             ProtonSyncPolicy.shouldEnumerate(
-                source = source,
                 lastSuccessfulSyncMillis = metadata.readLastSuccessfulSync(userId, syncKey),
-                nowMillis = clock.nowMillis(),
                 forceRemote = forceRemote,
                 hasCachedSnapshot = hasCachedSnapshot,
             )

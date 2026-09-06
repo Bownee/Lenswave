@@ -43,7 +43,7 @@ internal data class GalleryUiInputs(
     /**
      * The session is still activating the previous launch's account from its cache (see
      * [com.bownee.lenswave.proton.ProtonAccountSessionState.preloading]): a page with nothing
-     * cached waits for that before it shows the loading panel, or the panel would flash for a
+     * cached waits for that before it shows the loading indicator, or the indicator would flash for a
      * library that is about to appear.
      */
     val awaitingCache: Boolean = false,
@@ -100,7 +100,13 @@ internal class GalleryUiStateFactory(
                     )
                 }
             }
-        return base(inputs, content, emptyState, inputs.protonGallery.listingRefused)
+        return base(
+            inputs,
+            content,
+            emptyState,
+            inputs.protonGallery.listingRefused,
+            isLoadingMetadata = content.assets.isEmpty() && !inputs.protonGallery.hasLoaded && emptyState == null,
+        )
     }
 
     private fun tag(
@@ -135,7 +141,13 @@ internal class GalleryUiStateFactory(
                     )
                 }
             }
-        return base(inputs, content, emptyState, state.listingRefused)
+        return base(
+            inputs,
+            content,
+            emptyState,
+            state.listingRefused,
+            isLoadingMetadata = content.assets.isEmpty() && !state.hasLoaded && emptyState == null,
+        )
     }
 
     private fun library(inputs: GalleryUiInputs): GalleryUiState {
@@ -147,6 +159,10 @@ internal class GalleryUiStateFactory(
         // Mirrors the media-type filters: an empty panel once the list has loaded and is empty.
         val emptyState =
             when {
+                inputs.protonAccountStatus == ProtonAccountStatus.DISCONNECTED -> {
+                    protonConnectPrompt(inputs)
+                }
+
                 inputs.protonAccountStatus != ProtonAccountStatus.CONNECTED -> {
                     null
                 }
@@ -178,6 +194,9 @@ internal class GalleryUiStateFactory(
             content = content,
             emptyState = emptyState,
             listingRefused = albums.listingRefused,
+            isLoadingMetadata =
+                inputs.protonAccountStatus != ProtonAccountStatus.DISCONNECTED &&
+                    !inputs.awaitingCache && albums.albums.isEmpty() && !albums.hasLoaded && !albums.refreshFailed,
         )
     }
 
@@ -186,48 +205,17 @@ internal class GalleryUiStateFactory(
         accountStatus: ProtonAccountStatus,
     ): List<LibrarySection> =
         buildList {
-            when (accountStatus) {
-                ProtonAccountStatus.DISCONNECTED -> {
-                    add(
-                        LibrarySection(
-                            key = "proton",
-                            title = "",
-                            items =
-                                listOf(
-                                    entry(
-                                        key = "connect-proton",
-                                        label = text.string(R.string.connect_proton),
-                                        iconRes = R.drawable.ic_cloud,
-                                        action = LibraryAction.Request(GalleryEmptyAction.CONNECT_PROTON),
-                                    ),
-                                ),
-                        ),
-                    )
-                }
-
-                ProtonAccountStatus.CONNECTING,
-                ProtonAccountStatus.CONNECTED,
-                -> {
-                    // The tab itself is titled Albums, so the grid needs no heading of its own.
-                    if (albums.isNotEmpty()) {
-                        add(
-                            LibrarySection(
-                                key = "albums",
-                                title = "",
-                                items = albums.map(LibraryItem::Album),
-                            ),
-                        )
-                    }
-                }
+            if (accountStatus != ProtonAccountStatus.DISCONNECTED && albums.isNotEmpty()) {
+                // The tab itself is titled Albums, so the grid needs no heading of its own.
+                add(
+                    LibrarySection(
+                        key = "albums",
+                        title = "",
+                        items = albums.map(LibraryItem::Album),
+                    ),
+                )
             }
         }
-
-    private fun entry(
-        key: String,
-        label: String,
-        iconRes: Int,
-        action: LibraryAction,
-    ) = LibraryItem.Entry(key = key, label = label, iconRes = iconRes, action = action)
 
     private fun album(
         inputs: GalleryUiInputs,
@@ -240,7 +228,7 @@ internal class GalleryUiStateFactory(
         val content = memo.photos(albumState.photos, memo.tagIndex(inputs.protonGallery.tags))
         val emptyState =
             when {
-                content.assets.isNotEmpty() || !albumState.hasLoaded -> {
+                content.assets.isNotEmpty() -> {
                     null
                 }
 
@@ -251,6 +239,10 @@ internal class GalleryUiStateFactory(
                     )
                 }
 
+                !albumState.hasLoaded -> {
+                    null
+                }
+
                 else -> {
                     GalleryEmptyState(
                         title = text.string(R.string.album_empty),
@@ -258,7 +250,13 @@ internal class GalleryUiStateFactory(
                     )
                 }
             }
-        return base(inputs, content, emptyState, albumState.listingRefused)
+        return base(
+            inputs,
+            content,
+            emptyState,
+            albumState.listingRefused,
+            isLoadingMetadata = content.assets.isEmpty() && !albumState.hasLoaded && emptyState == null,
+        )
     }
 
     private fun protonUnavailable(inputs: GalleryUiInputs): GalleryUiState? =
@@ -266,22 +264,7 @@ internal class GalleryUiStateFactory(
             ProtonAccountStatus.DISCONNECTED -> {
                 base(
                     inputs = inputs,
-                    emptyState =
-                        if (inputs.signedOut) {
-                            GalleryEmptyState(
-                                title = text.string(R.string.signed_out),
-                                message = text.string(R.string.signed_out_message),
-                                actionLabel = text.string(R.string.connect_proton),
-                                action = GalleryEmptyAction.CONNECT_PROTON,
-                            )
-                        } else {
-                            GalleryEmptyState(
-                                title = text.string(R.string.connect_proton_photos),
-                                message = text.string(R.string.connect_proton_message),
-                                actionLabel = text.string(R.string.connect_proton),
-                                action = GalleryEmptyAction.CONNECT_PROTON,
-                            )
-                        },
+                    emptyState = protonConnectPrompt(inputs),
                 )
             }
 
@@ -294,11 +277,7 @@ internal class GalleryUiStateFactory(
                 } else {
                     base(
                         inputs = inputs,
-                        emptyState =
-                            GalleryEmptyState(
-                                title = text.string(R.string.loading_metadata),
-                                message = "",
-                            ),
+                        isLoadingMetadata = true,
                     )
                 }
             }
@@ -307,6 +286,17 @@ internal class GalleryUiStateFactory(
                 null
             }
         }
+
+    private fun protonConnectPrompt(inputs: GalleryUiInputs): GalleryEmptyState =
+        GalleryEmptyState(
+            title = text.string(if (inputs.signedOut) R.string.signed_out else R.string.connect_proton_photos),
+            message =
+                text.string(
+                    if (inputs.signedOut) R.string.signed_out_message else R.string.connect_proton_message,
+                ),
+            actionLabel = text.string(R.string.connect_proton),
+            action = GalleryEmptyAction.CONNECT_PROTON,
+        )
 
     private fun GalleryUiInputs.hasCachedTimeline(): Boolean =
         protonGallery.hasLoaded &&
@@ -319,6 +309,7 @@ internal class GalleryUiStateFactory(
         content: GalleryContent = NO_PHOTOS,
         emptyState: GalleryEmptyState? = null,
         listingRefused: Boolean = false,
+        isLoadingMetadata: Boolean = false,
     ) = GalleryUiState(
         destination = inputs.destination,
         title = title(inputs.destination),
@@ -327,6 +318,7 @@ internal class GalleryUiStateFactory(
         currentUserId = inputs.currentUserId,
         isProtonConnected = inputs.currentUserId != null,
         isRefreshing = inputs.isRefreshing,
+        isLoadingMetadata = isLoadingMetadata,
         listingRefused = listingRefused,
         thumbnailUserId = inputs.currentUserId ?: inputs.protonGallery.userId?.let(::UserId),
     )

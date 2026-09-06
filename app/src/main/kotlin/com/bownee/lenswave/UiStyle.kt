@@ -19,6 +19,7 @@ import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.annotation.DrawableRes
 import androidx.core.content.ContextCompat
@@ -144,6 +145,17 @@ object UiStyle {
             textSize = sizeSp
             setTextColor(color)
             if (medium) typeface = this@UiStyle.medium
+        }
+
+    fun loadingIndicator(
+        context: Context,
+        description: String,
+    ): ProgressBar =
+        ProgressBar(context).apply {
+            isIndeterminate = true
+            indeterminateTintList = ColorStateList.valueOf(accent)
+            contentDescription = description
+            visibility = View.GONE
         }
 
     fun iconButton(

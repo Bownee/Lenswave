@@ -53,6 +53,7 @@ class ProtonPhotoGateway internal constructor(
     private val sessionGuard: ProtonSessionGuard,
     /** Process-wide, like the session itself; [runActivationHousekeeping] guards every use. */
     private val housekeepingScope: CoroutineScope,
+    private val eventSync: ProtonEventSync? = null,
 ) : ProtonGalleryReader,
     ProtonSessionLifecycle,
     ProtonThumbnailImageSource,
@@ -71,6 +72,7 @@ class ProtonPhotoGateway internal constructor(
         cache: ProtonSessionCache,
         renditionStore: ProtonMediaCache,
         sessionGuard: ProtonSessionGuard,
+        eventSync: ProtonEventSync,
     ) : this(
         timeline = timeline,
         albums = albums,
@@ -84,6 +86,7 @@ class ProtonPhotoGateway internal constructor(
         renditionStore = renditionStore,
         sessionGuard = sessionGuard,
         housekeepingScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+        eventSync = eventSync,
     )
 
     override val state: StateFlow<ProtonGalleryState> = timeline.state
@@ -120,6 +123,7 @@ class ProtonPhotoGateway internal constructor(
                 sessionGuard.activate(userId) { previousUserId ->
                     previousUserId?.let { previous ->
                         clientProvider.disconnect(previous)
+                        eventSync?.forget(previous.id)
                         // As in disconnect: the queues drop their pending writes first, or a
                         // debounced flush could land after the clear and recreate the previous
                         // user's directory and data key.
@@ -393,6 +397,7 @@ class ProtonPhotoGateway internal constructor(
         withContext(Dispatchers.IO) {
             sessionGuard.disconnect(userId) { wasActive ->
                 clientProvider.disconnect(userId)
+                eventSync?.forget(userId.id)
                 // The queues drop their pending writes and the originals stop their
                 // transfers first so none can land after the user's directory is gone.
                 thumbnailQueue.forget(userId.id)

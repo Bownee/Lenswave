@@ -8,7 +8,7 @@
     <string name="photo_details">Details</string>
     <string name="open_in_maps">Open in Maps</string>
     <string name="lenswave_auth_title">Connect Proton Photos</string>
-    <string name="lenswave_auth_subtitle">Sign in to browse your cloud photo library. Lenswave is an independent third-party app and is not affiliated with Proton.</string>
+    <string name="lenswave_auth_subtitle">Sign in to browse your cloud photo library. Lenswave is a third-party application not officially supported by Proton.</string>
     <string name="photo">Photo</string>
     <string name="photo_thumbnail_unavailable">%1$s. Thumbnail unavailable.</string>
     <string name="back">Back</string>
@@ -27,7 +27,7 @@
     <string name="proton_tag_favorites">Favorites</string>
     <string name="proton_tag_screenshots">Screenshots</string>
     <string name="proton_tag_videos">Videos</string>
-    <string name="proton_tag_live_photos">Live photos</string>
+    <string name="proton_tag_live_photos">Live Photos</string>
     <string name="proton_tag_motion_photos">Motion photos</string>
     <string name="proton_tag_selfies">Selfies</string>
     <string name="proton_tag_portraits">Portraits</string>

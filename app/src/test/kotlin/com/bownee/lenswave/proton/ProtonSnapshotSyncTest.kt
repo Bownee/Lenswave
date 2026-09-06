@@ -29,11 +29,11 @@ class ProtonSnapshotSyncTest {
             assertTrue(failures.isEmpty())
         }
 
-    @Test fun staleSnapshotPublishesSyncingThenCommitsAndStampsBeforeTheResult() =
+    @Test fun missingCommitStampPublishesSyncingThenCommitsAndStampsBeforeTheResult() =
         runTest {
-            metadata.writeLastSuccessfulSync("user", KEY, 1L)
+            metadata.writeLastSuccessfulSync("user", KEY, 0L)
             events.clear()
-            clock.value = 1L + ProtonSyncSource.TIMELINE.maximumAgeMillis
+            clock.value = 900_001L
 
             sync.sync(hasSnapshot = true, enumerate = { "remote" })
 
@@ -135,7 +135,6 @@ class ProtonSnapshotSyncTest {
         commitGate: suspend (suspend () -> Unit) -> Unit = { gated -> gated() },
     ) = sync(
         userId = "user",
-        source = ProtonSyncSource.TIMELINE,
         syncKey = KEY,
         forceRemote = forceRemote,
         hasSnapshot = hasSnapshot,

@@ -22,6 +22,41 @@ import java.util.UUID
 
 @RunWith(AndroidJUnit4::class)
 class ProtonPhotoCacheInstrumentedTest {
+    @Test fun eventCursorsAndPendingRefreshesSurviveRestartEncryptedAndAreClearedOnDisconnect() {
+        val context = isolatedContext()
+        val userId = "event-${UUID.randomUUID()}"
+        val clock = FakeClock(System.currentTimeMillis())
+        val secureFiles = SecureFileStore(File(context.filesDir, "secure-keys"))
+        val cache = createCache(context, secureFiles, clock)
+        val state =
+            ProtonEventState(
+                ownScope = "private-volume",
+                generation = 4L,
+                resetGeneration = 3L,
+                cursors = mapOf("private-volume" to "private-cursor"),
+                snapshots = mapOf("timeline" to 4L, "albums" to 2L),
+                lostScopes = setOf("revoked-volume"),
+            )
+        try {
+            cache.writeEventState(userId, state)
+            val restarted = createCache(context, secureFiles, clock)
+            assertEquals(state, restarted.readEventState(userId))
+            val file = File(context.filesDir, "proton-photo-cache/${AtomicFileStore.safeName(userId)}/events.json")
+            assertFalse(file.readText(Charsets.ISO_8859_1).contains("private-cursor"))
+            val bytes = file.readBytes()
+            bytes[bytes.lastIndex] = (bytes.last().toInt() xor 1).toByte()
+            file.writeBytes(bytes)
+            assertEquals(ProtonEventState(), restarted.readEventState(userId))
+            assertFalse(file.exists())
+            restarted.writeEventState(userId, state)
+            restarted.clearUser(userId)
+            assertEquals(ProtonEventState(), restarted.readEventState(userId))
+        } finally {
+            cache.clearUser(userId)
+            context.testRoot.deleteRecursively()
+        }
+    }
+
     @Test fun encryptedIndexCorruptionIsInvalidatedAndOriginalsOutliveTheirDecryptedCopies() {
         val context = isolatedContext()
         val userId = "cache-${UUID.randomUUID()}"

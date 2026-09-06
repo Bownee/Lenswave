@@ -39,7 +39,6 @@ import me.proton.core.network.domain.session.Session
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -693,7 +692,7 @@ class GalleryViewModelTest {
         }
 
     @Test
-    fun `a session still preloading its cache holds the loading panel back until it settles`() =
+    fun `a session still preloading its cache holds the loading indicator back until it settles`() =
         runTest(dispatcher) {
             session.value = ProtonAccountSessionState(preloading = true)
             val viewModel = viewModel()
@@ -702,21 +701,24 @@ class GalleryViewModelTest {
 
             assertNull(viewModel.uiState.value.emptyState)
             assertFalse(viewModel.uiState.value.isProtonConnected)
+            assertFalse(viewModel.uiState.value.isLoadingMetadata)
 
             session.value = ProtonAccountSessionState()
             runCurrent()
 
-            assertNotNull(viewModel.uiState.value.emptyState)
+            assertNull(viewModel.uiState.value.emptyState)
+            assertTrue(viewModel.uiState.value.isLoadingMetadata)
             assertTrue(events.isEmpty())
         }
 
     @Test
     fun `a transitioning session publishes connecting without refreshing`() =
         runTest(dispatcher) {
-            // Without a cached timeline, connected shows nothing yet while connecting shows the loading panel.
+            // Without cached metadata, the indicator stays visible throughout the session transition.
             val viewModel = connectedViewModel(timeline = ProtonGalleryState())
             assertNull(viewModel.uiState.value.emptyState)
             assertTrue(viewModel.uiState.value.isProtonConnected)
+            assertTrue(viewModel.uiState.value.isLoadingMetadata)
 
             session.value =
                 ProtonAccountSessionState(
@@ -727,11 +729,8 @@ class GalleryViewModelTest {
                 )
             runCurrent()
 
-            val panel =
-                viewModel.uiState.value.emptyState
-                    ?.title
-                    .orEmpty()
-            assertTrue(panel, panel.startsWith(R.string.loading_metadata.toString()))
+            assertNull(viewModel.uiState.value.emptyState)
+            assertTrue(viewModel.uiState.value.isLoadingMetadata)
             assertFalse(viewModel.uiState.value.isProtonConnected)
             assertTrue("a transition must not start a refresh: $events", events.isEmpty())
         }
@@ -875,17 +874,17 @@ class GalleryViewModelTest {
 
             // A user-driven refresh shortly before a tick leaves the listing fresh: the tick does nothing.
             events.clear()
-            advanceTimeBy(GalleryPeriodicSyncPolicy.CHECK_INTERVAL_MILLIS - 60_000L)
+            advanceTimeBy(GalleryPeriodicSyncPolicy.CHECK_INTERVAL_MILLIS - 30_000L)
             runCurrent()
             viewModel.refreshAfterMutation()
             runCurrent()
             assertEquals(listOf("syncTimeline:u:false", "enqueue:u"), events)
             events.clear()
-            advanceTimeBy(60_000L)
+            advanceTimeBy(30_000L)
             runCurrent()
             assertTrue("a tick within the freshness limit of a refresh is skipped: $events", events.isEmpty())
 
-            // The next tick finds that refresh a freshness limit old and enumerates again.
+            // The next tick finds that refresh a freshness limit old and checks events again.
             advanceTimeBy(GalleryPeriodicSyncPolicy.CHECK_INTERVAL_MILLIS)
             runCurrent()
             assertEquals(listOf("syncTimeline:u:false", "enqueue:u"), events)
@@ -910,7 +909,7 @@ class GalleryViewModelTest {
 
             // A user-driven refresh shortly before a tick fails offline; the repository swallows the
             // failure and publishes refreshFailed instead of a fresh listing.
-            advanceTimeBy(GalleryPeriodicSyncPolicy.CHECK_INTERVAL_MILLIS - 60_000L)
+            advanceTimeBy(GalleryPeriodicSyncPolicy.CHECK_INTERVAL_MILLIS - 30_000L)
             reader.failTimelineSyncs = true
             viewModel.refreshAfterMutation()
             runCurrent()
@@ -919,7 +918,7 @@ class GalleryViewModelTest {
 
             // The tick that follows is not skipped as if the listing had been refreshed.
             reader.failTimelineSyncs = false
-            advanceTimeBy(60_000L)
+            advanceTimeBy(30_000L)
             runCurrent()
             assertEquals(listOf("syncTimeline:u:false", "enqueue:u"), events)
             periodic.cancel()

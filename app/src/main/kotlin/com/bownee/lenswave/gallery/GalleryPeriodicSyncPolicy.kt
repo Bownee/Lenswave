@@ -1,27 +1,11 @@
 package com.bownee.lenswave.gallery
 
-import com.bownee.lenswave.proton.ProtonSyncSource
+import com.bownee.lenswave.proton.ProtonEventSync
 
-/**
- * Paces the quiet metadata checks that run while the gallery is on screen.
- *
- * A check that goes through to the repository is never free: even a non-forced sync whose
- * listing is still fresh reconciles both thumbnail queues against the library and asks for the
- * tag listings, and one whose listing is older than the freshness limit enumerates the whole
- * timeline. The interval is a multiple of that limit, so a tick always finds the listing stale
- * and would always enumerate; the user's own actions (a resume, a tab switch, an album, a manual
- * refresh) refresh the listing far more often than a timer needs to, and the timer is only the
- * backstop for a gallery left on screen.
- *
- * So a tick asks for a refresh only when [shouldRefresh] says the last completed refresh is at
- * least a freshness limit old, which is exactly when the repository would enumerate. A tick that
- * lands within the freshness limit of a user-driven refresh does nothing at all. The immediate
- * check when the last one is overdue, for a gallery coming back after a long time in the
- * background, is unchanged.
- */
+/** Checks Drive events while visible; unchanged snapshots never expire with time. */
 internal object GalleryPeriodicSyncPolicy {
-    const val CHECK_INTERVAL_MULTIPLE = 3L
-    val FRESHNESS_LIMIT_MILLIS: Long = ProtonSyncSource.TIMELINE.maximumAgeMillis
+    const val CHECK_INTERVAL_MULTIPLE = 2L
+    val FRESHNESS_LIMIT_MILLIS: Long = ProtonEventSync.POLL_INTERVAL_MILLIS
     val CHECK_INTERVAL_MILLIS: Long = FRESHNESS_LIMIT_MILLIS * CHECK_INTERVAL_MULTIPLE
 
     /** How long to wait before the next check; zero when one is already due or none has run. */
@@ -38,7 +22,7 @@ internal object GalleryPeriodicSyncPolicy {
     /**
      * Whether a check should ask the repository for a refresh: yes when no refresh has completed
      * yet, when the clock went backwards, or when the last one is at least [freshnessLimitMillis]
-     * old, so the repository would enumerate rather than only walk the library.
+     * old, so the shared event check is due. Only a remote change invalidates a listing.
      */
     fun shouldRefresh(
         lastRefreshMillis: Long?,

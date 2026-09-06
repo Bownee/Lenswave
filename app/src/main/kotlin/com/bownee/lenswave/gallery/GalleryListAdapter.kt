@@ -259,7 +259,8 @@ class GalleryListAdapter(
             }
             cell.visibility = View.VISIBLE
             // Re-binding the photo a cell already shows must not blank it while the cache is re-checked.
-            cell.keepsShownImage = image.tag == photo.stableId && image.drawable != null
+            cell.keepsShownImage =
+                image.tag == photo.stableId && (image.drawable as? BitmapDrawable)?.bitmap != null
             image.tag = photo.stableId
             cell.contentDescription =
                 if (photo.hasThumbnail) {
@@ -270,7 +271,6 @@ class GalleryListAdapter(
                         photo.displayName.ifBlank { photoDescription },
                     )
                 }
-            cell.videoBadge.visibility = if (photo.mediaKind == MediaKind.VIDEO) View.VISIBLE else View.GONE
             applySelection(cell, photo.stableId in selected)
             bindThumbnail(cell, photo)
         }
@@ -471,7 +471,8 @@ class GalleryListAdapter(
                     is PhotoCell -> {
                         val photo = cell.asset ?: continue
                         if (dropShownImages) cell.image.setImageDrawable(null)
-                        cell.keepsShownImage = !dropShownImages && cell.image.drawable != null
+                        cell.keepsShownImage =
+                            !dropShownImages && (cell.image.drawable as? BitmapDrawable)?.bitmap != null
                         bindThumbnail(cell, photo)
                     }
 
@@ -518,12 +519,22 @@ class GalleryListAdapter(
         ) {
             val view = cell.image
             if (view.tag != tag) return
+            cell.videoBadge.visibility =
+                if (cell.asset?.mediaKind == MediaKind.VIDEO && (image != null || cell.keepsShownImage)) {
+                    View.VISIBLE
+                } else {
+                    View.GONE
+                }
             if (image == null && cell.keepsShownImage) {
                 cell.loading.visibility = View.GONE
                 return
             }
-            // A rebind that delivers the bitmap already on screen must not invalidate the cell.
-            if (image == null || (view.drawable as? BitmapDrawable)?.bitmap !== image) view.setImageBitmap(image)
+            // setImageBitmap(null) leaves an empty BitmapDrawable that is not a loaded thumbnail.
+            if (image == null) {
+                view.setImageDrawable(null)
+            } else if ((view.drawable as? BitmapDrawable)?.bitmap !== image) {
+                view.setImageBitmap(image)
+            }
             cell.loading.visibility = if (image == null && !isFastScrolling) View.VISIBLE else View.GONE
             view.alpha = if (image == null) 0.45f else 1f
         }

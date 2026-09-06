@@ -27,6 +27,7 @@ internal class ProtonPhotoCache
         private val previews: ProtonPreviewStore,
         private val originals: ProtonOriginalStore,
     ) : ProtonSyncMetadataStore,
+        ProtonEventStore,
         ProtonAccountCacheCleaner,
         ProtonTimelineCache,
         ProtonAlbumCache,
@@ -226,6 +227,46 @@ internal class ProtonPhotoCache
             photos: List<ProtonGalleryPhoto>,
         ) {
             writePhotoIndex(userId, albumPhotosIndexFile(userId, albumUid), photos)
+        }
+
+        override fun readEventState(userId: String): ProtonEventState {
+            val file = File(userDirectory(userId), "events.json")
+            if (!file.isFile) return ProtonEventState()
+            return readSnapshot(userId, file, { decodeEventState(JSONObject(it)) }) { throw it } ?: ProtonEventState()
+        }
+
+        private fun decodeEventState(json: JSONObject): ProtonEventState {
+            val cursors = json.getJSONObject("cursors")
+            val snapshots = json.getJSONObject("snapshots")
+            val lost = json.getJSONArray("lostScopes")
+            return ProtonEventState(
+                ownScope = json.optString("ownScope").takeIf(String::isNotBlank),
+                generation = json.getLong("generation"),
+                resetGeneration = json.optLong("resetGeneration"),
+                cursors = cursors.keys().asSequence().associateWith { cursors.getString(it) },
+                snapshots = snapshots.keys().asSequence().associateWith { snapshots.getLong(it) },
+                lostScopes = (0 until lost.length()).mapTo(mutableSetOf()) { lost.getString(it) },
+            )
+        }
+
+        override fun writeEventState(
+            userId: String,
+            state: ProtonEventState,
+        ) {
+            val json =
+                JSONObject()
+                    .put("ownScope", state.ownScope.orEmpty())
+                    .put("generation", state.generation)
+                    .put("resetGeneration", state.resetGeneration)
+                    .put("cursors", JSONObject(state.cursors))
+                    .put("snapshots", JSONObject(state.snapshots))
+                    .put("lostScopes", JSONArray(state.lostScopes.toList()))
+            writeAtomically(
+                userId,
+                File(userDirectory(userId), "events.json"),
+                json.toString(),
+                "Could not commit Proton event cursors",
+            )
         }
 
         override fun readLastSuccessfulSync(

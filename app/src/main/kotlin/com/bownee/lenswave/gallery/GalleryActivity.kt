@@ -422,6 +422,7 @@ class GalleryActivity :
             restorePendingSelection(state)
         }
         renderEmptyState(state.emptyState)
+        screen.setLoadingMetadata(state.isLoadingMetadata)
         if (renderedListingRefused != state.listingRefused) {
             renderedListingRefused = state.listingRefused
             screen.renderListingRefused(state.listingRefused)

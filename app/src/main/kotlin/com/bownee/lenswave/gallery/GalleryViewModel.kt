@@ -365,7 +365,7 @@ class GalleryViewModel internal constructor(
      * Keeps the visible section current while the gallery is on screen. The caller scopes it
      * to the started lifecycle, so it pauses in the background and resumes with an immediate
      * check when the last one is overdue. A check asks for a quiet, non-forced refresh only when
-     * the last completed refresh is old enough for the repository to enumerate again (see
+     * the last completed refresh is old enough for another Drive event check (see
      * [GalleryPeriodicSyncPolicy.shouldRefresh]); otherwise it does nothing.
      */
     suspend fun runPeriodicSync() {

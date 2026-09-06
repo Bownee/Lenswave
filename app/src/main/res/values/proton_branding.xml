@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Core's credential layouts reference this resource directly, not add_account_icon. -->
+    <item name="ic_logo_proton" type="drawable">@mipmap/ic_launcher</item>
+    <string name="auth_account_details">Lenswave is a third-party application not officially supported by Proton.</string>
+</resources>

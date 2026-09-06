@@ -5,18 +5,19 @@ import kotlinx.coroutines.CancellationException
 import javax.inject.Inject
 
 /**
- * Runs one authoritative snapshot refresh: decides whether the cached listing is fresh enough,
+ * Runs one authoritative snapshot refresh: checks Drive events and the cached listing's commit,
  * publishes the syncing state, enumerates from Proton, commits the result to the cache, stamps the
  * successful sync, and publishes the outcome. The listing-specific parts arrive as callbacks so the
  * timeline, tag, album, and album-photo repositories share exactly one control flow.
  */
 internal class ProtonSnapshotSync internal constructor(
     private val snapshots: ProtonSnapshotCoordinator,
+    private val events: ProtonEventSync? = null,
     private val reportFailure: (String, Throwable) -> Unit,
 ) {
     @Inject
-    constructor(snapshots: ProtonSnapshotCoordinator) :
-        this(snapshots, { operation, error -> LenswaveDiagnostics.reportFailure(operation, error) })
+    constructor(snapshots: ProtonSnapshotCoordinator, events: ProtonEventSync) :
+        this(snapshots, events, { operation, error -> LenswaveDiagnostics.reportFailure(operation, error) })
 
     /**
      * Callers read the cached snapshot (and [hasSnapshot]) before calling so those reads stay
@@ -35,7 +36,6 @@ internal class ProtonSnapshotSync internal constructor(
      */
     suspend fun <T> sync(
         userId: String,
-        source: ProtonSyncSource,
         syncKey: String,
         forceRemote: Boolean,
         hasSnapshot: Boolean,
@@ -48,27 +48,42 @@ internal class ProtonSnapshotSync internal constructor(
         publishCancelled: () -> Unit,
         publishFailed: (error: Throwable) -> Unit,
         commitGate: suspend (commit: suspend () -> Unit) -> Unit,
+        inaccessibleSnapshot: (() -> T)? = null,
+        trustServerReset: () -> Unit = {},
     ) {
         try {
-            val shouldEnumerate =
-                snapshots.shouldEnumerate(
-                    userId,
-                    source,
-                    syncKey,
-                    forceRemote,
-                    hasSnapshot,
-                )
-            if (!shouldEnumerate) {
-                publishFresh()
-                return
+            val refresh: suspend (ProtonEventSync.Snapshot?) -> Unit = { eventSnapshot ->
+                val shouldEnumerate =
+                    snapshots.shouldEnumerate(
+                        userId,
+                        syncKey,
+                        forceRemote,
+                        hasSnapshot,
+                    )
+                if (!shouldEnumerate && eventSnapshot?.needsRefresh(syncKey) != true) {
+                    publishFresh()
+                } else {
+                    publishSyncing()
+                    if (eventSnapshot?.requiresReset(syncKey) == true ||
+                        eventSnapshot?.hasLostAccess(syncKey) == true
+                    ) {
+                        trustServerReset()
+                    }
+                    val result =
+                        if (eventSnapshot?.hasLostAccess(syncKey) == true && inaccessibleSnapshot != null) {
+                            inaccessibleSnapshot()
+                        } else {
+                            enumerate()
+                        }
+                    commitGate {
+                        val committed = commit(result)
+                        snapshots.commit(userId, syncKey)
+                        eventSnapshot?.commit(syncKey)
+                        publishResult(committed)
+                    }
+                }
             }
-            publishSyncing()
-            val result = enumerate()
-            commitGate {
-                val committed = commit(result)
-                snapshots.commit(userId, syncKey)
-                publishResult(committed)
-            }
+            if (events == null) refresh(null) else events.withSnapshot(userId) { refresh(it) }
         } catch (error: CancellationException) {
             publishCancelled()
             throw error
