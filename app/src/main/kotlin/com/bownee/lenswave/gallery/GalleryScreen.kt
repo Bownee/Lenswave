@@ -15,6 +15,7 @@ import android.widget.HorizontalScrollView
 import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.annotation.DrawableRes
 import androidx.core.graphics.Insets
@@ -73,8 +74,9 @@ internal class GalleryScreen(
     private val galleryHeader: LinearLayout
     private val galleryFooter: View
 
-    // Built on first use: a launch onto a cached library shows neither, and the selection bar only on a long press.
+    // Built on first use: a cached library needs no loading UI, and the selection bar only appears on a long press.
     private var emptyPanel: EmptyPanel? = null
+    private var metadataLoadingIndicator: ProgressBar? = null
     private var listingRefusedBanner: LinearLayout? = null
     private var selectionBar: SelectionBar? = null
 
@@ -361,6 +363,19 @@ internal class GalleryScreen(
         emptyPanel?.container?.visibility = View.GONE
     }
 
+    fun setLoadingMetadata(loading: Boolean) {
+        if (!loading && metadataLoadingIndicator == null) return
+        val indicator =
+            metadataLoadingIndicator
+                ?: UiStyle
+                    .loadingIndicator(activity, activity.getString(R.string.loading_metadata))
+                    .also {
+                        metadataLoadingIndicator = it
+                        root.addView(it, FrameLayout.LayoutParams(activity.dp(40), activity.dp(40), Gravity.CENTER))
+                    }
+        indicator.visibility = if (loading) View.VISIBLE else View.GONE
+    }
+
     /** Mirrors [GalleryUiState.listingRefused]; a dismissed banner stays down until the flag clears and returns. */
     fun renderListingRefused(refused: Boolean) {
         if (!refused) listingRefusedDismissed = false
@@ -562,7 +577,17 @@ internal class GalleryScreen(
             )
         }
         addChip(GalleryDestination.Timeline, activity.getString(R.string.all_photos), R.drawable.ic_photo)
-        ProtonMediaTag.entries.forEach { tag ->
+        listOf(
+            ProtonMediaTag.FAVORITES,
+            ProtonMediaTag.SCREENSHOTS,
+            ProtonMediaTag.VIDEOS,
+            ProtonMediaTag.LIVE_PHOTOS,
+            ProtonMediaTag.SELFIES,
+            ProtonMediaTag.PORTRAITS,
+            ProtonMediaTag.BURSTS,
+            ProtonMediaTag.PANORAMAS,
+            ProtonMediaTag.RAW,
+        ).forEach { tag ->
             addChip(GalleryDestination.Tag(tag), activity.getString(tag.labelRes), tag.iconRes())
         }
         val filterRow =

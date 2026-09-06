@@ -62,6 +62,8 @@ data class GalleryUiState(
     val currentUserId: UserId? = null,
     val isProtonConnected: Boolean = false,
     val isRefreshing: Boolean = false,
+    /** The page has no content yet and is waiting for its initial metadata. */
+    val isLoadingMetadata: Boolean = false,
     /**
      * The listing on screen is known to be behind the server: a refresh was refused or failed
      * while cached content is shown. The gallery offers a banner with a manual refresh.

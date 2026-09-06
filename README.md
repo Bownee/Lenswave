@@ -42,6 +42,12 @@ and [SECURITY.md](SECURITY.md) for how to report a vulnerability.
 The UI is built from programmatic Views. Compose is present only because Proton Core's
 presentation artifact requires an `AppTheme` binding.
 
+Metadata synchronization checks SDK Drive events while the gallery is visible. Unchanged
+listings stay cached; remote changes invalidate listings for refresh when needed. Event cursors
+and pending refreshes are stored together in the encrypted account cache, with recovery for
+lost event history and exponential backoff for failed event requests. Manual Refresh can still
+rebuild a listing explicitly.
+
 ## License
 
 Lenswave is licensed under GPL-3.0-only. See [LICENSE](LICENSE).

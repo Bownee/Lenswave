@@ -112,9 +112,9 @@ internal class ProtonAlbumRepository
                     val cached = cache.readAlbumsSnapshot(userId.id)
                     cached.orEmpty() to (cached != null)
                 }
+            var serverReset = false
             snapshotSync.sync(
                 userId = userId.id,
-                source = ProtonSyncSource.ALBUMS,
                 syncKey = ProtonSyncKeys.ALBUMS,
                 forceRemote = forceRemote,
                 hasSnapshot = hasCachedSnapshot,
@@ -149,7 +149,7 @@ internal class ProtonAlbumRepository
                         listing = "albums",
                         existing = existing,
                         remoteNodeUids = albums.mapTo(HashSet(), ProtonAlbum::nodeUid),
-                        forceRemote = forceRemote,
+                        forceRemote = forceRemote || serverReset,
                         nodeUid = ProtonAlbum::nodeUid,
                         minimumSuspiciousRemovals = ProtonReconcileSafetyPolicy.MINIMUM_SUSPICIOUS_ALBUM_REMOVALS,
                     )
@@ -172,6 +172,8 @@ internal class ProtonAlbumRepository
                     }
                 },
                 commitGate = { commit -> mutationMutex.withLock { commit() } },
+                inaccessibleSnapshot = { emptyList() },
+                trustServerReset = { serverReset = true },
             )
         }
 
@@ -202,9 +204,9 @@ internal class ProtonAlbumRepository
                     val cached = cache.readAlbumPhotosSnapshot(userId.id, album.nodeUid)
                     cached.orEmpty() to (cached != null)
                 }
+            var serverReset = false
             snapshotSync.sync(
                 userId = userId.id,
-                source = ProtonSyncSource.ALBUM_PHOTOS,
                 syncKey = ProtonSyncKeys.albumPhotos(album.nodeUid),
                 forceRemote = forceRemote,
                 hasSnapshot = hasCachedSnapshot,
@@ -236,7 +238,7 @@ internal class ProtonAlbumRepository
                         listing = "album-photos",
                         existing = existing,
                         remoteNodeUids = retained.mapTo(HashSet(), ProtonGalleryPhoto::nodeUid),
-                        forceRemote = forceRemote,
+                        forceRemote = forceRemote || serverReset,
                         nodeUid = ProtonGalleryPhoto::nodeUid,
                     )
                     cache.writeAlbumPhotos(userId.id, album.nodeUid, retained)
@@ -260,6 +262,8 @@ internal class ProtonAlbumRepository
                     }
                 },
                 commitGate = { commit -> mutationMutex.withLock { commit() } },
+                inaccessibleSnapshot = { emptyList() },
+                trustServerReset = { serverReset = true },
             )
         }
 

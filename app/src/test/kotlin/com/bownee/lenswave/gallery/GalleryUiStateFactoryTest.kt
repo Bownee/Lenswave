@@ -114,6 +114,7 @@ class GalleryUiStateFactoryTest {
                 .startsWith(R.string.connect_proton_photos.toString()),
         )
         assertFalse(state.isProtonConnected)
+        assertFalse(state.isLoadingMetadata)
     }
 
     @Test
@@ -221,7 +222,7 @@ class GalleryUiStateFactoryTest {
                 GalleryUiInputs(
                     destination = GalleryDestination.Timeline,
                     protonAccountStatus = ProtonAccountStatus.CONNECTED,
-                    protonGallery = ProtonGalleryState(hasLoaded = true, refreshFailed = true),
+                    protonGallery = ProtonGalleryState(refreshFailed = true),
                 ),
             )
 
@@ -231,10 +232,11 @@ class GalleryUiStateFactoryTest {
                 .orEmpty()
                 .startsWith(R.string.could_not_load_proton_photos.toString()),
         )
+        assertFalse(state.isLoadingMetadata)
     }
 
     @Test
-    fun `tag filter shows nothing until it has loaded`() {
+    fun `tag filter shows metadata loading until it has loaded`() {
         val state =
             factory.create(
                 GalleryUiInputs(
@@ -249,6 +251,7 @@ class GalleryUiStateFactoryTest {
 
         assertNull(state.emptyState)
         assertTrue(state.visibleAssets.isEmpty())
+        assertTrue(state.isLoadingMetadata)
     }
 
     @Test
@@ -268,6 +271,7 @@ class GalleryUiStateFactoryTest {
         val label = R.string.proton_tag_selfies.toString()
         assertEquals("${R.string.no_media_with_tag}($label())", state.emptyState?.title)
         assertNull(state.emptyState?.action)
+        assertFalse(state.isLoadingMetadata)
     }
 
     @Test
@@ -280,7 +284,7 @@ class GalleryUiStateFactoryTest {
                     protonGallery =
                         ProtonGalleryState(
                             tags =
-                                mapOf(ProtonMediaTag.SELFIES to ProtonTagState(hasLoaded = true, refreshFailed = true)),
+                                mapOf(ProtonMediaTag.SELFIES to ProtonTagState(refreshFailed = true)),
                         ),
                 ),
             )
@@ -297,6 +301,7 @@ class GalleryUiStateFactoryTest {
                 .orEmpty()
                 .startsWith(R.string.check_connection_refresh.toString()),
         )
+        assertFalse(state.isLoadingMetadata)
     }
 
     @Test
@@ -318,6 +323,7 @@ class GalleryUiStateFactoryTest {
 
         assertEquals("${R.string.album_empty}()", state.emptyState?.title)
         assertEquals("${R.string.album_photos_appear_here}(Trip)", state.emptyState?.message)
+        assertFalse(state.isLoadingMetadata)
     }
 
     @Test
@@ -332,7 +338,6 @@ class GalleryUiStateFactoryTest {
                         ProtonAlbumPhotosState(
                             albumUid = album.nodeUid,
                             albumName = album.name,
-                            hasLoaded = true,
                             refreshFailed = true,
                         ),
                 ),
@@ -344,6 +349,7 @@ class GalleryUiStateFactoryTest {
                 .orEmpty()
                 .startsWith(R.string.could_not_load_album.toString()),
         )
+        assertFalse(state.isLoadingMetadata)
     }
 
     @Test
@@ -379,9 +385,8 @@ class GalleryUiStateFactoryTest {
                 ),
             )
 
-        assertNotNull(state.emptyState)
-        assertNull(state.emptyState?.action)
-        assertTrue(state.emptyState?.title?.contains(R.string.loading_metadata.toString()) == true)
+        assertNull(state.emptyState)
+        assertTrue(state.isLoadingMetadata)
     }
 
     @Test
@@ -410,6 +415,7 @@ class GalleryUiStateFactoryTest {
 
         assertNull(state.emptyState)
         assertEquals(1, state.visibleAssets.size)
+        assertFalse(state.isLoadingMetadata)
     }
 
     @Test
@@ -436,7 +442,8 @@ class GalleryUiStateFactoryTest {
                 ),
             )
 
-        assertTrue(state.emptyState?.title?.contains(R.string.loading_metadata.toString()) == true)
+        assertNull(state.emptyState)
+        assertTrue(state.isLoadingMetadata)
         assertTrue(state.visibleAssets.isEmpty())
     }
 
@@ -453,6 +460,7 @@ class GalleryUiStateFactoryTest {
 
         assertNull(state.emptyState)
         assertFalse(state.isRefreshing)
+        assertTrue(state.isLoadingMetadata)
     }
 
     @Test
@@ -473,6 +481,7 @@ class GalleryUiStateFactoryTest {
                 .orEmpty()
                 .startsWith(R.string.no_albums.toString()),
         )
+        assertFalse(state.isLoadingMetadata)
     }
 
     @Test
@@ -482,7 +491,7 @@ class GalleryUiStateFactoryTest {
                 GalleryUiInputs(
                     destination = GalleryDestination.Library,
                     protonAccountStatus = ProtonAccountStatus.CONNECTED,
-                    protonAlbums = ProtonAlbumsState(hasLoaded = true, refreshFailed = true),
+                    protonAlbums = ProtonAlbumsState(refreshFailed = true),
                 ),
             )
 
@@ -492,26 +501,26 @@ class GalleryUiStateFactoryTest {
                 .orEmpty()
                 .startsWith(R.string.could_not_load_albums.toString()),
         )
+        assertFalse(state.isLoadingMetadata)
     }
 
     @Test
-    fun `library offers only a connect prompt when disconnected`() {
-        val state =
-            factory.create(
+    fun `disconnected library shares the timeline connect panel`() {
+        for (signedOut in listOf(false, true)) {
+            val inputs =
                 GalleryUiInputs(
-                    destination = GalleryDestination.Library,
                     protonAccountStatus = ProtonAccountStatus.DISCONNECTED,
-                ),
-            )
+                    signedOut = signedOut,
+                )
+            val timeline = factory.create(inputs)
+            val library = factory.create(inputs.copy(destination = GalleryDestination.Library))
 
-        assertEquals(listOf("proton"), state.librarySectionKeys())
-        val actions =
-            (state.content as GalleryContent.Library)
-                .sections
-                .flatMap { it.items }
-                .filterIsInstance<LibraryItem.Entry>()
-                .map { it.action }
-        assertEquals(listOf(LibraryAction.Request(GalleryEmptyAction.CONNECT_PROTON)), actions)
+            assertEquals(emptyList<String>(), library.librarySectionKeys())
+            assertEquals(GalleryEmptyAction.CONNECT_PROTON, library.emptyState?.action)
+            assertEquals(timeline.emptyState, library.emptyState)
+            assertFalse(library.isProtonConnected)
+            assertFalse(library.isLoadingMetadata)
+        }
     }
 
     @Test
@@ -576,6 +585,7 @@ class GalleryUiStateFactoryTest {
             )
 
         assertNotNull(state.emptyState)
+        assertFalse(state.isLoadingMetadata)
     }
 
     @Test
@@ -595,6 +605,7 @@ class GalleryUiStateFactoryTest {
             )
 
         assertNull(state.emptyState)
+        assertFalse(state.isLoadingMetadata)
     }
 
     @Test
@@ -622,6 +633,7 @@ class GalleryUiStateFactoryTest {
         val albums = (state.content as GalleryContent.Library).sections.single { it.key == "albums" }
         assertEquals(listOf(LibraryItem.Album(album)), albums.items)
         assertNull(state.emptyState)
+        assertFalse(state.isLoadingMetadata)
     }
 
     @Test
@@ -666,6 +678,7 @@ class GalleryUiStateFactoryTest {
 
         assertNull(state.emptyState)
         assertFalse(state.isRefreshing)
+        assertTrue(state.isLoadingMetadata)
     }
 
     @Test
@@ -684,6 +697,7 @@ class GalleryUiStateFactoryTest {
             )
 
         assertEquals("proton:node", state.visibleAssets.single().stableId)
+        assertFalse(state.isLoadingMetadata)
     }
 
     @Test
@@ -726,6 +740,7 @@ class GalleryUiStateFactoryTest {
 
         assertFalse(state.isRefreshing)
         assertNull(state.emptyState)
+        assertTrue(state.isLoadingMetadata)
     }
 
     @Test
@@ -741,6 +756,7 @@ class GalleryUiStateFactoryTest {
             )
 
         assertTrue(state.isRefreshing)
+        assertFalse(state.isLoadingMetadata)
     }
 
     @Test
@@ -815,6 +831,7 @@ class GalleryUiStateFactoryTest {
         assertNull(state.emptyState)
         assertTrue(state.visibleAssets.isEmpty())
         assertFalse(state.isPlaceholder)
+        assertFalse(state.isLoadingMetadata)
     }
 
     @Test

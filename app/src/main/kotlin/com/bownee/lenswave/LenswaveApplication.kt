@@ -3,6 +3,7 @@ package com.bownee.lenswave
 import android.app.Application
 import com.bownee.lenswave.gallery.GalleryPreferenceWarmUp
 import com.bownee.lenswave.proton.ProtonAccountSessionManager
+import com.bownee.lenswave.proton.ProtonAuthenticationBranding
 import com.bownee.lenswave.proton.ProtonCoreDatabase
 import com.bownee.lenswave.proton.ProtonSessionCache
 import dagger.hilt.EntryPoint
@@ -66,6 +67,7 @@ class LenswaveApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        registerActivityLifecycleCallbacks(ProtonAuthenticationBranding)
         UiStyle.initialize(this)
         startupScope.launch { GalleryPreferenceWarmUp.warm(this@LenswaveApplication) }
         val startAccountSession = accountSessionStartupEnabled

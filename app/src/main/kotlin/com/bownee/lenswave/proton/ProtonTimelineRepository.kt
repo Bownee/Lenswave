@@ -130,9 +130,9 @@ internal class ProtonTimelineRepository
                     val cached = cache.readTimelineSnapshot(userId.id)
                     cached.orEmpty() to (cached != null)
                 }
+            var serverReset = false
             snapshotSync.sync(
                 userId = userId.id,
-                source = ProtonSyncSource.TIMELINE,
                 syncKey = ProtonSyncKeys.TIMELINE,
                 forceRemote = forceRemote,
                 hasSnapshot = hasCachedSnapshot,
@@ -167,7 +167,7 @@ internal class ProtonTimelineRepository
                                     HashSet(retained.size * 4 / 3 + 1),
                                     ProtonGalleryPhoto::nodeUid,
                                 ),
-                            forceRemote = forceRemote,
+                            forceRemote = forceRemote || serverReset,
                             nodeUid = ProtonGalleryPhoto::nodeUid,
                         )
                     } else {
@@ -178,7 +178,7 @@ internal class ProtonTimelineRepository
                             listing = "timeline",
                             storedThumbnailCount = cache.storedRenditions(userId.id).thumbnailCount,
                             remoteStoredThumbnailCount = retained.count(ProtonGalleryPhoto::hasThumbnail),
-                            forceRemote = forceRemote,
+                            forceRemote = forceRemote || serverReset,
                         )
                     }
                     // The new listing lands before anything is deleted: a crash between the two
@@ -211,6 +211,8 @@ internal class ProtonTimelineRepository
                     }
                 },
                 commitGate = { commit -> mutationMutex.withLock { commit() } },
+                inaccessibleSnapshot = { emptyList() },
+                trustServerReset = { serverReset = true },
             )
         }
 
@@ -245,9 +247,9 @@ internal class ProtonTimelineRepository
                     val cached = cache.readTagSnapshot(userId.id, tag)
                     cached.orEmpty() to (cached != null)
                 }
+            var serverReset = false
             snapshotSync.sync(
                 userId = userId.id,
-                source = ProtonSyncSource.TIMELINE,
                 syncKey = ProtonSyncKeys.timelineTag(tag),
                 forceRemote = forceRemote,
                 hasSnapshot = hasCachedSnapshot,
@@ -278,7 +280,7 @@ internal class ProtonTimelineRepository
                         listing = "tag-${tag.name.lowercase()}",
                         existing = existing,
                         remoteNodeUids = retained.mapTo(HashSet(), ProtonGalleryPhoto::nodeUid),
-                        forceRemote = forceRemote,
+                        forceRemote = forceRemote || serverReset,
                         nodeUid = ProtonGalleryPhoto::nodeUid,
                     )
                     cache.writeTag(userId.id, tag, retained)
@@ -301,6 +303,8 @@ internal class ProtonTimelineRepository
                     }
                 },
                 commitGate = { commit -> mutationMutex.withLock { commit() } },
+                inaccessibleSnapshot = { emptyList() },
+                trustServerReset = { serverReset = true },
             )
         }
 

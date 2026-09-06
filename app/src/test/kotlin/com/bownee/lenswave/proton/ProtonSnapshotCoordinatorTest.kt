@@ -6,18 +6,18 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ProtonSnapshotCoordinatorTest {
-    @Test fun everySourceUsesTheSameCommitAndFreshnessTransaction() {
+    @Test fun everyListingKeepsItsCommitUntilDriveEventsInvalidateIt() {
         val metadata = FakeMetadata()
         val clock = FakeClock(1_000L)
         val coordinator = ProtonSnapshotCoordinator(metadata, clock)
 
-        ProtonSyncSource.entries.forEach { source ->
-            val key = source.name.lowercase()
-            assertTrue(coordinator.shouldEnumerate("user", source, key, false, false))
+        listOf("timeline", "albums", "album-photos:album").forEach { key ->
+
+            assertTrue(coordinator.shouldEnumerate("user", key, false, false))
             coordinator.commit("user", key)
-            assertFalse(coordinator.shouldEnumerate("user", source, key, false, true))
-            clock.value += source.maximumAgeMillis
-            assertTrue(coordinator.shouldEnumerate("user", source, key, false, true))
+            assertFalse(coordinator.shouldEnumerate("user", key, false, true))
+            clock.value += 24 * 60 * 60_000L
+            assertFalse(coordinator.shouldEnumerate("user", key, false, true))
             clock.value += 1_000L
         }
     }
