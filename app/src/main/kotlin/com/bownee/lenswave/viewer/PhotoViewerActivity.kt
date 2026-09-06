@@ -101,6 +101,7 @@ class PhotoViewerActivity :
     private val deleteButton get() = screen.deleteButton
     private val detailsSheet get() = screen.detailsSheet
     private lateinit var mediaTransform: ViewerMediaTransform
+    private lateinit var thumbnailFraming: ViewerStandInFraming
     private lateinit var details: ViewerDetailsSheetController
     private lateinit var dismiss: ViewerDismissController
     private lateinit var swipe: ViewerSwipeController
@@ -453,6 +454,7 @@ class PhotoViewerActivity :
     }
 
     private fun buildCollaborators() {
+        thumbnailFraming = ViewerStandInFraming(thumbnailPreview)
         mediaTransform =
             ViewerMediaTransform(
                 photoView = photoView,
@@ -509,6 +511,7 @@ class PhotoViewerActivity :
             ViewerSwipeController(
                 screen = screen,
                 mediaTransform = mediaTransform,
+                peekFraming = ViewerStandInFraming(peekPreview),
                 scope = lifecycleScope,
                 loadThumbnail = ::readThumbnail,
                 peekThumbnail = { photo -> thumbnailSource.peekThumbnail(UserId(photo.userId), photo.nodeUid) },
@@ -743,12 +746,12 @@ class PhotoViewerActivity :
                                 }
                             }
                         }
-                    // Photos load the original quietly behind the preview; the spinner only appears
-                    // when there is nothing at all to show, and a thumbnail arriving within the
-                    // delay withdraws it. Videos keep their download progress.
-                    if (requestedPhoto.mediaKind == MediaKind.VIDEO || !thumbnailPreview.isVisible) {
-                        scheduleLoadingPanel()
-                    }
+                    // The original loads quietly behind the preview; the spinner only appears when
+                    // there is nothing at all to show, and a thumbnail arriving within the delay
+                    // withdraws it. A cached video is decrypted and decoded behind its thumbnail
+                    // the same way; only a download still in flight puts its bar up, and the
+                    // video controller does that itself the moment the stream starts.
+                    if (!thumbnailPreview.isVisible) scheduleLoadingPanel()
                     val cachedOriginal = cachedOriginalPreparation?.await()?.getOrThrow()
                     if (request.stableId != requestedPhoto.stableId) return@launch
                     if (cachedOriginal != null) {
@@ -905,6 +908,7 @@ class PhotoViewerActivity :
         hideLoadingPanel()
         previewStableId = requestedPhoto.stableId
         thumbnailPreview.setImageBitmap(bitmap)
+        thumbnailFraming.standsInFor(requestedPhoto.mediaKind)
         thumbnailPreview.visibility = View.VISIBLE
         thumbnailPreview.animate().cancel()
         photoView.alpha = 0f
@@ -1076,6 +1080,7 @@ class PhotoViewerActivity :
     private fun adoptPreview(bitmap: Bitmap) {
         previewStableId = request.stableId
         thumbnailPreview.setImageBitmap(bitmap)
+        thumbnailFraming.standsInFor(request.mediaKind)
         thumbnailPreview.alpha = 1f
         thumbnailPreview.translationX = 0f
         thumbnailPreview.visibility = View.VISIBLE
@@ -1084,6 +1089,8 @@ class PhotoViewerActivity :
     }
 
     private fun resetPhotoStateForNavigation() {
+        // Nothing may still be animating the transforms reset below, or its next frame undoes them.
+        mediaTransform.cancelMediaAnimations()
         video.stop()
         playerView.visibility = View.GONE
         clearThumbnailPreview()

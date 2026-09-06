@@ -70,6 +70,21 @@ internal class PhotoViewerScreen(
             controllerAutoShow = false
             controllerShowTimeoutMs = CONTROLS_TIMEOUT_MILLIS
             controllerHideOnTouch = true
+            // Play/pause and the time bar only. The viewer's own swipe is the way between clips,
+            // so the previous/next pair had nothing to do, and the seek steps and the settings
+            // sheet (speed, audio track) are more than a photo library's clips call for. The
+            // settings gear has no switch on PlayerView in media3 1.11, so it is hidden by its
+            // id; the other buttons go through the view's own switches.
+            setShowPreviousButton(false)
+            setShowNextButton(false)
+            setShowRewindButton(false)
+            setShowFastForwardButton(false)
+            findViewById<View>(androidx.media3.ui.R.id.exo_settings)?.visibility = View.GONE
+            // No dimming while the controls are up: the controller's backdrop darkens the whole
+            // picture and its bottom bar darkens the strip behind the time bar. Neither has a
+            // switch, so both lose their background; the controls themselves stay as they are.
+            findViewById<View>(androidx.media3.ui.R.id.exo_controls_background)?.background = null
+            findViewById<View>(androidx.media3.ui.R.id.exo_bottom_bar)?.background = null
             setShutterBackgroundColor(Color.TRANSPARENT)
             visibility = View.GONE
             setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)

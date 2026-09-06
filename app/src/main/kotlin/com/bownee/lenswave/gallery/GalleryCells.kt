@@ -93,7 +93,7 @@ internal class AlbumCell(
     lateinit var thumbnailTarget: GalleryThumbnailTarget<Bitmap>
     private val cover =
         FrameLayout(context).apply {
-            UiStyle.clipRounded(this, 18)
+            UiStyle.clipRounded(this, 4)
             setBackgroundColor(UiStyle.surfaceRaised)
         }
     val image =

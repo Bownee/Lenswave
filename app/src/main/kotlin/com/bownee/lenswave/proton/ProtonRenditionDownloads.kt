@@ -82,9 +82,19 @@ internal class ProtonRenditionDownloads(
         val photosClient = clientProvider.get(userId)
         val failures = mutableMapOf<String, ThumbnailFailureKind>()
 
-        suspend fun thumbnailPass(chunk: List<String>): ThumbnailBatchResult =
-            downloadThumbnailPass(photosClient, userId, chunk, ThumbnailType.THUMBNAIL, onProgress)
-        val batchPasses = downloadChunks(pending, downloadChunk = ::thumbnailPass).results
+        suspend fun thumbnailPass(
+            chunk: List<String>,
+            firstAnswerTimeoutMillis: Long = ProtonThumbnailDownloadPolicy.FIRST_ANSWER_TIMEOUT_MILLIS,
+        ): ThumbnailBatchResult =
+            downloadThumbnailPass(
+                photosClient,
+                userId,
+                chunk,
+                ThumbnailType.THUMBNAIL,
+                onProgress,
+                firstAnswerTimeoutMillis = firstAnswerTimeoutMillis,
+            )
+        val batchPasses = downloadChunks(pending) { chunk -> thumbnailPass(chunk) }.results
         batchPasses.forEach { result ->
             successful += result.successfulNodeUids
             failures += result.failures
@@ -100,8 +110,9 @@ internal class ProtonRenditionDownloads(
             unanswered,
             batchSize = 1,
             maxConcurrent = ProtonThumbnailDownloadPolicy.MAX_CONCURRENT_SINGLE_NODE_PASSES,
-            downloadChunk = ::thumbnailPass,
-        ).results.forEach { result ->
+        ) { chunk ->
+            thumbnailPass(chunk, ProtonThumbnailDownloadPolicy.SINGLE_NODE_FIRST_ANSWER_TIMEOUT_MILLIS)
+        }.results.forEach { result ->
             successful += result.successfulNodeUids
             result.successfulNodeUids.forEach(failures::remove)
             failures += result.failures
@@ -199,7 +210,10 @@ internal class ProtonRenditionDownloads(
         val photosClient = clientProvider.get(userId)
         val failures = mutableMapOf<String, ThumbnailFailureKind>()
 
-        suspend fun previewPass(chunk: List<String>): ThumbnailBatchResult =
+        suspend fun previewPass(
+            chunk: List<String>,
+            firstAnswerTimeoutMillis: Long = ProtonThumbnailDownloadPolicy.FIRST_ANSWER_TIMEOUT_MILLIS,
+        ): ThumbnailBatchResult =
             downloadThumbnailPass(
                 photosClient,
                 userId,
@@ -207,13 +221,14 @@ internal class ProtonRenditionDownloads(
                 ThumbnailType.PREVIEW,
                 onProgress,
                 timeoutMillis = ProtonThumbnailDownloadPolicy.PREVIEW_PASS_TIMEOUT_MILLIS,
+                firstAnswerTimeoutMillis = firstAnswerTimeoutMillis,
                 store = { nodeUid, bytes -> cache.writePreview(userId.id, nodeUid, bytes) },
             )
         // A batch of previews is a gigabyte's worth of library over time, allowed by a
         // charger or a screen that may be gone before the batch is; the chunks not yet
         // started are dropped the moment it is.
         val mayStart = previewAdmission::previewsAllowed
-        val batch = downloadChunks(pending, mayStart = mayStart, downloadChunk = ::previewPass)
+        val batch = downloadChunks(pending, mayStart = mayStart) { chunk -> previewPass(chunk) }
         batch.results.forEach { result ->
             successful += result.successfulNodeUids
             failures += result.failures
@@ -237,8 +252,9 @@ internal class ProtonRenditionDownloads(
             batchSize = 1,
             maxConcurrent = ProtonThumbnailDownloadPolicy.MAX_CONCURRENT_SINGLE_NODE_PASSES,
             mayStart = mayStart,
-            downloadChunk = ::previewPass,
-        ).results.forEach { result ->
+        ) { chunk ->
+            previewPass(chunk, ProtonThumbnailDownloadPolicy.SINGLE_NODE_FIRST_ANSWER_TIMEOUT_MILLIS)
+        }.results.forEach { result ->
             successful += result.successfulNodeUids
             result.successfulNodeUids.forEach(failures::remove)
             failures += result.failures
@@ -379,6 +395,7 @@ internal class ProtonRenditionDownloads(
         type: ThumbnailType,
         onProgress: suspend (ThumbnailBatchResult) -> Unit,
         timeoutMillis: Long = ProtonThumbnailDownloadPolicy.passTimeoutMillis(type),
+        firstAnswerTimeoutMillis: Long = ProtonThumbnailDownloadPolicy.FIRST_ANSWER_TIMEOUT_MILLIS,
         store: (nodeUid: String, bytes: ByteArray) -> Unit = { nodeUid, bytes ->
             cache.writeThumbnail(userId.id, nodeUid, bytes)
         },
@@ -456,7 +473,12 @@ internal class ProtonRenditionDownloads(
                             // which can take longer than the idle window under load, so
                             // only the deadline applies until then.
                             val waitMillis =
-                                ProtonThumbnailDownloadPolicy.answerWaitMillis(type, answered, timeoutMillis)
+                                ProtonThumbnailDownloadPolicy.answerWaitMillis(
+                                    type,
+                                    answered,
+                                    timeoutMillis,
+                                    firstAnswerTimeoutMillis,
+                                )
                             val next = withTimeoutOrNull(waitMillis) { answers.receiveCatching() }
                             if (next == null) {
                                 wentQuiet = true
@@ -563,7 +585,18 @@ internal object ProtonThumbnailDownloadPolicy {
     const val MAX_CONCURRENT_BATCHES = 2
     const val BACKGROUND_CLAIM_SIZE = SDK_BATCH_SIZE * MAX_CONCURRENT_BATCHES
     const val PROGRESS_BATCH_SIZE = 4
-    const val SDK_PASS_TIMEOUT_MILLIS = 15_000L
+
+    /**
+     * The whole pass, not just the transfer: the SDK fetches the batch's metadata and keys before
+     * it can answer with the first thumbnail, and on a congested link that alone outran the old
+     * 15s deadline. Every pass then ended `stalled-16-of-16` with bytes already on the wire, the
+     * batch was cancelled and its downloaded bytes thrown away, and the nodes were re-claimed to
+     * download them again: on one phone that burned 239 kB over two minutes and stored nothing.
+     * [SDK_IDLE_TIMEOUT_MILLIS] still ends a pass 6s after the answers stop, so a healthy batch
+     * is no slower for this; the deadline only bites while waiting for the first answer, which is
+     * the case that was failing. Stays below [PREVIEW_PASS_TIMEOUT_MILLIS].
+     */
+    const val SDK_PASS_TIMEOUT_MILLIS = 60_000L
 
     /** Previews are a few hundred kilobytes each, so one pass of [SDK_BATCH_SIZE] gets longer. */
     const val PREVIEW_PASS_TIMEOUT_MILLIS = 90_000L
@@ -583,10 +616,22 @@ internal object ProtonThumbnailDownloadPolicy {
         if (type == ThumbnailType.PREVIEW) PREVIEW_IDLE_TIMEOUT_MILLIS else SDK_IDLE_TIMEOUT_MILLIS
 
     /**
-     * A preview batch the SDK never answers gives up here rather than at the pass deadline,
-     * which is sized for the transfer once answers are flowing.
+     * How long a batch waits for its first SDK answer, whichever rendition it fetches: the
+     * batch's metadata and keys are fetched before the first one can be answered, and on a
+     * congested link that setup alone outran the shorter allowances both renditions once had.
+     * Previews had 30s of their own and still ended `unanswered-8-of-8-deadline` on the phone
+     * while thumbnails were already given this long, so the allowance is one figure for both;
+     * the pass deadline caps it.
      */
-    const val PREVIEW_FIRST_ANSWER_TIMEOUT_MILLIS = 30_000L
+    const val FIRST_ANSWER_TIMEOUT_MILLIS = 60_000L
+
+    /**
+     * The first-answer allowance of a node re-asked on its own after its batch went quiet. The
+     * SDK is known to be answering by then and one node's setup is an eighth of a batch's, so
+     * the shorter wait costs a working node nothing, while a node that stays silent no longer
+     * holds one of [MAX_CONCURRENT_SINGLE_NODE_PASSES] permits for a whole batch allowance.
+     */
+    const val SINGLE_NODE_FIRST_ANSWER_TIMEOUT_MILLIS = 30_000L
 
     /**
      * How long a pass waits for the next SDK answer. The idle window only starts once the SDK
@@ -597,17 +642,13 @@ internal object ProtonThumbnailDownloadPolicy {
         type: ThumbnailType,
         answered: Boolean,
         passTimeoutMillis: Long,
-    ): Long =
-        when {
-            answered -> idleTimeoutMillis(type)
-            type == ThumbnailType.PREVIEW -> minOf(PREVIEW_FIRST_ANSWER_TIMEOUT_MILLIS, passTimeoutMillis)
-            else -> passTimeoutMillis
-        }
+        firstAnswerTimeoutMillis: Long = FIRST_ANSWER_TIMEOUT_MILLIS,
+    ): Long = if (answered) idleTimeoutMillis(type) else minOf(firstAnswerTimeoutMillis, passTimeoutMillis)
 
     /**
      * A single-node pass is one node's worth of transfer with the whole deadline to itself, so
      * more of them can run side by side than full batches; the re-ask of eight unanswered nodes
-     * would otherwise cost four full deadlines of mostly idle time.
+     * would otherwise cost four first-answer allowances of mostly idle time.
      */
     const val MAX_CONCURRENT_SINGLE_NODE_PASSES = 4
 

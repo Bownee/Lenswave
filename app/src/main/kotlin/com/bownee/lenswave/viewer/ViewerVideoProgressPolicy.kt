@@ -7,9 +7,6 @@ internal object ViewerVideoProgressPolicy {
     const val PROGRESS_MAX = 1_000
 
     sealed interface Display {
-        /** All bytes are on disk; the player is decoding the first frame. */
-        data object Preparing : Display
-
         /** Proton did not report a size, so only the downloaded amount can be shown. */
         data class Unsized(
             val downloadedBytes: Long,
@@ -25,7 +22,6 @@ internal object ViewerVideoProgressPolicy {
     }
 
     fun display(downloadProgress: ProtonOriginalDownloadProgress): Display {
-        if (downloadProgress.complete) return Display.Preparing
         val totalBytes = downloadProgress.totalBytes
         val percent = downloadProgress.percent
         if (percent == null || totalBytes == null) return Display.Unsized(downloadProgress.downloadedBytes)
@@ -38,19 +34,21 @@ internal object ViewerVideoProgressPolicy {
     }
 
     /**
-     * Whether the progress panel belongs on screen. Before the first frame it always does. Once
-     * the video plays it comes back only while the player is buffering, or a reader of the file
-     * is waiting for bytes, against a download that is still in flight: a seek past the
-     * downloaded bytes parks the player on them, and without the panel that wait is a silent
-     * freeze. The reader's wait is reported by the stream itself and can precede the player's
-     * buffering state. A complete download leaves stalls to the player's own buffering indicator.
+     * Whether the progress panel belongs on screen: only while the download is in flight. Before
+     * the first frame it shows the download; once the video plays it comes back only while the
+     * player is buffering, or a reader of the file is waiting for bytes, against a download
+     * still in flight: a seek past the downloaded bytes parks the player on them, and without
+     * the panel that wait is a silent freeze. The reader's wait is reported by the stream itself
+     * and can precede the player's buffering state. A complete download shows nothing: the
+     * player's own decoding of the first frame happens behind the thumbnail without a spinner,
+     * and stalls after that are left to the player's own buffering indicator.
      */
     fun panelVisible(
         mediaReady: Boolean,
         buffering: Boolean,
         waitingForBytes: Boolean,
         streamComplete: Boolean,
-    ): Boolean = !mediaReady || ((buffering || waitingForBytes) && !streamComplete)
+    ): Boolean = !streamComplete && (!mediaReady || buffering || waitingForBytes)
 
     /** Whether the progress collector still has anything to report: nothing changes once every byte is on disk. */
     fun keepObserving(streamComplete: Boolean): Boolean = !streamComplete

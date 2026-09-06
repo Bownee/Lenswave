@@ -104,18 +104,21 @@ internal class ViewerDismissController(
         val activeMedia = host.activeMediaView()
         val duration = verticalSettleDuration(targetY - activeMedia.translationY, velocity)
         mediaTransform.cancelMediaAnimations()
-        activeMedia
-            .animate()
-            .translationY(targetY)
-            .scaleX(ViewerMediaTransform.DISMISSED_SCALE)
-            .scaleY(ViewerMediaTransform.DISMISSED_SCALE)
-            .alpha(ViewerMediaTransform.DISMISSED_ALPHA)
-            .setDuration(duration)
-            .setInterpolator(ViewerVerticalSettle.interpolator)
-            .withEndAction {
-                activity.finish()
-                disableExitTransition()
-            }.start()
+        val leaving =
+            activeMedia
+                .animate()
+                .translationY(targetY)
+                .scaleX(ViewerMediaTransform.DISMISSED_SCALE)
+                .scaleY(ViewerMediaTransform.DISMISSED_SCALE)
+                .setDuration(duration)
+                .setInterpolator(ViewerVerticalSettle.interpolator)
+                .withEndAction {
+                    activity.finish()
+                    disableExitTransition()
+                }
+        // A leaving video only moves and shrinks; see ViewerMediaTransform.animateDismissedMedia.
+        if (activeMedia !== playerView) leaving.alpha(ViewerMediaTransform.DISMISSED_ALPHA)
+        leaving.start()
         if (activeMedia !== photoView) {
             mediaTransform.animateDismissedMedia(photoView, targetY, duration)
         }

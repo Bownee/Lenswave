@@ -123,7 +123,7 @@ internal class ProtonThumbnailForegroundInfoFactory(
             NotificationCompat
                 .Builder(context, CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_cloud)
-                .setContentTitle(context.getString(R.string.thumbnail_download_notification_title))
+                .setContentTitle(context.getString(progress.titleRes()))
                 .setContentText(progress.contentText())
                 .setContentIntent(openApp)
                 .setOngoing(true)
@@ -144,6 +144,16 @@ internal class ProtonThumbnailForegroundInfoFactory(
         )
     }
 
+    /**
+     * Each phase names itself, so the notification says which of the two is running rather than
+     * calling previews thumbnails.
+     */
+    private fun ProtonThumbnailNotificationProgress.titleRes(): Int =
+        when (phase) {
+            ProtonDownloadPhase.THUMBNAILS -> R.string.thumbnail_download_notification_title
+            ProtonDownloadPhase.PREVIEWS -> R.string.preview_download_notification_title
+        }
+
     private fun ProtonThumbnailNotificationProgress.contentText(): String =
         when {
             yielding -> {
@@ -154,12 +164,21 @@ internal class ProtonThumbnailForegroundInfoFactory(
                 context.getString(R.string.thumbnail_download_notification_detail)
             }
 
-            phase == ProtonDownloadPhase.PREVIEWS -> {
-                context.getString(R.string.preview_download_notification_progress, downloaded, total)
-            }
-
+            // A string per phase, both to the same "stored and remaining" shape: the counts
+            // already follow the phase (ProtonThumbnailWorkProgress.notificationProgress picks
+            // the preview ones), so phrasing them differently made one steady job look like two
+            // unrelated ones at the crossover. Separate resources so either can be reworded or
+            // translated on its own without the shapes drifting apart by accident. Exhaustive,
+            // like the title, so a third phase fails to compile rather than borrow a line.
             else -> {
-                context.getString(R.string.thumbnail_download_notification_progress, downloaded, remaining)
+                context.getString(
+                    when (phase) {
+                        ProtonDownloadPhase.THUMBNAILS -> R.string.thumbnail_download_notification_progress
+                        ProtonDownloadPhase.PREVIEWS -> R.string.preview_download_notification_progress
+                    },
+                    downloaded,
+                    remaining,
+                )
             }
         }
 

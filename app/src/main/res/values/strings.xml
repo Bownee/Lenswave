@@ -45,9 +45,6 @@
     <string name="could_not_load_proton_photos">Could not load Proton photos</string>
     <string name="could_not_play_video">Could not play this video</string>
     <string name="video_description">Video: %1$s</string>
-    <string name="downloading_video_size">Downloading video · %1$s</string>
-    <string name="downloading_video_progress">Downloading video · %1$s of %2$s (%3$d%%)</string>
-    <string name="preparing_video">Download complete · preparing video</string>
     <string name="add_to_favorites">Add to favorites</string>
     <string name="remove_from_favorites">Remove from favorites</string>
     <string name="could_not_update_favorite">Could not update the favorite</string>
@@ -93,10 +90,13 @@
     <string name="loading_metadata">Loading metadata</string>
     <string name="thumbnail_download_channel_name">Thumbnail downloads</string>
     <string name="thumbnail_download_channel_description">Progress for Proton thumbnail downloads</string>
+    <!-- One title and one progress line per phase, kept to the same shape so the notification
+         reads as one steady job when it crosses from thumbnails to previews. -->
     <string name="thumbnail_download_notification_title">Downloading Proton thumbnails</string>
+    <string name="preview_download_notification_title">Downloading Proton previews</string>
     <string name="thumbnail_download_notification_detail">Downloading in the background</string>
     <string name="thumbnail_download_notification_progress">Stored: %1$d · Remaining: %2$d</string>
-    <string name="preview_download_notification_progress">Downloading previews %1$d of %2$d</string>
+    <string name="preview_download_notification_progress">Stored: %1$d · Remaining: %2$d</string>
     <string name="thumbnail_download_notification_pause">Pause</string>
     <string name="thumbnail_download_notification_yielding">Waiting for the photo you opened to finish</string>
     <string name="could_not_move_photos_to_proton_trash">Could not move photos to Proton Trash</string>

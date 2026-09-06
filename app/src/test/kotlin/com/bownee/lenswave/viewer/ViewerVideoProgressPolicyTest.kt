@@ -8,13 +8,23 @@ import org.junit.Test
 
 class ViewerVideoProgressPolicyTest {
     @Test
-    fun completeDownloadIsPreparing() {
-        val display =
-            ViewerVideoProgressPolicy.display(
-                ProtonOriginalDownloadProgress(downloadedBytes = 10, totalBytes = 10, complete = true),
-            )
-
-        assertEquals(ViewerVideoProgressPolicy.Display.Preparing, display)
+    fun completeDownloadShowsNoPanelWhileTheFirstFrameDecodes() {
+        assertFalse(
+            ViewerVideoProgressPolicy.panelVisible(
+                mediaReady = false,
+                buffering = false,
+                waitingForBytes = false,
+                streamComplete = true,
+            ),
+        )
+        assertFalse(
+            ViewerVideoProgressPolicy.panelVisible(
+                mediaReady = false,
+                buffering = true,
+                waitingForBytes = true,
+                streamComplete = true,
+            ),
+        )
     }
 
     @Test
@@ -56,7 +66,7 @@ class ViewerVideoProgressPolicyTest {
     }
 
     @Test
-    fun panelStaysUpUntilTheFirstFrame() {
+    fun panelStaysUpUntilTheFirstFrameWhileTheDownloadRuns() {
         assertTrue(
             ViewerVideoProgressPolicy.panelVisible(
                 mediaReady = false,
@@ -70,7 +80,7 @@ class ViewerVideoProgressPolicyTest {
                 mediaReady = false,
                 buffering = true,
                 waitingForBytes = false,
-                streamComplete = true,
+                streamComplete = false,
             ),
         )
     }

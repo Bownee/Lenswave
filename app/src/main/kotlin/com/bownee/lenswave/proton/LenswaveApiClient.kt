@@ -8,7 +8,7 @@ import javax.inject.Inject
 class LenswaveApiClient
     @Inject
     constructor() : ApiClient {
-        override val appVersionHeader: String = "external-drive-lenswave@${BuildConfig.VERSION_NAME}-alpha"
+        override val appVersionHeader: String = ProtonAppVersionPolicy.header(BuildConfig.VERSION_NAME)
         override val enableDebugLogging: Boolean = false
         override val userAgent: String =
             "Lenswave/${BuildConfig.VERSION_NAME} (Android ${Build.VERSION.SDK_INT})"

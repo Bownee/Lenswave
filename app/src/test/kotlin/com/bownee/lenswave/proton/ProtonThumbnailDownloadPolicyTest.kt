@@ -84,21 +84,18 @@ class ProtonThumbnailDownloadPolicyTest {
     }
 
     @Test
-    fun passWaitsTheWholeDeadlineForTheFirstAnswer() {
-        val deadline = ProtonThumbnailDownloadPolicy.SDK_PASS_TIMEOUT_MILLIS
+    fun bothRenditionsWaitTheSameForTheFirstAnswer() {
+        val firstAnswer = ProtonThumbnailDownloadPolicy.FIRST_ANSWER_TIMEOUT_MILLIS
 
+        // The batch setup the allowance covers is the same whichever rendition follows it.
         assertEquals(
-            deadline,
-            ProtonThumbnailDownloadPolicy.answerWaitMillis(ThumbnailType.THUMBNAIL, answered = false, deadline),
+            firstAnswer,
+            ProtonThumbnailDownloadPolicy.answerWaitMillis(
+                ThumbnailType.THUMBNAIL,
+                answered = false,
+                ProtonThumbnailDownloadPolicy.SDK_PASS_TIMEOUT_MILLIS,
+            ),
         )
-    }
-
-    @Test
-    fun previewPassGivesUpOnTheFirstAnswerBeforeItsDeadline() {
-        val firstAnswer = ProtonThumbnailDownloadPolicy.PREVIEW_FIRST_ANSWER_TIMEOUT_MILLIS
-
-        assertTrue(firstAnswer < ProtonThumbnailDownloadPolicy.PREVIEW_PASS_TIMEOUT_MILLIS)
-        assertTrue(firstAnswer > ProtonThumbnailDownloadPolicy.idleTimeoutMillis(ThumbnailType.PREVIEW))
         assertEquals(
             firstAnswer,
             ProtonThumbnailDownloadPolicy.answerWaitMillis(
@@ -107,13 +104,49 @@ class ProtonThumbnailDownloadPolicyTest {
                 ProtonThumbnailDownloadPolicy.PREVIEW_PASS_TIMEOUT_MILLIS,
             ),
         )
-        // The preview fetched in place of a thumbnail runs under the shorter thumbnail deadline.
+    }
+
+    @Test
+    fun firstAnswerAllowanceFitsUnderEachDeadlineAndOverTheIdleWindow() {
+        val firstAnswer = ProtonThumbnailDownloadPolicy.FIRST_ANSWER_TIMEOUT_MILLIS
+
+        assertTrue(firstAnswer <= ProtonThumbnailDownloadPolicy.SDK_PASS_TIMEOUT_MILLIS)
+        assertTrue(firstAnswer < ProtonThumbnailDownloadPolicy.PREVIEW_PASS_TIMEOUT_MILLIS)
+        assertTrue(firstAnswer > ProtonThumbnailDownloadPolicy.idleTimeoutMillis(ThumbnailType.PREVIEW))
+    }
+
+    @Test
+    fun aDeadlineShorterThanTheAllowanceCapsTheFirstAnswerWait() {
+        val shortDeadline = ProtonThumbnailDownloadPolicy.FIRST_ANSWER_TIMEOUT_MILLIS / 4
+
         assertEquals(
-            ProtonThumbnailDownloadPolicy.SDK_PASS_TIMEOUT_MILLIS,
+            shortDeadline,
+            ProtonThumbnailDownloadPolicy.answerWaitMillis(ThumbnailType.THUMBNAIL, answered = false, shortDeadline),
+        )
+    }
+
+    @Test
+    fun aNodeReAskedOnItsOwnWaitsLessForItsFirstAnswer() {
+        val singleNode = ProtonThumbnailDownloadPolicy.SINGLE_NODE_FIRST_ANSWER_TIMEOUT_MILLIS
+
+        assertTrue(singleNode < ProtonThumbnailDownloadPolicy.FIRST_ANSWER_TIMEOUT_MILLIS)
+        assertTrue(singleNode > ProtonThumbnailDownloadPolicy.idleTimeoutMillis(ThumbnailType.PREVIEW))
+        assertEquals(
+            singleNode,
+            ProtonThumbnailDownloadPolicy.answerWaitMillis(
+                ThumbnailType.THUMBNAIL,
+                answered = false,
+                ProtonThumbnailDownloadPolicy.SDK_PASS_TIMEOUT_MILLIS,
+                firstAnswerTimeoutMillis = singleNode,
+            ),
+        )
+        assertEquals(
+            singleNode,
             ProtonThumbnailDownloadPolicy.answerWaitMillis(
                 ThumbnailType.PREVIEW,
                 answered = false,
-                ProtonThumbnailDownloadPolicy.SDK_PASS_TIMEOUT_MILLIS,
+                ProtonThumbnailDownloadPolicy.PREVIEW_PASS_TIMEOUT_MILLIS,
+                firstAnswerTimeoutMillis = singleNode,
             ),
         )
     }
