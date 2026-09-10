@@ -53,7 +53,7 @@ are enforced strictly:
 After changing any dependency, regenerate both in one go and commit the result:
 
 ```shell
-./gradlew --write-locks --write-verification-metadata sha256 testDebugUnitTest lintDebug assembleDebug --no-configuration-cache
+./gradlew --write-locks --write-verification-metadata sha256 testDebugUnitTest lintDebug verifySbomLicenses assembleDebug --no-configuration-cache
 ```
 
 Dependabot opens version bumps but cannot regenerate these files, so every dependency PR needs this
